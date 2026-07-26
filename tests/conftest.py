@@ -1,0 +1,105 @@
+"""Project-wide pytest fixtures.
+
+The autouse fixture below enforces the basic principle:
+    TESTS MUST NEVER WRITE TO THE USER'S REAL CONFIG FILES.
+
+Any test that would touch `~/.claude/settings.json`, yzr's own
+~/.config/yzr-agent-tools/, etc., would wedge the current Claude Code
+session. So:
+
+  1. Every test runs with HOME pointed at a tmp dir.
+  2. yzr's path functions are redirected to tmp.
+  3. The claude-code driver singleton in the registry is replaced with
+     one that points at a tmp settings file.
+  4. Before the test exits, the real `~/.claude/settings.json` (and
+     any other tracked real configs) is verified to be untouched
+     (mtime + content hash match pre-test snapshot).
+
+Tests that intentionally need to exercise real paths (e.g. a smoke
+e2e) should skip this fixture explicitly with
+`@pytest.mark.no_isolation` — but that's not implemented yet because
+no such test exists.
+"""
+import hashlib
+import os
+from pathlib import Path
+
+import pytest
+
+from yzr_agent_tools import paths
+from yzr_agent_tools.drivers.base import registry
+from yzr_agent_tools.drivers.claude_code import ClaudeCodeDriver
+
+
+# Real paths we MUST NOT touch during tests. Tracked for integrity checks.
+REAL_CLAUDE_SETTINGS = Path(os.path.expanduser("~")) / ".claude" / "settings.json"
+REAL_YZR_CONFIG_DIR = (
+    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    / "yzr-agent-tools"
+)
+
+
+def _sha256(path: Path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
+    """Hard isolation for every test. NEVER touch real user configs.
+
+    Opt out with `@pytest.mark.no_isolation` for tests that intentionally
+    exercise the real path-resolution behavior (e.g. test_paths.py).
+    """
+    if "no_isolation" in request.keywords:
+        yield None
+        return
+
+    # Snapshot real configs so we can verify they were not modified.
+    snapshot = {}
+    for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
+                     ("yzr_config_dir", REAL_YZR_CONFIG_DIR)):
+        snapshot[label] = {
+            "exists": p.exists(),
+            "mtime": p.stat().st_mtime if p.exists() else None,
+            "sha256": _sha256(p) if p.exists() else None,
+        }
+
+    # Redirect yzr's own paths into tmp.
+    cfg_dir = tmp_path / "yzr-cfg"
+    cfg_dir.mkdir()
+    models_p = cfg_dir / "models.yaml"
+    state_p = cfg_dir / "state.yaml"
+    settings_p = tmp_path / ".claude" / "settings.json"
+
+    monkeypatch.setattr(paths, "config_dir", lambda: cfg_dir)
+    monkeypatch.setattr(paths, "models_file", lambda: models_p)
+    monkeypatch.setattr(paths, "state_file", lambda: state_p)
+
+    # Replace any pre-existing claude-code driver in the registry with
+    # one pointing at the tmp settings path. (Earlier auto-registration
+    # would have created one pointed at the real ~/.claude/settings.json.)
+    registry._drivers["claude-code"] = ClaudeCodeDriver(settings_path=settings_p)
+
+    paths_dict = {
+        "config_dir": cfg_dir,
+        "models": models_p,
+        "state": state_p,
+        "settings": settings_p,
+    }
+    yield paths_dict
+
+    # Integrity check: real configs must be byte-identical to the snapshot.
+    for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
+                     ("yzr_config_dir", REAL_YZR_CONFIG_DIR)):
+        snap = snapshot[label]
+        if snap["exists"]:
+            assert p.exists(), (
+                f"Test deleted real config at {p}!"
+            )
+            assert p.stat().st_mtime == snap["mtime"], (
+                f"Test modified mtime of real config {p}"
+            )
+            assert _sha256(p) == snap["sha256"], (
+                f"Test modified content of real config {p} — "
+                f"this would have wedged the user's Claude Code session!"
+            )
