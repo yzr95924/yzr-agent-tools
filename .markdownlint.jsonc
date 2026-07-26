@@ -1,0 +1,9 @@
+{
+  // Project markdownlint config — keep prose readable, accept reasonable
+  // line lengths (these docs are not source-code-strict).
+  "default": true,
+  "MD013": false,           // line-length: allow long prose lines
+  "MD041": false,           // first-line-h1: MEMORY.md is an index w/o H1 by design
+  "MD040": false,           // fenced-code-language: text-only blocks (e.g. ASCII tree) allowed
+  "MD024": { "siblings_only": true }  // duplicate headings OK across sections
+}

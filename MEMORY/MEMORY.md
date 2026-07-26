@@ -1,0 +1,1 @@
+- [Test isolation invariants](test-isolation-invariants.md) — why tests must NEVER touch the real agent config (e.g. `~/.claude/settings.json`), and the enforcement mechanism in `tests/conftest.py`.
