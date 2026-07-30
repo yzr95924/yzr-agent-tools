@@ -2,13 +2,12 @@
 
 A driver encapsulates the knowledge of how to read and modify one
 specific agent's global configuration file (e.g., Claude Code's
-settings.json). V1 ships only ClaudeCodeDriver; V2 will add OpenCode, etc.
+settings.json, OpenCode's ~/.opencode.json).
 """
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Dict, List, Optional, Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from yzr_agent_tools.config import Model
+from model_switch.store import ModelEntry as Model
 
 
 @runtime_checkable
@@ -21,8 +20,8 @@ class AgentDriver(Protocol):
         """Read the agent's config file as a dict; {} if missing/empty."""
         ...
 
-    def apply(self, main: "Model", small: "Model", api_key: str) -> None:
-        """Write main + small model into the agent's config file."""
+    def apply(self, model: Model, api_key: str) -> None:
+        """Write the model into the agent's config file."""
         ...
 
     def current(self) -> dict:
@@ -33,7 +32,9 @@ class AgentDriver(Protocol):
 class DriverRegistry:
     """In-process registry of installed drivers.
 
-    V1: only claude-code is registered. Future versions can add more.
+    claude-code and opencode are both registered lazily by
+    cli._ensure_default_registered on first use. Tests populate the
+    registry manually with tmp-path drivers.
     """
     def __init__(self) -> None:
         self._drivers: Dict[str, AgentDriver] = {}

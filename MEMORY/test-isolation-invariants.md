@@ -12,7 +12,7 @@ not a nice-to-have.
 
 **Why this is a real risk in this codebase**: during V1 development, the auto-registration at module
 import time (`registry.register(ClaudeCodeDriver())` at the bottom of `claude_code.py`) created a
-driver pointed at the real config the moment any test imported `yzr_agent_tools`. Even though the
+driver pointed at the real config the moment any test imported the package. Even though the
 constructor didn't write anything, any later code that called `driver.apply()` could potentially
 write. The window was small but real. The fix: remove all import-time side effects and enforce
 isolation by autouse fixture.
