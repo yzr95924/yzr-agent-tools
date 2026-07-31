@@ -59,11 +59,6 @@ class ModelEntry:
     # Keys not in _MODEL_ENTRY_FIELDS are stored here and round-tripped.
     extra: Dict[str, Any] = field(default_factory=dict)
 
-    def replace(self, **kwargs: Any) -> "ModelEntry":
-        """Return a copy with the given fields replaced."""
-        from dataclasses import replace as _replace
-        return _replace(self, **kwargs)
-
     def to_toml_dict(self) -> Dict[str, Any]:
         """Serialize as a dict in load order, with extras appended."""
         out: Dict[str, Any] = dict(self.extra)  # extras first
