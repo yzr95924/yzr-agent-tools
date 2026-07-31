@@ -1,1 +1,2 @@
 - [Test isolation invariants](test-isolation-invariants.md) — why tests must NEVER touch the real agent config (e.g. `~/.claude/settings.json`), and the enforcement mechanism in `tests/conftest.py`.
+- [qodercli driver not feasible](qodercli-driver-not-feasible.md) — verified 2026-07-31: cloud-relay-only + server-side BYOK gate; do NOT build a qodercli driver or re-open the topic unless qoder ships direct-baseURL.
