@@ -2,7 +2,7 @@
 
 A driver encapsulates the knowledge of how to read and modify one
 specific agent's global configuration file (e.g., Claude Code's
-settings.json, OpenCode's ~/.opencode.json).
+~/.claude/settings.json, OpenCode's ~/.config/opencode/opencode.json).
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Protocol, runtime_checkable

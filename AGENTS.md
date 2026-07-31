@@ -21,7 +21,7 @@
   theme、plugins、自定义 env 都不能丢。
 - **原子写文件**。TOML（`store.py`）和 JSON（driver）都先写 `.tmp` 再 `os.replace()`，
   永远不出现半写状态。
-- **API key 字段是合法的**。`models.toml` 可以存 `api_key`（同 `workspace_models.toml` 设计），也支持 `api_key_env` 引用 shell 变量。`_resolve_api_key` 优先用 env var，fallback 到 `m.api_key`。
+- **API key 明文存 `models.toml` 的 `api_key` 字段**（同 `workspace_models.toml` 设计，本地信任模型）。**不引入环境变量**——`_resolve_api_key` 直接读 `m.api_key`，没有 env 查询。`model add` 用 `--api-key`（或省略时 getpass 安全交互输入）。
 - **不要在 import 时副作用注册 driver**。会让 module import 那一刻创建指向 `Path.home() / ...` 的实例，
   成为测试隔离漏洞。改成 lazy：在 cli.py 第一次需要 driver 时再 `registry.register(...)`。
 
@@ -30,8 +30,9 @@
 ```bash
 # 安装 — 走 shell wrapper + PYTHONPATH 路线（不创建 venv，不调用 pip）。
 # 需要 Python 3.7+；Python < 3.11 时请自备 tomli（pip install --user 'tomli>=1.1'）。
+# 同时安装 bash/fish 补全：symlink 到 XDG 补全目录 + ~/.bashrc marker block 内 source 行。
 bash scripts/install.sh
-# 卸载（删 wrapper + 剥 PATH marker；不动 ~/.config/model-switch/ 下的数据）
+# 卸载（删 wrapper + 剥 PATH marker + 删补全 symlink；不动 ~/.config/model-switch/ 下的数据）
 bash scripts/uninstall.sh
 
 # 测试 — 需要 pytest + pytest-cov 自装（pip install --user pytest pytest-cov）。
@@ -44,7 +45,7 @@ pytest --cov=model_switch                     # 带覆盖率
 
 # CLI 自身
 model-switch model list
-model-switch model add glm-z1 --base-url ... --api-key-env GLM_API_KEY --model-name glm-4
+model-switch model add glm-z1 --base-url ... --api-key <KEY> --model-name glm-4
 model-switch model use glm-z1
 model-switch status
 ```
@@ -66,7 +67,7 @@ cli.py                  Typer 命令（仅做编排）
 **Driver 抽象是核心**：每个 agent 一个 driver 类，实现 `read() / apply(model, api_key) / current()`。
 加新 agent = 写一个 driver + 注册。当前内置 `claude-code` 与 `opencode`：
 - `claude-code` 写 `~/.claude/settings.json` 的 `env` 块（`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`）+ 顶层 `model` 字段。
-- `opencode` 写 `~/.opencode.json` 的 `provider.yzr` 块（`baseURL` + `{env:VAR}` 占位符 + `limit.context`）+ 顶层 `model` 字段。
+- `opencode` 写 OpenCode 全局配置 `$XDG_CONFIG_HOME/opencode/opencode.json`（默认 `~/.config/opencode/opencode.json`，**不是** `~/.opencode.json`）的 `provider.yzr` 块：`npm: @ai-sdk/anthropic`（Anthropic 兼容上游必需的 adapter，否则 OpenCode 报 "Provider not found" 退回默认模型）+ `options.baseURL` + `options.apiKey` **直接写解析后的明文 key**（同 claude-code driver，**不用** `{env:VAR}` 占位符；密钥落盘，注意文件权限）+ 顶层 `model: yzr/<name>`。**故意不写 `limit`**：OpenCode schema 要求 `limit` 存在时必须有 `limit.output`，而我们只追踪 `context_window`，写半截 `{limit:{context}}` 会让整份配置校验失败、模型不可用。
 通过 `--driver <name>` / `--all-drivers` 切换；省略时使用 `claude-code`（即 `registry.default()`）。
 新 agent = 实现一个 driver 并在 `cli._ensure_default_registered()` 注册。
 
@@ -80,4 +81,3 @@ cli.py                  Typer 命令（仅做编排）
 
 - V1 **不做协议转换**——只支持 Anthropic 兼容上游。OpenAI 兼容（原生 OpenAI、DeepSeek、Ollama）需
   翻译层，V1 不计划。
-- API key 必须以 env var 形式存在；model-switch 不会自己存。

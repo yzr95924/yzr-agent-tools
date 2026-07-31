@@ -276,6 +276,11 @@ def test_install_script_creates_rc_when_home_has_no_bashrc_dir(tmp_path):
     env = os.environ.copy()
     env["HOME"] = str(fake_home)
     env["SHELL"] = "/bin/bash"
+    # Pin XDG dirs under the fake HOME so completion symlinks written by
+    # install.sh can never leak into the real user dirs, whatever the
+    # outer environment happens to export.
+    env["XDG_DATA_HOME"] = str(fake_home / ".local" / "share")
+    env["XDG_CONFIG_HOME"] = str(fake_home / ".config")
 
     result = subprocess.run(
         ["bash", str(fake_repo / "scripts" / "install.sh")],
@@ -318,6 +323,11 @@ def test_install_script_idempotent(tmp_path):
     env = os.environ.copy()
     env["HOME"] = str(fake_home)
     env["SHELL"] = "/bin/bash"
+    # Pin XDG dirs under the fake HOME so completion symlinks written by
+    # install.sh can never leak into the real user dirs, whatever the
+    # outer environment happens to export.
+    env["XDG_DATA_HOME"] = str(fake_home / ".local" / "share")
+    env["XDG_CONFIG_HOME"] = str(fake_home / ".config")
 
     install_sh = str(fake_repo / "scripts" / "install.sh")
 
@@ -364,6 +374,11 @@ def test_uninstall_script_strips_marker_after_install(tmp_path):
     env = os.environ.copy()
     env["HOME"] = str(fake_home)
     env["SHELL"] = "/bin/bash"
+    # Pin XDG dirs under the fake HOME so completion symlinks written by
+    # install.sh can never leak into the real user dirs, whatever the
+    # outer environment happens to export.
+    env["XDG_DATA_HOME"] = str(fake_home / ".local" / "share")
+    env["XDG_CONFIG_HOME"] = str(fake_home / ".config")
 
     install_sh = str(fake_repo / "scripts" / "install.sh")
     uninstall_sh = str(fake_repo / "scripts" / "uninstall.sh")
@@ -385,3 +400,133 @@ def test_uninstall_script_strips_marker_after_install(tmp_path):
 
     wrapper = fake_repo / "bin" / "model-switch"
     assert not wrapper.exists(), "uninstall.sh should have removed the wrapper"
+
+
+# --- shell completion install contract --------------------------------------
+
+
+def _prepare_fake_env(tmp_path):
+    """Return (fake_home, fake_repo, env) for running install.sh hermetically."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    fake_repo = tmp_path / "repo"
+    shutil.copytree(
+        ROOT,
+        fake_repo,
+        symlinks=True,
+        ignore=shutil.ignore_patterns(
+            ".venv", ".git", "__pycache__", ".pytest_cache",
+            "*.egg-info",
+        ),
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(fake_home)
+    env["SHELL"] = "/bin/bash"
+    env["XDG_DATA_HOME"] = str(fake_home / ".local" / "share")
+    env["XDG_CONFIG_HOME"] = str(fake_home / ".config")
+    return fake_home, fake_repo, env
+
+
+def test_install_links_bash_and_fish_completions(tmp_path):
+    """install.sh must symlink both completion scripts into the XDG dirs."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+
+    r = subprocess.run(
+        ["bash", str(fake_repo / "scripts" / "install.sh")],
+        check=False, capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0, f"install failed:\n{r.stderr}"
+
+    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "model-switch"
+    fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "model-switch.fish"
+
+    assert bash_link.is_symlink(), f"bash completion symlink missing: {bash_link}"
+    assert bash_link.resolve() == (fake_repo / "completions" / "model-switch.bash").resolve()
+    assert fish_link.is_symlink(), f"fish completion symlink missing: {fish_link}"
+    assert fish_link.resolve() == (fake_repo / "completions" / "model-switch.fish").resolve()
+
+    # bashrc marker block should source the bash completion (covers setups
+    # without the bash-completion package).
+    bashrc = (fake_home / ".bashrc").read_text()
+    src = fake_repo / "completions" / "model-switch.bash"
+    assert f'[ -f "{src}" ] && . "{src}"' in bashrc, (
+        f"bashrc should source the completion inside the marker block; got: {bashrc!r}"
+    )
+
+
+def test_install_completion_upgrade_splices_source_line(tmp_path):
+    """An old marker block (no completion line) gets the source line spliced in."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+
+    old_block = (
+        "# model-switch PATH begin\n"
+        f"export PATH=\"{fake_repo}/bin:$PATH\"\n"
+        "# model-switch PATH end\n"
+    )
+    (fake_home / ".bashrc").write_text(old_block)
+
+    r = subprocess.run(
+        ["bash", str(fake_repo / "scripts" / "install.sh")],
+        check=False, capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0, f"install failed:\n{r.stderr}"
+
+    bashrc = (fake_home / ".bashrc").read_text()
+    assert bashrc.count("# model-switch PATH begin") == 1, (
+        f"upgrade must not duplicate the marker block; got: {bashrc!r}"
+    )
+    assert "completions/model-switch.bash" in bashrc, (
+        f"upgrade should splice the completion source line in; got: {bashrc!r}"
+    )
+    # The spliced line must sit INSIDE the marker block so uninstall strips it.
+    begin_i = bashrc.index("# model-switch PATH begin")
+    end_i = bashrc.index("# model-switch PATH end")
+    line_i = bashrc.index("completions/model-switch.bash")
+    assert begin_i < line_i < end_i, (
+        f"completion source line must be inside the marker block; got: {bashrc!r}"
+    )
+
+
+def test_install_leaves_user_owned_completion_files_alone(tmp_path):
+    """A pre-existing regular file at the completion path is not overwritten."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+
+    fish_dir = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions"
+    fish_dir.mkdir(parents=True)
+    user_file = fish_dir / "model-switch.fish"
+    user_file.write_text("# my own completion\n")
+
+    r = subprocess.run(
+        ["bash", str(fake_repo / "scripts" / "install.sh")],
+        check=False, capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0, f"install failed:\n{r.stderr}"
+    assert user_file.read_text() == "# my own completion\n", (
+        "install.sh must not clobber a user-owned completion file"
+    )
+    assert not user_file.is_symlink()
+
+
+def test_uninstall_removes_completion_links(tmp_path):
+    """uninstall.sh removes the completion symlinks it created."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+
+    install_sh = str(fake_repo / "scripts" / "install.sh")
+    uninstall_sh = str(fake_repo / "scripts" / "uninstall.sh")
+
+    r = subprocess.run(["bash", install_sh], check=False, capture_output=True, text=True, env=env)
+    assert r.returncode == 0, f"install failed:\n{r.stderr}"
+
+    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "model-switch"
+    fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "model-switch.fish"
+    assert bash_link.is_symlink() and fish_link.is_symlink()
+
+    r = subprocess.run(["bash", uninstall_sh], check=False, capture_output=True, text=True, env=env)
+    assert r.returncode == 0, f"uninstall failed:\n{r.stderr}"
+
+    assert not bash_link.exists() and not bash_link.is_symlink(), (
+        "uninstall.sh should remove the bash completion symlink"
+    )
+    assert not fish_link.exists() and not fish_link.is_symlink(), (
+        "uninstall.sh should remove the fish completion symlink"
+    )

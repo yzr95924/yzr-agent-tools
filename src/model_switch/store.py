@@ -25,7 +25,6 @@ _MODEL_ENTRY_FIELDS = (
     "model_id",
     "name",
     "base_url",
-    "api_key_env",
     "api_key",
     "context_window",
     "description",
@@ -54,7 +53,6 @@ class ModelEntry:
     model_id: str
     name: str
     base_url: str
-    api_key_env: Optional[str] = None
     api_key: Optional[str] = None
     context_window: Optional[int] = None
     description: Optional[str] = None
@@ -72,8 +70,6 @@ class ModelEntry:
         out["model_id"] = self.model_id
         out["name"] = self.name
         out["base_url"] = self.base_url
-        if self.api_key_env is not None:
-            out["api_key_env"] = self.api_key_env
         if self.api_key is not None:
             out["api_key"] = self.api_key
         if self.context_window is not None:
@@ -141,12 +137,10 @@ def load_models(path: Path) -> Registry:
                     )
                 )
 
-        # At least one of `api_key_env` or `api_key` must be present —
-        # otherwise there's no way to authenticate the model.
-        if "api_key_env" not in entry and "api_key" not in entry:
+        # `api_key` is required — it's the sole credential source.
+        if "api_key" not in entry:
             raise MissingRequiredField(
-                "models.toml: [[models]] entry must have either "
-                "'api_key_env' or 'api_key': {}".format(entry)
+                "models.toml: [[models]] entry must have 'api_key': {}".format(entry)
             )
 
         model_id = str(entry["model_id"])
@@ -171,7 +165,6 @@ def load_models(path: Path) -> Registry:
             model_id=model_id,
             name=str(entry["name"]),
             base_url=str(entry["base_url"]),
-            api_key_env=(str(entry["api_key_env"]) if entry.get("api_key_env") else None),
             api_key=(str(entry["api_key"]) if entry.get("api_key") else None),
             context_window=cw,
             description=(str(entry["description"]) if entry.get("description") else None),

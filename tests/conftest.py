@@ -29,6 +29,7 @@ import pytest
 from model_switch import paths
 from model_switch.drivers.base import registry
 from model_switch.drivers.claude_code import ClaudeCodeDriver
+from model_switch.drivers.opencode import OpenCodeDriver
 
 
 # Real paths we MUST NOT touch during tests. Tracked for integrity checks.
@@ -37,6 +38,11 @@ REAL_YZR_CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
     / "model-switch"
 )
+# OpenCode's real global config (may hold the user's live custom providers).
+_REAL_CFG_BASE = Path(
+    os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+)
+REAL_OPENCODE_CONFIG = _REAL_CFG_BASE / "opencode" / "opencode.json"
 
 
 def _sha256(path: Path):
@@ -57,7 +63,8 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     # Snapshot real configs so we can verify they were not modified.
     snapshot = {}
     for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
-                     ("yzr_config_dir", REAL_YZR_CONFIG_DIR)):
+                     ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
+                     ("opencode_config", REAL_OPENCODE_CONFIG)):
         snapshot[label] = {
             "exists": p.exists(),
             "mtime": p.stat().st_mtime if p.exists() else None,
@@ -70,27 +77,35 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     models_p = cfg_dir / "models.toml"
     state_p = cfg_dir / "state.toml"
     settings_p = tmp_path / ".claude" / "settings.json"
+    opencode_p = tmp_path / ".config" / "opencode" / "opencode.json"
 
     monkeypatch.setattr(paths, "config_dir", lambda: cfg_dir)
     monkeypatch.setattr(paths, "models_file", lambda: models_p)
     monkeypatch.setattr(paths, "state_file", lambda: state_p)
+    monkeypatch.setattr(paths, "opencode_config_file", lambda: opencode_p)
 
     # Replace any pre-existing claude-code driver in the registry with
     # one pointing at the tmp settings path. (Earlier auto-registration
     # would have created one pointed at the real ~/.claude/settings.json.)
     registry._drivers["claude-code"] = ClaudeCodeDriver(settings_path=settings_p)
+    # Same for opencode: its default path now resolves to the real
+    # ~/.config/opencode/opencode.json, so lazy registration MUST be
+    # pre-empted with a tmp-path driver.
+    registry._drivers["opencode"] = OpenCodeDriver(settings_path=opencode_p)
 
     paths_dict = {
         "config_dir": cfg_dir,
         "models": models_p,
         "state": state_p,
         "settings": settings_p,
+        "opencode": opencode_p,
     }
     yield paths_dict
 
     # Integrity check: real configs must be byte-identical to the snapshot.
     for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
-                     ("yzr_config_dir", REAL_YZR_CONFIG_DIR)):
+                     ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
+                     ("opencode_config", REAL_OPENCODE_CONFIG)):
         snap = snapshot[label]
         if snap["exists"]:
             assert p.exists(), (

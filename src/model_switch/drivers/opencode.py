@@ -1,29 +1,51 @@
-"""OpenCode driver — reads/writes ~/.opencode.json.
+"""OpenCode driver — reads/writes the OpenCode global config.
 
-Writes a single model under our `provider.<id>` block (`PROVIDER_ID = "yzr"`):
+OpenCode loads its global config from ``$XDG_CONFIG_HOME/opencode/opencode.json``
+(default ``~/.config/opencode/opencode.json``) — **not** ``~/.opencode.json``.
+Writing the wrong path means the config is silently ignored and OpenCode
+starts on its default model.
+
+Writes a single model under our ``provider.<id>`` block (``PROVIDER_ID =
+"yzr"``). A non-built-in provider must declare ``npm`` so OpenCode knows which
+AI-SDK adapter to load; Anthropic-compatible upstreams use ``@ai-sdk/anthropic``::
 
   {
     "provider": {
       "yzr": {
-        "options": { "baseURL": ..., "apiKey": "{env:VAR}" },
-        "models": { "<model_id>": { "limit": { "context": N } } }
+        "npm": "@ai-sdk/anthropic",
+        "name": "yzr",
+        "options": { "baseURL": ..., "apiKey": "<resolved-key>" },
+        "models": { "<model_id>": {} }
       }
     },
     "model": "yzr/<model_id>"
   }
 
-`Model.context_window` is written to `models.<id>.limit.context` (not as a
-suffix on the id). API key is referenced via OpenCode's `{env:VAR}` placeholder.
+The resolved API key is written **verbatim** into ``options.apiKey`` — matching
+the claude-code driver and OpenCode's own convention for custom providers
+(OpenCode supports a ``{env:VAR}`` placeholder, but we don't use it: the key
+lives in the config file, so the file holds a secret; keep its permissions
+tight). ``Model.context_window`` is intentionally NOT surfaced: OpenCode's
+schema requires ``limit.output`` whenever ``limit`` is present, and we only
+track context — emitting a partial ``{limit:{context}}`` fails validation and
+makes the model unavailable. Omitting matches OpenCode's own handling for
+custom providers.
 """
 import json
 from pathlib import Path
 from typing import Dict
 
+from model_switch import paths
 from model_switch.drivers._atomic import atomic_write_json
 from model_switch.store import ModelEntry as Model
 
 
 PROVIDER_ID = "yzr"
+
+# Anthropic-compatible upstreams (model-switch's only supported protocol) load
+# the @ai-sdk/anthropic adapter. Without `npm`, OpenCode reports
+# "Provider not found" and silently falls back to its default model.
+NPM_ADAPTER = "@ai-sdk/anthropic"
 
 
 class OpenCodeDriver:
@@ -31,7 +53,7 @@ class OpenCodeDriver:
 
     def __init__(self, settings_path: Path = None) -> None:
         if settings_path is None:
-            settings_path = Path.home() / ".opencode.json"
+            settings_path = paths.opencode_config_file()
         self.settings_path = settings_path
 
     def read(self) -> dict:
@@ -43,25 +65,30 @@ class OpenCodeDriver:
             return {}
         return json.loads(text)
 
-    def apply(self, model: Model, api_key: str) -> None:  # noqa: ARG002
+    def apply(self, model: Model, api_key: str) -> None:
         """Write the model into the OpenCode config.
 
-        The raw `api_key` is intentionally NOT written — we only reference
-        `model.api_key_env` via OpenCode's `{env:NAME}` placeholder.
+        The resolved `api_key` is written verbatim into `options.apiKey`
+        (matching the claude-code driver). model-switch does not use OpenCode's
+        `{env:VAR}` placeholder, so the key is stored in the config file.
         """
         config = self.read()
         providers = config.get("provider", {})
 
         provider_block: Dict = providers.get(PROVIDER_ID, {})
+
+        # Tell OpenCode which AI-SDK adapter loads this provider. Without it
+        # the custom provider is unresolvable.
+        provider_block["npm"] = NPM_ADAPTER
+        provider_block.setdefault("name", PROVIDER_ID)
+
         options = provider_block.get("options", {})
         options["baseURL"] = model.base_url
-        options["apiKey"] = "{" + "env:" + model.api_key_env + "}"
+        options["apiKey"] = api_key
         provider_block["options"] = options
 
-        entry: Dict = {}
-        if model.context_window is not None:
-            entry["limit"] = {"context": model.context_window}
-        provider_block["models"] = {model.name: entry}
+        # NOTE: no `limit` — see module docstring (partial limit is invalid).
+        provider_block["models"] = {model.name: {}}
 
         providers[PROVIDER_ID] = provider_block
         config["provider"] = providers

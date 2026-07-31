@@ -16,7 +16,7 @@ def glm_main() -> Model:
     return Model(
         model_id="glm",
         base_url="https://api.example.com",
-        api_key_env="KEY",
+        api_key="KEY",
         name="MiniMax-M3",
         context_window=1000000,
     )
@@ -25,7 +25,7 @@ def glm_main() -> Model:
     return Model(
         model_id="glm",
         base_url="https://api.example.com",
-        api_key_env="KEY",
+        api_key="KEY",
         name="MiniMax-M3",
     )
 
@@ -50,7 +50,8 @@ def _make_opencode_driver(tmp_path: Path, monkeypatch) -> OpenCodeDriver:
 
 
 def test_opencode_does_not_append_1m_suffix(tmp_path, monkeypatch, glm_main):
-    """OpenCode encodes context via limit.context; the model id stays bare."""
+    """OpenCode keeps the model id bare (no [1m] suffix); context_window is
+    not surfaced to OpenCode (its limit schema requires output we don't track)."""
     monkeypatch.setenv("KEY", "k")
     d = _make_opencode_driver(tmp_path, monkeypatch)
     d.apply(model=glm_main, api_key="k")
@@ -69,10 +70,10 @@ def test_model_context_window_roundtrip(tmp_path):
 
     reg = Registry()
     reg.models["m1"] = Model(
-        model_id="m1", base_url="x", api_key_env="K", name="m", context_window=200000,
+        model_id="m1", base_url="x", api_key="K", name="m", context_window=200000,
     )
     reg.models["m2"] = Model(
-        model_id="m2", base_url="y", api_key_env="K2", name="n",
+        model_id="m2", base_url="y", api_key="K2", name="n",
     )
     save_models(cfg_p, reg)
     loaded = load_models(cfg_p)

@@ -11,12 +11,11 @@ registered lazily on first use.
 
 Output goes to stdout; errors to stderr. Exit codes:
   0 = success
-  1 = user error (bad flag, missing model, missing env var)
+  1 = user error (bad flag, missing model, missing api_key)
   2 = argparse error (unknown command / flag)
 """
 import argparse
 import datetime
-import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -104,20 +103,11 @@ def _resolve_drivers(args) -> list:
 
 
 def _resolve_api_key(model) -> str:
-    """Resolve the API key for `model`.
-
-    Priority: env var named by `model.api_key_env` → `model.api_key`.
-    Fail with a clear message if neither is set.
-    """
-    env_val = os.environ.get(model.api_key_env)
-    if env_val:
-        return env_val
+    """Return the model's API key (stored plaintext in models.toml)."""
     if model.api_key:
         return model.api_key
     print(
-        f"Error: API key for model {model.model_id!r} is not available.\n"
-        f"  Either set the env var:  export {model.api_key_env}=<your-key>\n"
-        f"  Or store the key in models.toml under {model.api_key_env!r}/api_key.",
+        f"Error: model {model.model_id!r} has no api_key in models.toml.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -142,9 +132,9 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
     missing AND required, we exit with a clear error. If optional, return
     `None` (or `default`).
 
-    Do NOT pass secrets — input is echoed to the terminal. We only prompt
-    for env var names, model identifiers, and descriptions, never the
-    API key itself.
+    Do NOT pass secrets here — input is echoed. We only prompt for model
+    identifiers and descriptions. For the API key, use `_prompt_secret`
+    (which does not echo).
     """
     suffix = ""
     if default is not None:
@@ -188,6 +178,37 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
     return type_(line)
 
 
+def _prompt_secret(label: str) -> str:
+    """Read a secret (the API key) from stdin WITHOUT echoing.
+
+    Uses `getpass` so the key isn't displayed on the terminal. In
+    non-interactive contexts with no input, exit with a clear error
+    telling the user to pass `--api-key`.
+    """
+    import getpass
+
+    if not sys.stdin.isatty():
+        print(
+            f"Error: {label} is required (no TTY for secure prompt). "
+            f"Pass it via --api-key.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        value = getpass.getpass(f"{label}: ")
+    except EOFError:
+        print(
+            f"Error: {label} is required (input exhausted). "
+            f"Pass it via --api-key.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if value == "":
+        print("Error: value is required.", file=sys.stderr)
+        sys.exit(1)
+    return value
+
+
 # ---- parser construction ----------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -208,8 +229,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("name", help="Local nickname for this model.")
     p_add.add_argument("--base-url", default=None, help="Upstream API base URL.")
     p_add.add_argument(
-        "--api-key-env", default=None,
-        help="Name of the env var holding the API key.",
+        "--api-key", default=None,
+        help="API key stored in models.toml (plaintext). Prompted securely if omitted.",
     )
     p_add.add_argument(
         "--model-name", default=None,
@@ -256,6 +277,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("--driver", default=None, dest="driver_name")
     p_status.add_argument("--all-drivers", action="store_true", dest="all_drivers")
 
+    # _complete — hidden plumbing for the shell completion scripts
+    # (completions/). No `help=` on purpose: argparse only lists subparsers
+    # that carry help text, so this stays out of `--help` output.
+    p_complete = sub.add_parser("_complete")
+    p_complete.add_argument(
+        "what", choices=["models", "drivers"],
+        help="Which candidates to print, one per line.",
+    )
+
     return parser
 
 
@@ -278,14 +308,14 @@ def _do_model_add(args: argparse.Namespace) -> None:
     so you can run `model-switch model add mymodel` and answer the prompts.
     """
     base_url = args.base_url or _prompt("Upstream API base URL")
-    api_key_env = args.api_key_env or _prompt("Env var holding the API key")
+    api_key = args.api_key or _prompt_secret("API key")
     model_name = args.model_name or _prompt(
         "Model identifier (bare id, no context suffix)"
     )
     if args.context_window is None:
         context_window = _prompt(
-            "Context window in tokens (press Enter for default 200000)",
-            default=200000, type_=int,
+            "Context window in tokens (press Enter to skip)",
+            optional=True, type_=int,
         )
     else:
         context_window = args.context_window
@@ -301,12 +331,32 @@ def _do_model_add(args: argparse.Namespace) -> None:
         model_id=args.name,
         name=model_name,
         base_url=base_url,
-        api_key_env=api_key_env,
+        api_key=api_key,
         context_window=context_window,
         description=description,
     )
     save_models(paths.models_file(), reg)
     print(f"Added model {args.name!r}.")
+
+
+def _format_context(n) -> str:
+    """Render a context window in human units: 200000 -> '200K', None -> '-(none)-'."""
+    if n is None:
+        return "-(none)-"
+    if n >= 1_000_000 and n % 1_000_000 == 0:
+        return f"{n // 1_000_000}M"
+    if n >= 1_000 and n % 1_000 == 0:
+        return f"{n // 1_000}K"
+    return str(n)
+
+
+def _truncate(s, width) -> str:
+    """Truncate `s` to `width` chars, ending with '…' if shortened."""
+    if len(s) <= width:
+        return s
+    if width <= 1:
+        return "…"
+    return s[: width - 1] + "…"
 
 
 def _do_model_list() -> None:
@@ -315,13 +365,49 @@ def _do_model_list() -> None:
     if not reg.models:
         print("(no models configured — run `model-switch model add` to add one)")
         return
-    name_w = max(len(n) for n in reg.models)
+
+    rows = []
     for n, m in reg.models.items():
-        markers = []
-        if state.active_main == n:
-            markers.append("active")
-        marker = " [" + ",".join(markers) + "]" if markers else ""
-        print(f"  {n.ljust(name_w)}  {m.name}{marker}")
+        rows.append((
+            n,
+            m.name,
+            _format_context(m.context_window),
+            _truncate(m.base_url, 50),
+            n == state.active_main,
+        ))
+
+    names = [r[0] for r in rows]
+    models_col = [r[1] for r in rows]
+    contexts = [r[2] for r in rows]
+    urls = [r[3] for r in rows]
+
+    name_w = max(max(len(s) for s in names), len("NAME"))
+    model_w = max(max(len(s) for s in models_col), len("MODEL"))
+    context_w = max(max(len(s) for s in contexts), len("CONTEXT"))
+    url_w = max(max(len(s) for s in urls), len("BASE_URL"))
+
+    print(
+        "  "
+        + "NAME".ljust(name_w)
+        + "  "
+        + "MODEL".ljust(model_w)
+        + "  "
+        + "CONTEXT".ljust(context_w)
+        + "  "
+        + "BASE_URL".ljust(url_w)
+    )
+    for n, model, ctx, url, is_active in rows:
+        prefix = "→ " if is_active else "  "
+        print(
+            prefix
+            + n.ljust(name_w)
+            + "  "
+            + model.ljust(model_w)
+            + "  "
+            + ctx.ljust(context_w)
+            + "  "
+            + url
+        )
 
 
 def _do_model_show(name: str) -> None:
@@ -332,7 +418,7 @@ def _do_model_show(name: str) -> None:
     m = reg.models[name]
     print(f"name:           {name}")
     print(f"base_url:       {m.base_url}")
-    print(f"api_key_env:    {m.api_key_env}")
+    print(f"api_key:        {'<set>' if m.api_key else '<missing>'}")
     print(f"model_name:     {m.name}")
     if m.context_window is not None:
         print(f"context_window: {m.context_window}")
@@ -377,9 +463,8 @@ def _do_model_import(args: argparse.Namespace) -> None:
     """Import model definitions from an llmw-format TOML file.
 
     Conversion rules (see `model_switch.importer`):
-    - `api_key` (raw credential) is NEVER written to disk by model-switch.
-      We derive a stable env var name from `model_id` and require the user
-      to export the raw key in their shell.
+    - `api_key` is persisted verbatim into models.toml (treated as a local-only
+      config file, same trust model as llmw's workspace_models.toml).
     - `context_window` is read only if present as an int field. We do NOT
       reverse-engineer it from a `[1m]` suffix in `name`.
     - Unknown top-level keys and per-model keys (e.g. `is_default`,
@@ -413,11 +498,20 @@ def _do_model_import(args: argparse.Namespace) -> None:
         save_models(paths.models_file(), incoming)
 
     print(f"Imported {len(incoming.models)} model(s) from {src_path}.")
-    if result.env_vars_needed:
-        print("")
-        print("Override keys via env vars if you prefer (otherwise models.toml is the source):")
-        for model_id, env_var in result.env_vars_needed:
-            print(f"  export {env_var}=<your-key>   # optional override for '{model_id}'")
+
+
+def _do_complete_models() -> None:
+    """Print configured model names, one per line (completion plumbing)."""
+    reg = load_models(paths.models_file())
+    for name in reg.models:
+        print(name)
+
+
+def _do_complete_drivers() -> None:
+    """Print registered driver names, one per line (completion plumbing)."""
+    _ensure_default_registered()
+    for name in registry.list():
+        print(name)
 
 
 def _do_status(args: argparse.Namespace) -> None:
@@ -474,6 +568,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if args.cmd == "status":
         _do_status(args)
+        return 0
+    if args.cmd == "_complete":
+        if args.what == "models":
+            _do_complete_models()
+        else:
+            _do_complete_drivers()
         return 0
 
     # argparse with required=True subparsers should never let us reach here.

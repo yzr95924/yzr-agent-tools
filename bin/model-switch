@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# bin/model-switch — repo-local launcher.
-# Resolves the repo root relative to itself, sets PYTHONPATH=$REPO/src so that
-# `python3 -m model_switch` finds the package, and exec's. Repo relocation
-# is handled by re-running ./scripts/install.sh (which only re-pins the
-# repo path baked into the user's shell rc — bashrc still points to the
-# same $BIN_DIR).
-#
-# Compare: llm-workspace-cli's bin/llmw does the same trick.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"

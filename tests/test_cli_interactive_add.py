@@ -27,7 +27,7 @@ def test_add_with_all_flags_does_not_prompt(yzr_paths):
     result = runner([
         "model", "add", "glm",
         "--base-url", "https://x",
-        "--api-key-env", "KEY",
+        "--api-key", "KEY",
         "--model-name", "m",
         "--context-window", "1000000",
     ])
@@ -40,7 +40,7 @@ def test_add_with_all_flags_does_not_prompt(yzr_paths):
 
 def test_add_prompts_for_missing_base_url(yzr_paths):
     result = _add_with_input(
-        ["--api-key-env", "KEY", "--model-name", "m"],
+        ["--api-key", "KEY", "--model-name", "m"],
         ["https://api.example.com"],
     )
     assert result.exit_code == 0, result.stdout
@@ -48,19 +48,19 @@ def test_add_prompts_for_missing_base_url(yzr_paths):
     assert cfg.models["demo"].base_url == "https://api.example.com"
 
 
-def test_add_prompts_for_missing_api_key_env(yzr_paths):
+def test_add_prompts_for_missing_api_key(yzr_paths):
     result = _add_with_input(
         ["--base-url", "https://x", "--model-name", "m"],
         ["API_KEY"],
     )
     assert result.exit_code == 0, result.stdout
     cfg = load_models(yzr_paths["models"])
-    assert cfg.models["demo"].api_key_env == "API_KEY"
+    assert cfg.models["demo"].api_key == "API_KEY"
 
 
 def test_add_prompts_for_missing_model_name(yzr_paths):
     result = _add_with_input(
-        ["--base-url", "https://x", "--api-key-env", "KEY"],
+        ["--base-url", "https://x", "--api-key", "KEY"],
         ["MiniMax-M3"],
     )
     assert result.exit_code == 0, result.stdout
@@ -69,19 +69,31 @@ def test_add_prompts_for_missing_model_name(yzr_paths):
 
 
 def test_add_prompts_for_context_window_with_default(yzr_paths):
-    """context_window prompt shows a 200000 default; pressing Enter accepts it."""
+    """Context window prompt is optional: pressing Enter yields None (no default)."""
     result = _add_with_input(
-        ["--base-url", "https://x", "--api-key-env", "KEY", "--model-name", "m"],
-        [""],  # accept default
+        ["--base-url", "https://x", "--api-key", "KEY", "--model-name", "m"],
+        [""],  # accept empty → no context
     )
     assert result.exit_code == 0, result.stdout
     cfg = load_models(yzr_paths["models"])
-    assert cfg.models["demo"].context_window == 200000
+    assert cfg.models["demo"].context_window is None
+
+
+def test_add_omitting_context_window_yields_none(yzr_paths):
+    """Even without any context window input the field should remain None,
+    not silently default to a hard-coded number."""
+    result = _add_with_input(
+        ["--base-url", "https://x", "--api-key", "KEY", "--model-name", "m"],
+        [""],  # accept empty → no context
+    )
+    assert result.exit_code == 0, result.stdout
+    cfg = load_models(yzr_paths["models"])
+    assert cfg.models["demo"].context_window is None
 
 
 def test_add_prompts_for_context_window_with_explicit_value(yzr_paths):
     result = _add_with_input(
-        ["--base-url", "https://x", "--api-key-env", "KEY", "--model-name", "m"],
+        ["--base-url", "https://x", "--api-key", "KEY", "--model-name", "m"],
         ["1000000"],
     )
     assert result.exit_code == 0, result.stdout
@@ -91,7 +103,7 @@ def test_add_prompts_for_context_window_with_explicit_value(yzr_paths):
 
 def test_add_prompts_for_description_optional(yzr_paths):
     result = _add_with_input(
-        ["--base-url", "https://x", "--api-key-env", "KEY", "--model-name", "m",
+        ["--base-url", "https://x", "--api-key", "KEY", "--model-name", "m",
          "--context-window", "200000"],
         [""],  # accept empty default
     )
@@ -106,7 +118,7 @@ def test_add_prompts_for_all_when_nothing_provided(yzr_paths):
         [],
         [
             "https://api.minimaxi.com/anthropic",  # base_url
-            "MiniMax_API_KEY",                     # api_key_env
+            "MiniMax_API_KEY",                     # api_key
             "MiniMax-M3",                          # model_name
             "1000000",                             # context_window
             "",                                    # description (skip)
@@ -116,6 +128,6 @@ def test_add_prompts_for_all_when_nothing_provided(yzr_paths):
     cfg = load_models(yzr_paths["models"])
     m = cfg.models["demo"]
     assert m.base_url == "https://api.minimaxi.com/anthropic"
-    assert m.api_key_env == "MiniMax_API_KEY"
+    assert m.api_key == "MiniMax_API_KEY"
     assert m.name == "MiniMax-M3"
     assert m.context_window == 1000000

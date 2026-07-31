@@ -43,16 +43,29 @@ available before running `model-switch`:
 If `tomli` is missing on Python < 3.11, the first `model-switch` invocation
 will fail at `import tomli` with an `ImportError` — install it and retry.
 
+### Shell completion (bash + fish)
+
+`install.sh` also wires up tab completion:
+
+- **bash** — symlinked into `~/.local/share/bash-completion/completions/`
+  *and* sourced from the PATH block in `~/.bashrc`, so it works even
+  without the bash-completion package.
+- **fish** — symlinked into `~/.config/fish/completions/` (auto-loaded).
+
+Completion covers subcommands, flags, `--driver` values, and model names
+for `model use/show/remove`. Dynamic candidates come from the CLI itself
+(the hidden `model-switch _complete models|drivers` plumbing command), so
+they always match your `models.toml`. `uninstall.sh` removes the symlinks
+and the sourced line. The scripts live in `completions/` if you prefer to
+wire them up manually.
+
 ## Quickstart
 
 ```bash
-# 1. Set your API key as an env var (model-switch never writes keys to disk)
-export GLM_API_KEY=sk-...
-
-# 2. Register a model
+# 1. Register a model — the API key is stored (plaintext) in models.toml
 model-switch model add glm-z1-plus \
      --base-url https://open.bigmodel.cn/api/anthropic \
-     --api-key-env GLM_API_KEY \
+     --api-key sk-... \
      --model-name glm-4-plus \
      --description "GLM-4 Plus" \
      --context-window 200000
@@ -84,7 +97,7 @@ model-switch init                              # create ~/.config/model-switch/
 
 model-switch model add <name> \
      --base-url <url> \
-     --api-key-env <ENV_VAR> \
+     --api-key <KEY> \
      --model-name <id> \
      [--description <text>] \
      [--context-window <tokens>]
@@ -104,7 +117,7 @@ Under the `env` block, plus a top-level `model` for the modern single-model
 shape:
 
 - `ANTHROPIC_BASE_URL` — upstream base URL
-- `ANTHROPIC_AUTH_TOKEN` — resolved from `api_key_env` (or `api_key` field)
+- `ANTHROPIC_AUTH_TOKEN` — the model's `api_key` from models.toml
 - `ANTHROPIC_MODEL` — `<name>` or `<name>[1m]` when `context_window >= 1_000_000`
 - Top-level `model` — mirrors `ANTHROPIC_MODEL`
 
@@ -157,11 +170,12 @@ model-switch model use glm-z1-plus --driver opencode
 model-switch status --driver opencode
 ```
 
-The OpenCode driver writes a provider block into `~/.opencode.json` and
-references the API key via OpenCode's `{env:VAR_NAME}` placeholder — the
-real key is never written to disk. The same `models.toml` definitions are
-shared with the Claude Code driver, so you can switch agents without
-re-registering models.
+The OpenCode driver writes a `provider.yzr` block (with the `@ai-sdk/anthropic`
+adapter) into OpenCode's global config at `~/.config/opencode/opencode.json`
+(`$XDG_CONFIG_HOME/opencode/opencode.json`) and writes the resolved API key
+directly into `apiKey` — the key is stored in the config file, so keep its
+permissions tight. The same `models.toml` definitions are shared with the
+Claude Code driver, so you can switch agents without re-registering models.
 
 ## Run the tests
 
@@ -183,7 +197,6 @@ configs at teardown.
   DeepSeek, Ollama) need a protocol-translation layer that's not in V1.
 - Only Claude Code and OpenCode have built-in drivers. Other agents
   (Aider, Cursor, etc.) need a driver implementation.
-- API keys must be in env vars; model-switch won't store them.
 
 ## License
 

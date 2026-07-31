@@ -40,7 +40,7 @@ def test_model_use_targets_opencode_driver(two_drivers, monkeypatch):
     runner([
         "model", "add", "glm",
         "--base-url", "https://api.example.com",
-        "--api-key-env", "GLM_API_KEY",
+        "--api-key", "GLM_API_KEY",
         "--model-name", "glm-4",
     ])
     result = runner(["model", "use", "glm", "--driver", "opencode"])
@@ -57,7 +57,7 @@ def test_model_use_falls_back_to_default_driver_when_unspecified(two_drivers, mo
     runner([
         "model", "add", "glm",
         "--base-url", "https://api.example.com",
-        "--api-key-env", "GLM_API_KEY",
+        "--api-key", "GLM_API_KEY",
         "--model-name", "glm-4",
     ])
     result = runner(["model", "use", "glm"])
@@ -71,7 +71,7 @@ def test_unknown_driver_name_errors(two_drivers, monkeypatch):
     monkeypatch.setenv("GLM_API_KEY", "k")
     runner([
         "model", "add", "glm",
-        "--base-url", "https://x", "--api-key-env", "GLM_API_KEY",
+        "--base-url", "https://x", "--api-key", "GLM_API_KEY",
         "--model-name", "glm-4",
     ])
     result = runner(["model", "use", "glm", "--driver", "no-such"])

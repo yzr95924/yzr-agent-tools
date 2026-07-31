@@ -30,14 +30,14 @@ def test_load_models_round_trip(tmp_path):
             model_id="glm",
             name="glm-4-plus",
             base_url="https://api.example.com",
-            api_key_env="GLM_API_KEY",
+            api_key="GLM_API_KEY",
             description="GLM-4 Plus",
         ),
     })
     save_models(p, reg)
     loaded = load_models(p)
     assert loaded.models["glm"].name == "glm-4-plus"
-    assert loaded.models["glm"].api_key_env == "GLM_API_KEY"
+    assert loaded.models["glm"].api_key == "GLM_API_KEY"
 
 
 def test_load_models_preserves_unknown_top_level_keys(tmp_path):
@@ -46,7 +46,7 @@ def test_load_models_preserves_unknown_top_level_keys(tmp_path):
     p = tmp_path / "models.toml"
     p.write_text('schema_version = 2\ncreated_at = "2026-01-01T00:00:00Z"\n\n'
                  '[[models]]\nmodel_id = "glm"\nname = "glm-4"\n'
-                 'base_url = "u"\napi_key_env = "K"\n')
+                 'base_url = "u"\napi_key = "K"\n')
 
     reg = load_models(p)
     assert reg.extra_top == {
@@ -64,7 +64,6 @@ def test_load_models_preserves_unknown_per_model_keys(tmp_path):
                  'model_id = "glm"\n'
                  'name = "glm-4"\n'
                  'base_url = "u"\n'
-                 'api_key_env = "K"\n'
                  'api_key = "sk-secret-from-llmw"\n'
                  'is_default = true\n')
 
@@ -81,7 +80,6 @@ def test_load_models_preserves_unknown_keys_after_save(tmp_path):
                  'model_id = "glm"\n'
                  'name = "glm-4"\n'
                  'base_url = "u"\n'
-                 'api_key_env = "K"\n'
                  'api_key = "sk-x"\n')
 
     reg = load_models(p)
@@ -100,15 +98,15 @@ def test_load_models_preserves_unknown_keys_after_save(tmp_path):
 def test_load_models_rejects_missing_required_field(tmp_path):
     p = tmp_path / "models.toml"
     p.write_text('[[models]]\nmodel_id = "glm"\nname = "glm-4"\n'
-                 'base_url = "u"\n# missing api_key_env\n')
+                 'base_url = "u"\n# missing api_key\n')
     with pytest.raises(MissingRequiredField):
         load_models(p)
 
 
 def test_load_models_rejects_duplicate_model_id(tmp_path):
     p = tmp_path / "models.toml"
-    p.write_text('[[models]]\nmodel_id = "glm"\nname = "n"\nbase_url = "u"\napi_key_env = "K"\n'
-                 '[[models]]\nmodel_id = "glm"\nname = "n2"\nbase_url = "u2"\napi_key_env = "K2"\n')
+    p.write_text('[[models]]\nmodel_id = "glm"\nname = "n"\nbase_url = "u"\napi_key = "K"\n'
+                 '[[models]]\nmodel_id = "glm"\nname = "n2"\nbase_url = "u2"\napi_key = "K2"\n')
     with pytest.raises(DuplicateModelId):
         load_models(p)
 
@@ -116,7 +114,7 @@ def test_load_models_rejects_duplicate_model_id(tmp_path):
 def test_load_models_rejects_non_int_context_window(tmp_path):
     p = tmp_path / "models.toml"
     p.write_text('[[models]]\nmodel_id = "glm"\nname = "n"\n'
-                 'base_url = "u"\napi_key_env = "K"\n'
+                 'base_url = "u"\napi_key = "K"\n'
                  'context_window = "1m"\n')
     with pytest.raises(InvalidContextWindow):
         load_models(p)
@@ -127,7 +125,7 @@ def test_load_models_rejects_non_int_context_window(tmp_path):
 def test_save_models_creates_parent_directory(tmp_path):
     p = tmp_path / "nested" / "models.toml"
     save_models(p, Registry(models={
-        "m": ModelEntry(model_id="m", name="n", base_url="u", api_key_env="K"),
+        "m": ModelEntry(model_id="m", name="n", base_url="u", api_key="K"),
     }))
     assert p.exists()
 

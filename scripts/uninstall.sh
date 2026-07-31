@@ -60,6 +60,26 @@ case "${SHELL:-}" in
         ;;
 esac
 
+# 3. Remove completion symlinks written by install.sh — but only when they
+#    actually point into this repo (a user's own file is left alone).
+remove_completion_link() {
+    local link="$1"
+    if [ -L "$link" ]; then
+        case "$(readlink "$link")" in
+            "$PROJECT_ROOT"/completions/*)
+                rm -f "$link"
+                echo "Removed completion link: $link"
+                ;;
+            *)
+                echo "  $link points elsewhere, leaving it alone"
+                ;;
+        esac
+    fi
+}
+
+remove_completion_link "${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/model-switch"
+remove_completion_link "${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/model-switch.fish"
+
 cat <<EOF
 
 Uninstalled.

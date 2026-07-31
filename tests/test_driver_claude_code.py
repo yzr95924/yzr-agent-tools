@@ -23,7 +23,7 @@ def glm_main() -> Model:
     return Model(
         model_id="glm",
         base_url="https://open.bigmodel.cn/api/anthropic",
-        api_key_env="GLM_API_KEY",
+        api_key="GLM_API_KEY",
         name="glm-4-plus",
         description="GLM-4 Plus",
     )

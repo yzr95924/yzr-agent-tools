@@ -50,13 +50,44 @@ exec python3 -B -m model_switch "$@"
 WRAPPER
 chmod +x "$BIN_DIR/model-switch"
 
+# Shell completions (bash + fish). Symlinked (not copied) so a `git pull`
+# refreshes them without re-running install.
+#   bash: bash-completion's per-user dir + a source line inside the PATH
+#         marker block in ~/.bashrc (covers setups without the
+#         bash-completion package).
+#   fish: auto-loaded from ~/.config/fish/completions/, no rc edit needed.
+COMPLETION_SRC_BASH="$PROJECT_ROOT/completions/model-switch.bash"
+COMPLETION_SRC_FISH="$PROJECT_ROOT/completions/model-switch.fish"
+BASH_COMPLETION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+FISH_COMPLETION_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
+
+link_completion() {
+    local src="$1" dest="$2"
+    mkdir -p "$(dirname "$dest")"
+    if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+        echo ">> $dest exists and is not a symlink; leaving it alone" >&2
+        return 0
+    fi
+    ln -sfn "$src" "$dest"
+    echo ">> Linked completion: $dest -> $src"
+}
+
+link_completion "$COMPLETION_SRC_BASH" "$BASH_COMPLETION_DIR/model-switch"
+link_completion "$COMPLETION_SRC_FISH" "$FISH_COMPLETION_DIR/model-switch.fish"
+
 update_rc() {
     local rc_path="$1"
+    local completion_src="${2:-}"
     local path_line="export PATH=\"$BIN_DIR:\$PATH\""
     local begin="# model-switch PATH begin"
     local end="# model-switch PATH end"
     local block="$begin
-$path_line
+$path_line"
+    if [ -n "$completion_src" ]; then
+        block="$block
+[ -f \"$completion_src\" ] && . \"$completion_src\""
+    fi
+    block="$block
 $end"
 
     # Ensure the rc file's parent dir exists. Some environments (fresh CI
@@ -71,14 +102,26 @@ $end"
     # Idempotency: marker line already present => skip.
     if grep -qxF "$begin" "$rc_path"; then
         echo ">> PATH entry already present in $rc_path"
-        return
+    else
+        {
+            echo ""
+            echo "$block"
+        } >> "$rc_path"
+        echo ">> Appended PATH entry to $rc_path"
     fi
 
-    {
-        echo ""
-        echo "$block"
-    } >> "$rc_path"
-    echo ">> Appended PATH entry to $rc_path"
+    # Upgrade path: installs from before completions existed have the marker
+    # block but no source line — splice one in just before the end marker.
+    if [ -n "$completion_src" ] && ! grep -qF "$completion_src" "$rc_path"; then
+        local tmp
+        tmp="$(mktemp)"
+        awk -v end="$end" -v line="[ -f \"$completion_src\" ] && . \"$completion_src\"" '
+            $0 == end && !done { print line; done = 1 }
+            { print }
+        ' "$rc_path" > "$tmp"
+        mv "$tmp" "$rc_path"
+        echo ">> Added completion source line to $rc_path"
+    fi
 }
 
 case "${SHELL:-}" in
@@ -86,7 +129,7 @@ case "${SHELL:-}" in
         update_rc "$HOME/.zshrc"
         ;;
     */bash|*)
-        update_rc "$HOME/.bashrc"
+        update_rc "$HOME/.bashrc" "$COMPLETION_SRC_BASH"
         ;;
 esac
 
@@ -96,6 +139,8 @@ Installed.
 
   repo : $PROJECT_ROOT
   exec : $BIN_DIR/model-switch
+  comp : $BASH_COMPLETION_DIR/model-switch (symlink)
+         $FISH_COMPLETION_DIR/model-switch.fish (symlink)
 
 To use it in this shell:
   source $HOME/.bashrc   # or ~/.zshrc
