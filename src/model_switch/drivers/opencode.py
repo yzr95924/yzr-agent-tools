@@ -14,7 +14,7 @@ AI-SDK adapter to load; Anthropic-compatible upstreams use ``@ai-sdk/anthropic``
       "yzr": {
         "npm": "@ai-sdk/anthropic",
         "name": "yzr",
-        "options": { "baseURL": ..., "apiKey": "<resolved-key>" },
+        "options": { "baseURL": "<base_url>/v1", "apiKey": "<resolved-key>" },
         "models": { "<model_id>": {} }
       }
     },
@@ -25,13 +25,26 @@ The resolved API key is written **verbatim** into ``options.apiKey`` — matchin
 the claude-code driver and OpenCode's own convention for custom providers
 (OpenCode supports a ``{env:VAR}`` placeholder, but we don't use it: the key
 lives in the config file, so the file holds a secret; keep its permissions
-tight). ``Model.context_window`` is intentionally NOT surfaced: OpenCode's
+tight).
+
+``baseURL`` is **not** written verbatim: ``@ai-sdk/anthropic`` appends only
+``/messages`` to it (treating it as a prefix that already includes the API
+version), so the driver ensures it ends in a ``/v<N>`` segment. The model's
+``base_url`` is stored without ``/v1`` — the form the claude-code driver
+wants, since Claude Code appends ``/v1`` itself; this driver appends ``/v1``
+when rendering for OpenCode, so the same stored value serves both agents.
+Without this, opencode requests ``.../anthropic/messages``, the upstream
+answers with a 404 wrapped in HTTP 200, and ai-sdk's SSE parser drops the
+non-event body silently — a zero-token empty reply with no error event.
+
+``Model.context_window`` is intentionally NOT surfaced: OpenCode's
 schema requires ``limit.output`` whenever ``limit`` is present, and we only
 track context — emitting a partial ``{limit:{context}}`` fails validation and
 makes the model unavailable. Omitting matches OpenCode's own handling for
 custom providers.
 """
 import json
+import re
 from pathlib import Path
 from typing import Dict
 
@@ -46,6 +59,28 @@ PROVIDER_ID = "yzr"
 # the @ai-sdk/anthropic adapter. Without `npm`, OpenCode reports
 # "Provider not found" and silently falls back to its default model.
 NPM_ADAPTER = "@ai-sdk/anthropic"
+
+# @ai-sdk/anthropic appends only `/messages` to baseURL, treating it as a
+# prefix that already includes the API version. base_url is stored WITHOUT /v1
+# (the form the claude-code driver wants — Claude Code appends /v1 itself), so
+# here we ensure a version segment is present. Without it opencode requests
+# `.../anthropic/messages`, which upstreams answer with a 404 wrapped in HTTP
+# 200; ai-sdk's SSE parser drops the non-event body silently and you get a
+# zero-token empty reply with no error event.
+_VERSION_SEGMENT = re.compile(r"/v\d+$")
+
+
+def _base_url_for_ai_sdk(base_url):
+    """Render ``model.base_url`` into the baseURL ``@ai-sdk/anthropic`` expects.
+
+    ai-sdk appends only ``/messages``, so baseURL must already contain the
+    version segment. Stored base_url values lack ``/v1`` (Claude Code's form),
+    so append it unless a ``/v<N>`` segment is already present.
+    """
+    base = base_url.rstrip("/")
+    if not _VERSION_SEGMENT.search(base):
+        base += "/v1"
+    return base
 
 
 class OpenCodeDriver:
@@ -71,6 +106,9 @@ class OpenCodeDriver:
         The resolved `api_key` is written verbatim into `options.apiKey`
         (matching the claude-code driver). model-switch does not use OpenCode's
         `{env:VAR}` placeholder, so the key is stored in the config file.
+
+        `baseURL` is /v1-adapted via `_base_url_for_ai_sdk` — see the module
+        docstring for why this differs from the claude-code driver.
         """
         config = self.read()
         providers = config.get("provider", {})
@@ -83,7 +121,7 @@ class OpenCodeDriver:
         provider_block.setdefault("name", PROVIDER_ID)
 
         options = provider_block.get("options", {})
-        options["baseURL"] = model.base_url
+        options["baseURL"] = _base_url_for_ai_sdk(model.base_url)
         options["apiKey"] = api_key
         provider_block["options"] = options
 
