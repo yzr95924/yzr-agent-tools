@@ -23,7 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Union
 
-from model_switch.store import ModelEntry, Registry, toml_loads
+from model_switch._compat import toml_loads
+from model_switch.store import ModelEntry, Registry
 
 
 class ImportError_(Exception):

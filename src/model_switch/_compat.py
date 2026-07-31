@@ -32,25 +32,6 @@ def _toml_escape_str(s: str) -> str:
     return "".join(out)
 
 
-def _dump_value(buf, v: Any) -> None:
-    if isinstance(v, bool):
-        buf.write(str(v).lower())
-    elif isinstance(v, int):
-        buf.write(str(v))
-    elif isinstance(v, str):
-        buf.write('"{}"'.format(_toml_escape_str(v)))
-    elif isinstance(v, list):
-        inner = ", ".join(_format_scalar(x) for x in v)
-        buf.write("[{}]".format(inner))
-    elif isinstance(v, dict):
-        inner = ", ".join(
-            "{} = {}".format(k, _format_scalar(vv)) for k, vv in v.items()
-        )
-        buf.write("{{ {} }}".format(inner))
-    else:
-        raise TypeError("Unsupported TOML value type: {}".format(type(v)))
-
-
 def _format_scalar(v: Any) -> str:
     if isinstance(v, bool):
         return str(v).lower()
@@ -58,7 +39,16 @@ def _format_scalar(v: Any) -> str:
         return str(v)
     if isinstance(v, str):
         return '"{}"'.format(_toml_escape_str(v))
-    raise TypeError("Unsupported scalar type in array: {}".format(type(v)))
+    raise TypeError("Unsupported TOML scalar type: {}".format(type(v)))
+
+
+def _dump_value(buf, v: Any) -> None:
+    """Write one inline value (scalar or array). Dicts are routed to
+    `_dump_section`'s table handling, so they never reach this function."""
+    if isinstance(v, list):
+        buf.write("[{}]".format(", ".join(_format_scalar(x) for x in v)))
+    else:
+        buf.write(_format_scalar(v))
 
 
 def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
@@ -107,7 +97,6 @@ def _toml_dump(data: Dict[str, Any], fp) -> None:
 # pyproject pins `tomli>=1.1` for Python <3.11, so the fallback is always
 # available when tomllib is missing.
 try:
-    import tomllib  # noqa: F401
     from tomllib import loads as toml_loads
 except ImportError:  # Python <3.11
     from tomli import loads as toml_loads  # type: ignore[no-redef]

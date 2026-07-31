@@ -53,7 +53,7 @@ model-switch status
 ## 高层结构
 
 ```
-cli.py                  Typer 命令（仅做编排）
+cli.py                  argparse CLI（仅做编排）
    │
    ├─→ paths.py            XDG 路径解析
    ├─→ store.py            TOML I/O + 透传未知字段

@@ -74,7 +74,7 @@ def _resolve_drivers(args) -> list:
     Precedence:
       1. `--all-drivers` → every registered driver.
       2. `--driver NAME` → that single driver.
-      3. Interactive TTY prompt → comma-separated names (default: `claude-code`).
+      3. Interactive TTY prompt → comma-separated names (Enter = all).
       4. Non-TTY / no prompt → default driver (`claude-code`).
     """
     _ensure_default_registered()
@@ -118,23 +118,18 @@ def _resolve_api_key(model) -> str:
 
 
 def _now_iso() -> str:
-    # Python 3.12+ deprecated `datetime.utcnow()`. Use timezone-aware UTC
-    # and emit "Z" suffix to match the on-disk format.
-    try:
-        now = datetime.datetime.now(datetime.timezone.utc)
-    except AttributeError:
-        # Python 3.7 compat: `timezone.utc` exists but `utcnow()` is fine.
-        return datetime.datetime.utcnow().isoformat() + "Z"
-    return now.isoformat().replace("+00:00", "Z")
+    # Timezone-aware UTC with a "Z" suffix — `datetime.utcnow()` is
+    # deprecated on 3.12+, and `datetime.timezone` exists since 3.2, so
+    # this is safe on the repo's 3.7+ floor.
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
     """Read one line from stdin (interactive only).
 
-    Mirrors `typer.prompt` behavior: only prompts when stdin is a TTY. In
-    non-interactive contexts (piped input, CI, tests), if the option is
-    missing AND required, we exit with a clear error. If optional, return
-    `None` (or `default`).
+    Only prompts when stdin is a TTY. In non-interactive contexts (piped
+    input, CI, tests), if the option is missing AND required, we exit with
+    a clear error. If optional, return `None` (or `default`).
 
     Do NOT pass secrets here — input is echoed. We only prompt for model
     identifiers and descriptions. For the API key, use `_prompt_secret`
@@ -160,8 +155,8 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
     try:
         line = input(f"{label}{suffix}: ")
     except EOFError:
-        # Stream ran out (e.g. test piped fewer answers than prompts).
-        # Match typer's behavior: fall back to the default if there's one.
+        # Stream ran out (e.g. test piped fewer answers than prompts):
+        # fall back to the default if there's one, else fail clearly.
         if default is not None:
             return default
         if optional:
@@ -223,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
     # init
-    p_init = sub.add_parser("init", help="Initialize the model-switch config directory.")
+    sub.add_parser("init", help="Initialize the model-switch config directory.")
 
     # model
     p_model = sub.add_parser("model", help="Manage model definitions.")
@@ -246,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max input tokens (e.g. 200000 or 1000000 for 1M-context variants).",
     )
 
-    p_list = model_sub.add_parser("list", help="List all configured models.")
+    model_sub.add_parser("list", help="List all configured models.")
 
     p_show = model_sub.add_parser("show", help="Show details of one model.")
     p_show.add_argument("name")
@@ -539,8 +534,6 @@ def _do_status(args: argparse.Namespace) -> None:
     else:
         drivers = [_resolve_driver(args.driver_name)]
     for driver in drivers:
-        if driver is None:
-            continue
         print("")
         print(f"Agent ({driver.name}) effective config in {driver.settings_path}:")
         current = driver.current()

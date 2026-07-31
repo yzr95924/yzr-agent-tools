@@ -5,12 +5,11 @@ specific agent's global configuration file (e.g., Claude Code's
 ~/.claude/settings.json, OpenCode's ~/.config/opencode/opencode.json).
 """
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol, runtime_checkable
+from typing import Dict, List, Optional, Protocol
 
 from model_switch.store import ModelEntry as Model
 
 
-@runtime_checkable
 class AgentDriver(Protocol):
     """Protocol every agent driver must satisfy."""
     name: str
@@ -63,5 +62,6 @@ class DriverRegistry:
         return self._drivers[sorted(self._drivers.keys())[0]]
 
 
-# Singleton registry; populated as driver modules are imported.
+# Singleton registry; built-in drivers are registered lazily by
+# cli._ensure_default_registered() on first use (never at import time).
 registry = DriverRegistry()

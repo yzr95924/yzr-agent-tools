@@ -1,6 +1,4 @@
 """Tests for the TOML-backed store."""
-from pathlib import Path
-
 import pytest
 
 from model_switch.store import (
