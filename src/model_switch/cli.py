@@ -84,14 +84,16 @@ def _resolve_drivers(args) -> list:
     if args.driver_name:
         return [_resolve_driver(args.driver_name)]
     if sys.stdin.isatty() and available:
-        # Interactive prompt — defaults to claude-code if user just hits Enter.
-        default = "claude-code" if "claude-code" in available else available[0]
+        # Interactive prompt — defaults to ALL registered drivers, so hitting
+        # Enter switches every agent at once (the common case: you want the
+        # new model everywhere). Name a subset to scope it, e.g. "claude-code".
         print(f"Available drivers: {', '.join(available)}")
         raw = input(
-            f"Apply to which driver(s)? (comma-separated, default: {default}): "
+            "Apply to which driver(s)? "
+            "(comma-separated, 'all' or Enter for all): "
         ).strip()
-        if not raw:
-            return [_resolve_driver(default)]
+        if not raw or raw.lower() == "all":
+            return [_resolve_driver(n) for n in available]
         names = [n.strip() for n in raw.split(",") if n.strip()]
         for n in names:
             if n not in available:
@@ -99,7 +101,9 @@ def _resolve_drivers(args) -> list:
                       file=sys.stderr)
                 sys.exit(1)
         return [_resolve_driver(n) for n in names]
-    return [_resolve_driver(None)]  # default
+    # Non-interactive (no TTY): keep the old single-driver default so CI
+    # scripts don't unexpectedly write multiple agent configs.
+    return [_resolve_driver(None)]
 
 
 def _resolve_api_key(model) -> str:
@@ -446,8 +450,10 @@ def _do_model_use(args: argparse.Namespace) -> None:
 
     api_key = _resolve_api_key(main_model)
 
+    applied = []
     for driver in _resolve_drivers(args):
         driver.apply(model=main_model, api_key=api_key)
+        applied.append(driver)
 
     state = load_state(paths.state_file())
     state.active_main = args.name
@@ -455,7 +461,8 @@ def _do_model_use(args: argparse.Namespace) -> None:
     save_state(paths.state_file(), state)
 
     print(f"Switched to {args.name!r}.")
-    print(f"  Wrote {driver.settings_path}")
+    for d in applied:
+        print(f"  Wrote {d.settings_path} ({d.name})")
     print("  Restart your agent (Claude Code: Ctrl+D, then `claude`; OpenCode: restart the CLI) to take effect.")
 
 

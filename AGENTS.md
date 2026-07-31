@@ -46,7 +46,7 @@ pytest --cov=model_switch                     # 带覆盖率
 # CLI 自身
 model-switch model list
 model-switch model add glm-z1 --base-url ... --api-key <KEY> --model-name glm-4
-model-switch model use glm-z1
+model-switch model use glm-z1            # 交互式默认切全部 agent;加 --driver <name> 只切单个
 model-switch status
 ```
 
@@ -68,7 +68,7 @@ cli.py                  Typer 命令（仅做编排）
 加新 agent = 写一个 driver + 注册。当前内置 `claude-code` 与 `opencode`：
 - `claude-code` 写 `~/.claude/settings.json` 的 `env` 块（`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`）+ 顶层 `model` 字段。
 - `opencode` 写 OpenCode 全局配置 `$XDG_CONFIG_HOME/opencode/opencode.json`（默认 `~/.config/opencode/opencode.json`，**不是** `~/.opencode.json`）的 `provider.yzr` 块：`npm: @ai-sdk/anthropic`（Anthropic 兼容上游必需的 adapter，否则 OpenCode 报 "Provider not found" 退回默认模型）+ `options.baseURL`（**driver 自动补 `/v1`**：`@ai-sdk/anthropic` 只在 baseURL 后追加 `/messages`，而 store 里 `base_url` 不带 /v1——那正是 claude-code driver 要的形式（Claude Code 自己补 /v1）；语义差异封装在各自 driver，同一 `base_url` 服务两个 agent。不补会让 opencode 打到 `.../anthropic/messages`，上游回 404 包在 HTTP 200，ai-sdk 静默丢包 → 空响应、零 token、无 error）+ `options.apiKey` **直接写解析后的明文 key**（同 claude-code driver，**不用** `{env:VAR}` 占位符；密钥落盘，注意文件权限）+ 顶层 `model: yzr/<name>`。**故意不写 `limit`**：OpenCode schema 要求 `limit` 存在时必须有 `limit.output`，而我们只追踪 `context_window`，写半截 `{limit:{context}}` 会让整份配置校验失败、模型不可用。
-通过 `--driver <name>` / `--all-drivers` 切换；省略时使用 `claude-code`（即 `registry.default()`）。
+通过 `--driver <name>` 选单个、`--all-drivers` 选全部;省略时——交互式(TTY)默认应用到全部已注册 driver(回车即 claude-code 与 opencode 都切,符合「切模型就该到处生效」),非交互(CI/脚本,无 TTY)回退到默认 `claude-code`,避免脚本意外写多个 agent 配置。
 新 agent = 实现一个 driver 并在 `cli._ensure_default_registered()` 注册。
 
 **单模型槽**：`model use <name>` 写一个模型到所选 agent 配置。driver 负责把 model 渲染成对应 agent 协议的字段。

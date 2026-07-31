@@ -106,7 +106,7 @@ model-switch model list                        # show all models + active marker
 model-switch model show <name>
 model-switch model remove <name>
 
-model-switch model use <name> [--driver NAME] [--all-drivers]
+model-switch model use <name> [--driver NAME] [--all-drivers]   # interactive default = all drivers; non-TTY/CI = claude-code only
 
 model-switch status [--driver NAME] [--all-drivers]
 ```
@@ -159,8 +159,9 @@ fields.
 ## Targeting OpenCode
 
 `model-switch` ships a built-in driver for OpenCode in addition to the
-default Claude Code driver. Pass `--driver opencode` to any command that
-writes config:
+default Claude Code driver. Run `model use` interactively (no flags) and
+press Enter and it writes **both** agents at once; pass `--driver opencode`
+to touch only OpenCode:
 
 ```bash
 # Activate a model for OpenCode

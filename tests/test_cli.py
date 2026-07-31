@@ -263,6 +263,75 @@ def test_model_use_writes_stored_api_key_to_driver(yzr_paths):
     assert written["provider"]["yzr"]["options"]["apiKey"] == "sk-from-toml"
 
 
+def test_model_use_interactive_default_applies_all_drivers(yzr_paths):
+    """Interactive `model use` (TTY) defaults to ALL drivers on Enter —
+    switching a model should reach every agent you use."""
+    runner([
+        "model", "add", "glm-z1",
+        "--base-url", "https://api.example.com",
+        "--api-key", "K", "--model-name", "glm-4",
+    ])
+    result = runner(["model", "use", "glm-z1"], input="\n")  # Enter = all
+    assert result.exit_code == 0, result.stdout
+    # Both agent configs were written.
+    claude = json.loads(yzr_paths["settings"].read_text())
+    assert claude["env"]["ANTHROPIC_AUTH_TOKEN"] == "K"
+    opencode = json.loads(yzr_paths["opencode"].read_text())
+    assert opencode["provider"]["yzr"]["options"]["apiKey"] == "K"
+
+
+def test_model_use_interactive_all_keyword(yzr_paths):
+    """Typing `all` at the interactive prompt also selects every driver."""
+    runner([
+        "model", "add", "glm-z1",
+        "--base-url", "https://x", "--api-key", "K", "--model-name", "glm-4",
+    ])
+    result = runner(["model", "use", "glm-z1"], input="all\n")
+    assert result.exit_code == 0, result.stdout
+    assert yzr_paths["opencode"].exists()
+
+
+def test_model_use_interactive_single_driver_scopes(yzr_paths):
+    """Naming one driver at the prompt scopes the write to that driver only."""
+    runner([
+        "model", "add", "glm-z1",
+        "--base-url", "https://x", "--api-key", "K", "--model-name", "glm-4",
+    ])
+    result = runner(["model", "use", "glm-z1"], input="claude-code\n")
+    assert result.exit_code == 0, result.stdout
+    assert yzr_paths["settings"].exists()
+    # opencode was NOT written — user scoped to claude-code.
+    assert not yzr_paths["opencode"].exists()
+
+
+def test_model_use_all_drivers_flag_writes_both_and_lists_paths(yzr_paths):
+    """`--all-drivers` writes every agent and lists each written path
+    (regression: the loop variable used to print only the last one)."""
+    runner([
+        "model", "add", "glm-z1",
+        "--base-url", "https://x", "--api-key", "K", "--model-name", "glm-4",
+    ])
+    result = runner(["model", "use", "glm-z1", "--all-drivers"])
+    assert result.exit_code == 0, result.stdout
+    assert yzr_paths["settings"].exists()
+    assert yzr_paths["opencode"].exists()
+    # Output names every driver it wrote, not just the last one.
+    assert "claude-code" in result.stdout
+    assert "opencode" in result.stdout
+
+
+def test_model_use_non_tty_defaults_to_claude_code_only(yzr_paths):
+    """Non-interactive (no TTY) `model use` stays scoped to the default
+    driver (claude-code) — CI scripts keep their old single-agent behavior."""
+    runner([
+        "model", "add", "glm-z1",
+        "--base-url", "https://x", "--api-key", "K", "--model-name", "glm-4",
+    ])
+    result = runner(["model", "use", "glm-z1"])  # no input => non-TTY
+    assert result.exit_code == 0, result.stdout
+    assert yzr_paths["settings"].exists()
+    assert not yzr_paths["opencode"].exists()
+
 
 # --- yzr status ---------------------------------------------------------------
 
