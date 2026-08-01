@@ -17,6 +17,11 @@
 后续按需添加新工具。每个工具独立成 CLI(或 daemon),共享同一套仓库规约(测试隔离、原子写、
 未知字段透传等)。
 
+> **文档分层**:本文件承载 agent 工作上下文(规约 / 命令 / 架构);**用户文档**(安装 /
+> 快速上手 / 命令一览 / 局限性)见 `src/model_switch/README.md` 与
+> `src/html_mcp/README.md`,根 `README.md` 仅作索引(工具表格 + 共用规约)。**设计文档**
+> (`docs/<slug>-design.md` + `docs/<slug>-tasks.md`)在仓库根,新工具按此约定产出。
+
 ## 仓库规约
 
 - **测试绝不能触碰真实的 agent 全局配置**（如 `~/.claude/settings.json`）。当前 Claude Code session
@@ -68,29 +73,45 @@ html-mcp status                          # config / token / docroot 状态
 
 ## 高层结构
 
-两个工具并存,各自独立成模块:
+两个工具并存,各自独立成模块(`__pycache__` / `.egg-info` 等已省略):
 
 ```
 src/
-├── model_switch/        # CLI;无 daemon
-│   ├── cli.py           argparse (仅做编排)
-│   ├── paths.py         XDG 路径解析
-│   ├── store.py         TOML I/O + 透传未知字段
-│   │     ModelEntry / Registry / State
-│   └── drivers/         各 agent 配置适配器 (claude_code / opencode)
+├── model_switch/                # CLI;无 daemon
+│   ├── cli.py                   argparse (仅做编排)
+│   ├── __main__.py              python -m model_switch 入口
+│   ├── paths.py                 XDG 路径解析
+│   ├── store.py                 TOML I/O + 透传未知字段 (ModelEntry / Registry / State)
+│   ├── importer.py              llmw workspace_models.toml → models.toml 纯转换(无 I/O)
+│   ├── _compat.py               TOML loader (tomllib/tomli)
+│   ├── drivers/
+│   │   ├── base.py              AgentDriver Protocol + Registry
+│   │   ├── _atomic.py           atomic JSON write (driver 共享)
+│   │   ├── claude_code.py       ~/.claude/settings.json 适配器
+│   │   └── opencode.py          ~/.config/opencode/opencode.json 适配器
+│   └── README.md                详细用户文档
 │
-└── html_mcp/            # 常驻 daemon
-    ├── cli.py           argparse (init / serve / token / config / nginx-config / status)
-    ├── paths.py         XDG 路径解析
-    ├── config.py        TOML I/O + 透传未知字段 + validate_for_serve
-    ├── auth.py          Bearer token 常量时间比较 + redact_token
-    ├── server.py        http.server.ThreadingHTTPServer + 路由 + body 限流
-    ├── mcp_handler.py   JSON-RPC Streamable HTTP + 4 个 tool
-    ├── api.py           /api/files /api/nginx-config /api/health
-    ├── storage.py       docroot 文件 CRUD (atomic write / 命名 regex / 路径穿越防护)
-    ├── nginx_config.py  assets/nginx.conf.template 渲染
-    ├── ui.py            ui/{index.html,style.css,app.js} 静态路由
-    └── ui/              管理页 (单文件 vanilla JS)
+└── html_mcp/                    # 常驻 daemon
+    ├── cli.py                   argparse (init / serve / token / config / nginx-config / status)
+    ├── __main__.py              python -m html_mcp 入口
+    ├── _version.py              VERSION 字符串 (/api/health + CLI --version)
+    ├── paths.py                 XDG 路径解析
+    ├── config.py                TOML I/O + 透传未知字段 + validate_for_serve
+    ├── auth.py                  Bearer token 常量时间比较 + redact_token
+    ├── storage.py               docroot 文件 CRUD (atomic write / 命名 regex / 路径穿越防护)
+    ├── server.py                http.server.ThreadingHTTPServer + 路由 + body 限流
+    ├── mcp_handler.py           JSON-RPC Streamable HTTP + 4 个 tool
+    ├── api.py                   /api/files /api/nginx-config /api/health
+    ├── nginx_config.py          assets/nginx.conf.template 渲染
+    ├── ui.py                    ui/{index.html,style.css,app.js} 静态路由
+    ├── _compat.py               TOML loader (tomllib/tomli)
+    ├── assets/
+    │   └── nginx.conf.template  nginx server block 模板
+    ├── ui/                      管理页静态资源 (vanilla JS)
+    │   ├── index.html
+    │   ├── style.css
+    │   └── app.js
+    └── README.md                详细用户文档
 ```
 
 ### `model_switch` 的 driver 抽象
