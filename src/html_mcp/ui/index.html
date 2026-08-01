@@ -12,7 +12,22 @@
     <div id="readonly-note" style="font-size:12px;color:var(--fg-dim)">
       只读浏览 · 删除 / 上传请走 agent MCP（参见 README）
     </div>
+    <button id="anno-toggle" type="button" aria-label="进入批注模式">批注(需 token)</button>
+    <span id="anno-mode-hint" class="hint" hidden>批注模式 · <a href="#" id="anno-exit">退出</a></span>
   </header>
+
+  <dialog id="anno-token-dialog" aria-labelledby="anno-token-title">
+    <form method="dialog" id="anno-token-form">
+      <h2 id="anno-token-title">进入批注模式</h2>
+      <p>粘贴 html-mcp token(在 server 端跑 <code>html-mcp token show</code> 获取)</p>
+      <input id="anno-token-input" type="password" autocomplete="off" />
+      <menu>
+        <button type="button" id="anno-token-cancel">取消</button>
+        <button type="submit" id="anno-token-submit">进入</button>
+      </menu>
+      <p id="anno-token-error" class="error" hidden></p>
+    </form>
+  </dialog>
 
   <main>
     <section id="files-section">
@@ -36,6 +51,15 @@
       <iframe id="preview-frame" sandbox="" title="preview"></iframe>
     </section>
   </main>
+
+  <aside id="anno-sidebar" aria-label="批注" hidden>
+    <header>
+      <h3 id="anno-sidebar-title">批注</h3>
+      <button id="anno-sidebar-refresh" type="button" aria-label="刷新">↻</button>
+    </header>
+    <ul id="anno-list"></ul>
+    <p id="anno-empty" hidden>暂无批注</p>
+  </aside>
 
   <div id="toast" hidden></div>
 
