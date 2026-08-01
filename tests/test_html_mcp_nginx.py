@@ -44,6 +44,33 @@ def test_render_contains_expected_directives():
     assert "/var/www/notes" in out
 
 
+def test_nginx_template_sets_samesite_lax():
+    text = nginx_config.render(docroot="/var/www/notes", port=8765,
+                               public_base_url="https://notes.example.com")
+    assert "proxy_cookie_path" in text
+    assert "SameSite=Lax" in text
+
+
+def test_nginx_template_includes_limit_req():
+    text = nginx_config.render(docroot="/var/www/notes", port=8765,
+                               public_base_url="https://notes.example.com")
+    assert "limit_req_zone" in text
+    assert "rate=10r/s" in text
+
+
+def test_nginx_template_applies_limit_req_to_auth():
+    text = nginx_config.render(docroot="/var/www/notes", port=8765,
+                               public_base_url="https://notes.example.com")
+    auth_block = text.split("location = /api/auth", 1)[1].split("}", 1)[0]
+    assert "limit_req zone=auth" in auth_block
+
+
+def test_nginx_template_applies_limit_req_to_annotations():
+    text = nginx_config.render(docroot="/var/www/notes", port=8765,
+                               public_base_url="https://notes.example.com")
+    assert "location ~ ^/api/files/[^/]+/annotations" in text
+
+
 def test_render_to_creates_file(tmp_path):
     out_path = str(tmp_path / "nginx.conf.example")
     nginx_config.render_to(out_path, docroot="/srv/n", port=9000,
