@@ -1,20 +1,16 @@
 /* html-mcp management page.
  *
- * Auth: Bearer token stored in localStorage. User pastes once, persists
- * across page reloads (same browser).
+ * Read-only: lists files via GET /api/files (no auth — public metadata for
+ * a docroot nginx already serves unauthenticated at /files/*). No delete /
+ * upload buttons — those go through agent MCP, see README.
  *
- * Talks to /api/* with `Authorization: Bearer <token>`. All errors
- * surface as a toast.
+ * Talks to /api/files with no credential header. All errors surface as
+ * a toast.
  */
 (function () {
   "use strict";
 
-  var TOKEN_KEY = "html_mcp_token";
-
   // --- DOM refs ----------------------------------------------------------
-  var $input = document.getElementById("token-input");
-  var $save = document.getElementById("token-save");
-  var $status = document.getElementById("token-status");
   var $tbody = document.getElementById("file-tbody");
   var $empty = document.getElementById("empty-state");
   var $table = document.getElementById("file-table");
@@ -25,27 +21,6 @@
 
   // --- helpers -----------------------------------------------------------
 
-  function getToken() {
-    return localStorage.getItem(TOKEN_KEY) || "";
-  }
-
-  function setToken(t) {
-    if (t) localStorage.setItem(TOKEN_KEY, t);
-    else localStorage.removeItem(TOKEN_KEY);
-    updateStatus();
-  }
-
-  function updateStatus() {
-    var t = getToken();
-    if (t) {
-      $status.textContent = "已保存";
-      $status.style.color = "var(--accent)";
-    } else {
-      $status.textContent = "未设置";
-      $status.style.color = "var(--fg-dim)";
-    }
-  }
-
   function toast(msg, isError) {
     $toast.textContent = msg;
     $toast.style.borderColor = isError ? "var(--danger)" : "var(--border)";
@@ -55,13 +30,15 @@
   }
 
   function api(method, path) {
+    // No credential header — list is public. A 401 here would mean the
+    // daemon is an older build that still requires a token; surface a
+    // version-mismatch hint instead of asking for one (we deliberately
+    // don't show a token input any more).
     var headers = { "Content-Type": "application/json" };
-    var t = getToken();
-    if (t) headers["Authorization"] = "Bearer " + t;
     return fetch(path, { method: method, headers: headers })
       .then(function (r) {
         if (r.status === 401) {
-          toast("token 错误或缺失", true);
+          toast("daemon 版本不匹配，请升级 html-mcp", true);
           throw new Error("unauthorized");
         }
         if (!r.ok) {
@@ -129,24 +106,16 @@
         var tdUrl = document.createElement("td");
         tdUrl.style.fontFamily = "ui-monospace, monospace";
         tdUrl.style.fontSize = "12px";
-        tdUrl.textContent = f.url;
-
-        var tdAct = document.createElement("td");
+        tdUrl.appendChild(document.createTextNode(f.url + " "));
         var copyBtn = document.createElement("button");
-        copyBtn.textContent = "复制 URL";
+        copyBtn.textContent = "复制";
         copyBtn.onclick = function () { copyUrl(f.url); };
-        var delBtn = document.createElement("button");
-        delBtn.textContent = "删除";
-        delBtn.className = "danger";
-        delBtn.onclick = function () { deleteFile(f.name); };
-        tdAct.appendChild(copyBtn);
-        tdAct.appendChild(delBtn);
+        tdUrl.appendChild(copyBtn);
 
         tr.appendChild(tdName);
         tr.appendChild(tdSize);
         tr.appendChild(tdTime);
         tr.appendChild(tdUrl);
-        tr.appendChild(tdAct);
         $tbody.appendChild(tr);
       });
     }).catch(function () {
@@ -187,34 +156,7 @@
     document.body.removeChild(ta);
   }
 
-  function deleteFile(name) {
-    if (!window.confirm("确定删除 " + name + "?")) return;
-    api("DELETE", "/api/files/" + encodeURIComponent(name))
-      .then(function () {
-        toast("已删除 " + name);
-        $previewSection.hidden = true;
-        loadFiles();
-      })
-      .catch(function () { /* error toast already shown */ });
-  }
-
   // --- wire up ------------------------------------------------------------
-
-  $save.onclick = function () {
-    var t = $input.value.trim();
-    if (!t) {
-      toast("token 不能为空", true);
-      return;
-    }
-    setToken(t);
-    $input.value = "";
-    toast("token 已保存");
-    loadFiles();
-  };
-
-  $input.onkeydown = function (e) {
-    if (e.key === "Enter") $save.click();
-  };
 
   // Click on filename → preview.
   $tbody.onclick = function (e) {
@@ -225,8 +167,6 @@
     }
   };
 
-  // Initial: render whatever token state we have; attempt load (will 401
-  // until a token is set).
-  updateStatus();
-  if (getToken()) loadFiles();
+  // Initial load — list is always public; just call.
+  loadFiles();
 })();

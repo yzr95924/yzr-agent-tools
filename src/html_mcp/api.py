@@ -78,9 +78,11 @@ def _file_info_payload(f: storage.FileInfo, public_base_url: str) -> Dict[str, A
 
 def _make_list_files(cfg: Config):
     def handler(req, params, body):
-        err = _require_bearer(req, cfg)
-        if err:
-            return err
+        # No auth: list_html returns public metadata (name/size/mtime/title/url)
+        # of files in a docroot that nginx already serves unauthenticated at
+        # /files/*. Single-user trust model + nginx reverse proxy in front.
+        # Write paths (DELETE /api/files/<name>, POST /mcp) still require
+        # Bearer — the management page does not expose those.
         docroot = Path(cfg.docroot)
         try:
             files = storage.list_files(docroot)

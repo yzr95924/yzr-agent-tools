@@ -73,7 +73,7 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 - **N5**：不做 systemd unit / Docker image / launchd plist（README 一句 hint）
 - **N6**：不存元数据库（mtime / size 从 `stat()` 取；title 从 HTML 解析）
 - **N7**：不上传非 `.html` 文件（regex 拒绝）
-- **N8**：不做管理页的登录 / session / cookie（直接复用 Bearer）
+- **N8**：不做管理页的登录 / session / cookie；管理页只读，无 token 入口（见 Q1）
 - **N9**：不做上传时自动渲染 mermaid / KaTeX 检查——daemon 不解析 HTML
 
 ## 3. 功能点拆解
@@ -86,7 +86,7 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 | F4 | agent 通过 MCP `get_public_url` 查 URL | P1 | §7.3 |
 | F5 | 管理页列出所有文件 + 元数据 | P0 | §7.3, §9.3 |
 | F6 | 管理页 iframe 预览（sandbox） | P1 | §9.3 |
-| F7 | 管理页删除文件（带确认） | P0 | §7.3 |
+| F7 | 管理页删除文件（带确认） | P0（**本期不做**——管理页只读，删除走 agent MCP `delete_html`） | §7.3 |
 | F8 | 管理页一键复制公开 URL | P1 | §7.3 |
 | F9 | `html-mcp init` 创建 config + 生成 token | P0 | §7.3, §12 |
 | F10 | `html-mcp serve` 前台启动 daemon | P0 | §7.1 |
@@ -149,9 +149,9 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 | S5 | agent list | 主流程 | `tools/call list_html` | 列出所有 `.html`，含 mtime/size/title/url | §7.3 |
 | S6 | agent delete | 主流程 | `tools/call delete_html` 带合法 name | 从 docroot 删；返 `{deleted:true}` | §7.3 |
 | S7 | agent get_public_url | 主流程 | `tools/call get_public_url` 带 name | 返 `{url}`（无论文件是否存在） | §7.3 |
-| S8 | 人进管理页 | 主流程 | 浏览器开 `https://notes.example.com/` | token 输入框 + 存 localStorage；fetch `/api/files` | §7.3 |
+| S8 | 人进管理页 | 主流程 | 浏览器开 `https://notes.example.com/` | 直接显示列表（无 token 输入框）；fetch `/api/files` 无 Bearer | §7.3 |
 | S9 | 人预览文件 | 分支 | 点文件名 | iframe 加载 `/files/<name>.html`，sandbox 隔离 | §9.3 |
-| S10 | 人删文件 | 主流程 | 点 × + 确认 | `DELETE /api/files/<name>`；从列表移除 | §7.3 |
+| S10 | 人删文件 | 撤销 | — | 管理页不做删除按钮；用户让 agent 调 `delete_html` 工具 | §7.3 |
 | S11 | 人复制公开 URL | 分支 | 点 Copy URL | `navigator.clipboard.writeText` + toast | §7.3 |
 | S12 | 重名上传未带 force | 异常 | upload 同名 | 409 + MCP `-32010` | §7.3, §8 |
 | S13 | 重名上传带 force | 主流程 | upload 同名 + `force=true` | 覆盖；200 | §7.3 |
@@ -381,11 +381,11 @@ token: str                 # secrets.token_hex(32); chmod 0600
 
 | 方法 | 路径 | 鉴权 | 出参 |
 | --- | --- | --- | --- |
-| GET | `/api/files` | Bearer | `{files: [...]}`（同 list_html） |
+| GET | `/api/files` | 无（公开元数据：docroot 文件 nginx 本来就公开 serve） | `{files: [...]}`（同 list_html） |
 | DELETE | `/api/files/<name>` | Bearer | `{deleted: bool}` |
 | GET | `/api/nginx-config` | Bearer | text/plain（server block） |
 | GET | `/api/health` | 无 | `{status, version}` |
-| GET | `/` | Bearer（管理页 prompt） | HTML |
+| GET | `/` | 无（管理页本身是只读 shell） | HTML |
 | POST | `/mcp` | Bearer | JSON-RPC |
 | GET | `/files/*` | （由 nginx 直 serve） | text/html |
 
@@ -644,7 +644,7 @@ html-mcp status
 
 ## 13. 开放问题
 
-- **Q1**：管理页 token 输入框行为：input 一次 + localStorage，还是每次输？**默认倾向**：input + localStorage，refresh 不重输。**待谁确认**：用户。
+- **Q1**：~~管理页 token 输入框行为~~ ——**已闭环**：管理页不再接触 token。`GET /api/files` 公开（docroot 文件 nginx 本来就公开 serve），管理页无 token 输入框 / 不读 localStorage；删除 / 上传一律走 agent MCP（`POST /mcp` 仍要 Bearer）。`Config.token` 字段、`token show/rotate` CLI 保留（仅给 agent / 运维使用）。**变更日期**：2026-08-01。
 - **Q2**：MCP Streamable HTTP session 管理。**默认倾向**：无状态（每请求独立），符合单用户信任模型。**待谁确认**：用户 / 评审。
 - **Q3**：upload_html 是否返 mtime？**默认倾向**：不返，list_html 时取；若 agent 需要 V2 加。**待谁确认**：agent 端用法反馈。
 - **Q4**：管理页是否加"上传"按钮给人手动上传？**默认倾向**：不做——管理页只浏览 + 删除；上传走 MCP（设计本意）。**待谁确认**：用户。

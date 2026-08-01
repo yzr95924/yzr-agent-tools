@@ -34,43 +34,6 @@ header h1 {
   font-weight: 600;
 }
 
-#token-bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  font-size: 13px;
-  color: var(--fg-dim);
-}
-
-#token-bar input {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 12px;
-  width: 280px;
-}
-
-#token-bar button {
-  background: var(--accent);
-  color: var(--bg);
-  border: 0;
-  padding: 4px 12px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: 500;
-}
-
-#token-bar button:hover {
-  filter: brightness(1.1);
-}
-
-#token-status {
-  font-size: 12px;
-}
-
 main {
   padding: 24px;
   display: grid;
@@ -128,7 +91,6 @@ tbody td button {
 }
 
 tbody td button:hover { background: var(--bg); }
-tbody td button.danger { color: var(--danger); border-color: var(--danger); }
 
 iframe {
   width: 100%;

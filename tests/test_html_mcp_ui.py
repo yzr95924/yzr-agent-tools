@@ -70,8 +70,9 @@ def test_serves_app_js(ui_server):
     status, headers, body = _get(ui_server, "/app.js")
     assert status == 200
     assert "javascript" in headers.get("Content-Type", "")
-    assert b"localStorage" in body
-    assert b"Authorization" in body
+    # Read-only: the page must not store or send a Bearer token.
+    assert b"localStorage" not in body
+    assert b"Authorization" not in body
 
 
 # --- no auth required on / --------------------------------------------------
@@ -84,26 +85,38 @@ def test_index_no_auth_required(ui_server):
 
 # --- HTML contains expected structure ---------------------------------------
 
-def test_index_has_token_input(ui_server):
+def test_index_has_no_token_ui(ui_server):
+    """The management page deliberately exposes no token input or save
+    button — the token only lives on the server config + the agent's
+    MCP config, never in the browser."""
     _, _, body = _get(ui_server, "/")
     text = body.decode("utf-8")
-    assert 'id="token-input"' in text
+    assert 'id="token-input"' not in text
+    assert 'id="token-bar"' not in text
+    assert 'id="token-save"' not in text
+    # Required structure stays.
     assert 'id="file-tbody"' in text
     assert 'sandbox=""' in text  # iframe sandbox attribute
 
 
-def test_app_js_uses_localstorage_for_token(ui_server):
+def test_app_js_does_not_store_token(ui_server):
+    """The JS must not read or write the token to any storage. Bearer never
+    appears in the bundle — management page is read-only."""
     _, _, body = _get(ui_server, "/app.js")
     text = body.decode("utf-8")
-    assert 'localStorage.setItem' in text
-    assert 'localStorage.getItem' in text
-    assert "Bearer " in text  # token format
+    assert "localStorage" not in text
+    assert "sessionStorage" not in text
+    assert "Bearer" not in text
+    assert "Authorization" not in text
 
 
-def test_app_js_handles_401(ui_server):
+def test_app_js_handles_401_as_version_mismatch(ui_server):
+    """If a 401 ever comes back, it's a version-mismatch (older daemon
+    that still required Bearer) — surface a hint, not a token prompt."""
     _, _, body = _get(ui_server, "/app.js")
     text = body.decode("utf-8")
     assert "r.status === 401" in text or "r.status == 401" in text
+    assert "版本" in text or "version" in text.lower()
 
 
 def test_app_js_uses_clipboard_for_copy(ui_server):

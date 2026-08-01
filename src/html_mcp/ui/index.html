@@ -9,11 +9,8 @@
 <body>
   <header>
     <h1>html-mcp 管理</h1>
-    <div id="token-bar">
-      <label for="token-input">Bearer token:</label>
-      <input id="token-input" type="password" placeholder="粘贴 token 后回车">
-      <button id="token-save" type="button">保存</button>
-      <span id="token-status"></span>
+    <div id="readonly-note" style="font-size:12px;color:var(--fg-dim)">
+      只读浏览 · 删除 / 上传请走 agent MCP（参见 README）
     </div>
   </header>
 
@@ -28,7 +25,6 @@
             <th>大小</th>
             <th>时间</th>
             <th>公开 URL</th>
-            <th>操作</th>
           </tr>
         </thead>
         <tbody id="file-tbody"></tbody>

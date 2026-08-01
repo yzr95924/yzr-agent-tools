@@ -73,28 +73,26 @@ def test_health_no_auth(http_with_api):
     assert "version" in payload
 
 
-# --- auth --------------------------------------------------------------------
+# --- auth (list is public; write paths still require Bearer) -----------------
 
-def test_list_files_requires_bearer(http_with_api):
+def test_list_files_no_auth_returns_200(http_with_api):
+    """GET /api/files is public — list metadata for a docroot nginx already
+    serves unauthenticated at /files/*. No Authorization header needed."""
     http, _, _ = http_with_api
-    status, _, _ = _request(http, "GET", "/api/files")
-    assert status == 401
+    status, _, body = _request(http, "GET", "/api/files")
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["files"] == []
 
 
-def test_list_files_rejects_wrong_bearer(http_with_api):
+def test_list_files_ignores_stale_bearer(http_with_api):
+    """Sending an old / wrong Bearer must not 401 the read path — list is
+    public, header is simply ignored."""
     http, _, _ = http_with_api
     status, _, _ = _request(
         http, "GET", "/api/files", headers={"Authorization": "Bearer wrong"}
     )
-    assert status == 401
-
-
-def test_list_files_accepts_correct_bearer(http_with_api):
-    http, _, _ = http_with_api
-    status, _, body = _request(http, "GET", "/api/files", headers={"Authorization": AUTH})
     assert status == 200
-    payload = json.loads(body)
-    assert payload["files"] == []
 
 
 # --- list_files --------------------------------------------------------------
@@ -103,7 +101,7 @@ def test_list_files_returns_existing(http_with_api):
     http, _, docroot = http_with_api
     (docroot / "design.html").write_text("<title>My Design</title>")
     (docroot / "notes.html").write_text("<title>My Notes</title>")
-    status, _, body = _request(http, "GET", "/api/files", headers={"Authorization": AUTH})
+    status, _, body = _request(http, "GET", "/api/files")
     assert status == 200
     payload = json.loads(body)
     names = sorted(f["name"] for f in payload["files"])
@@ -118,9 +116,27 @@ def test_list_files_skips_non_html(http_with_api):
     http, _, docroot = http_with_api
     (docroot / "readme.txt").write_text("hi")
     (docroot / "design.html").write_text("x")
-    status, _, body = _request(http, "GET", "/api/files", headers={"Authorization": AUTH})
+    status, _, body = _request(http, "GET", "/api/files")
     payload = json.loads(body)
     assert [f["name"] for f in payload["files"]] == ["design.html"]
+
+
+# --- delete still requires Bearer ------------------------------------------
+
+def test_delete_without_bearer_returns_401(http_with_api):
+    """Write path — Bearer still required, even though list is public."""
+    http, _, _ = http_with_api
+    status, _, _ = _request(http, "DELETE", "/api/files/design.html")
+    assert status == 401
+
+
+def test_delete_with_wrong_bearer_returns_401(http_with_api):
+    http, _, _ = http_with_api
+    status, _, _ = _request(
+        http, "DELETE", "/api/files/design.html",
+        headers={"Authorization": "Bearer wrong"},
+    )
+    assert status == 401
 
 
 # --- delete ------------------------------------------------------------------
