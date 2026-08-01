@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from html_mcp.storage import (
+from html_mcp._legacy_storage import (
     Conflict,
     DocrootUnwritable,
     FileInfo,

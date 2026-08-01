@@ -16,7 +16,7 @@ from typing import Any, Dict, Tuple
 
 from html_mcp import nginx_config as nginx_mod
 from html_mcp import server as srv
-from html_mcp import storage
+from html_mcp import _legacy_storage as storage
 from html_mcp.auth import check_bearer
 from html_mcp.config import Config
 
