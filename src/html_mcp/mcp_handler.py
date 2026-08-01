@@ -205,7 +205,9 @@ def _impl_upload_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
 
 
 def _impl_list_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
-    files = storage.list_files(Path(cfg.docroot))
+    from html_mcp.storage import annotations as anno_store
+    docroot = Path(cfg.docroot)
+    files = storage.list_files(docroot)
     payload = {
         "files": [
             {
@@ -214,6 +216,7 @@ def _impl_list_html(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
                 "mtime": f.mtime,
                 "url": cfg.public_base_url.rstrip("/") + "/" + f.name,
                 "title": f.title,
+                "annotation_count": anno_store.count(docroot, f.name),
             }
             for f in files
         ]
@@ -246,7 +249,11 @@ def _impl_list_annotations(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     name = args.get("name")
     if not isinstance(name, str):
         raise ValueError("name must be a string")
-    entries = anno_store.list_for(Path(cfg.docroot), name)
+    storage.validate_name(name)
+    docroot = Path(cfg.docroot)
+    if not (docroot / name).exists():
+        raise storage.NotFound("file does not exist: {}".format(name))
+    entries = anno_store.list_for(docroot, name)
     return _tool_result(json.dumps({"name": name, "annotations": entries}, ensure_ascii=False))
 
 
@@ -256,12 +263,14 @@ def _impl_delete_annotation(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]
     id_ = args.get("id")
     if not isinstance(name, str) or not isinstance(id_, str):
         raise ValueError("name and id must be strings")
-    doc = anno_store.load(Path(cfg.docroot), name)
+    storage.validate_name(name)
+    docroot = Path(cfg.docroot)
+    doc = anno_store.load(docroot, name)
     before = len(doc["annotations"])
     doc["annotations"] = [e for e in doc["annotations"] if e.get("id") != id_]
     if len(doc["annotations"]) == before:
         raise storage.NotFound("annotation not found: {}".format(id_))
-    anno_store.save(Path(cfg.docroot), name, doc)
+    anno_store.save(docroot, name, doc)
     return _tool_result(json.dumps({"deleted": True}))
 
 

@@ -68,6 +68,8 @@ def test_list_annotations_returns_entries(http_server):
     from pathlib import Path
     srv, cfg = http_server
     docroot = Path(cfg.docroot)
+    # Fix: create the HTML file first (required after spec compliance fix).
+    (docroot / "design.html").write_text("<html><body>design</body></html>", encoding="utf-8")
     anno_add(docroot, "design.html", "q1", "c1", "t1")
     anno_add(docroot, "design.html", "q2", "c2", "t2")
     host, port = srv.server_address
@@ -115,3 +117,131 @@ def test_agent_no_add_annotation_tool(http_server):
 def anno_store_count(docroot, name):
     from html_mcp.storage.annotations import count
     return count(docroot, name)
+
+
+# --- Tests for whole-branch review findings (spec compliance fixes) ----------
+
+def test_list_html_includes_annotation_count_zero(http_server):
+    """Fix 1: list_html output must include annotation_count per file (0 case)."""
+    from pathlib import Path
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    # Write an HTML file with no annotations
+    (docroot / "note.html").write_text("<html><body>hi</body></html>", encoding="utf-8")
+    host, port = srv.server_address
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "list_html", "arguments": {}})
+    payload = json.loads(data["result"]["content"][0]["text"])
+    files = payload["files"]
+    assert len(files) == 1
+    assert files[0]["name"] == "note.html"
+    assert "annotation_count" in files[0]
+    assert files[0]["annotation_count"] == 0
+
+
+def test_list_html_includes_annotation_count_with_annotations(http_server):
+    """Fix 1: list_html output must include annotation_count (1+ case)."""
+    from pathlib import Path
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    # Write HTML file and add annotations
+    (docroot / "design.html").write_text("<html><body>design</body></html>", encoding="utf-8")
+    anno_add(docroot, "design.html", "quote1", "comment1", "token1")
+    anno_add(docroot, "design.html", "quote2", "comment2", "token2")
+    host, port = srv.server_address
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "list_html", "arguments": {}})
+    payload = json.loads(data["result"]["content"][0]["text"])
+    files = payload["files"]
+    design_files = [f for f in files if f["name"] == "design.html"]
+    assert len(design_files) == 1
+    assert "annotation_count" in design_files[0]
+    assert design_files[0]["annotation_count"] == 2
+
+
+def test_list_annotations_missing_file_raises_not_found(http_server):
+    """Fix 2: list_annotations must raise NotFound when HTML file doesn't exist."""
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # No HTML file exists at docroot; request list_annotations for nonexistent.html
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "list_annotations", "arguments": {"name": "nonexistent.html"}})
+    # Tool-level error (isError=True) with not_found code
+    assert data["result"]["isError"] is True
+    text = data["result"]["content"][0]["text"]
+    assert "not_found" in text
+
+
+def test_list_annotations_invalid_name_returns_error(http_server):
+    """Fix 3: list_annotations must validate name via storage.validate_name."""
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Path traversal attempt
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "list_annotations", "arguments": {"name": "../etc/passwd"}})
+    assert data["result"]["isError"] is True
+    text = data["result"]["content"][0]["text"]
+    assert "invalid_name" in text
+
+
+def test_list_annotations_missing_html_extension_returns_error(http_server):
+    """Fix 3: list_annotations must reject names without .html extension."""
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Name that doesn't end in .html
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "list_annotations", "arguments": {"name": "foo"}})
+    assert data["result"]["isError"] is True
+    text = data["result"]["content"][0]["text"]
+    assert "invalid_name" in text
+
+
+def test_list_annotations_wrong_extension_returns_error(http_server):
+    """Fix 3: list_annotations must reject names with wrong extension."""
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Name with wrong extension
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "list_annotations", "arguments": {"name": "bar.html.txt"}})
+    assert data["result"]["isError"] is True
+    text = data["result"]["content"][0]["text"]
+    assert "invalid_name" in text
+
+
+def test_delete_annotation_invalid_name_returns_error(http_server):
+    """Fix 3: delete_annotation must validate name via storage.validate_name."""
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Path traversal attempt
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "delete_annotation",
+                 "arguments": {"name": "../etc/passwd", "id": "anyid"}})
+    assert data["result"]["isError"] is True
+    text = data["result"]["content"][0]["text"]
+    assert "invalid_name" in text
+
+
+def test_delete_annotation_missing_html_extension_returns_error(http_server):
+    """Fix 3: delete_annotation must reject names without .html extension."""
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Name that doesn't end in .html
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "delete_annotation",
+                 "arguments": {"name": "foo", "id": "anyid"}})
+    assert data["result"]["isError"] is True
+    text = data["result"]["content"][0]["text"]
+    assert "invalid_name" in text
+
+
+def test_delete_annotation_wrong_extension_returns_error(http_server):
+    """Fix 3: delete_annotation must reject names with wrong extension."""
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Name with wrong extension
+    data = _rpc(host, port, cfg.token, "tools/call",
+                {"name": "delete_annotation",
+                 "arguments": {"name": "bar.html.txt", "id": "anyid"}})
+    assert data["result"]["isError"] is True
+    text = data["result"]["content"][0]["text"]
+    assert "invalid_name" in text
