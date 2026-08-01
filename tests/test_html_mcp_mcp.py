@@ -137,12 +137,12 @@ def test_initialize_returns_server_info(mcp_server):
     assert payload["result"]["capabilities"]["tools"] == {}
 
 
-def test_tools_list_returns_four_tools(mcp_server):
+def test_tools_list_returns_six_tools(mcp_server):
     http, _, _ = mcp_server
     status, payload = _rpc(http, "tools/list")
     assert status == 200
     names = sorted(t["name"] for t in payload["result"]["tools"])
-    assert names == ["delete_html", "get_public_url", "list_html", "upload_html"]
+    assert names == ["delete_annotation", "delete_html", "get_public_url", "list_annotations", "list_html", "upload_html"]
 
 
 def test_tools_list_advertises_input_schemas(mcp_server):
@@ -188,7 +188,7 @@ def test_upload_html_conflict_no_force(mcp_server):
     assert status == 200
     assert payload["result"]["isError"] is True
     inner = json.loads(payload["result"]["content"][0]["text"])
-    assert inner["error"] == "Conflict"
+    assert inner["error"] == "conflict"
 
 
 def test_upload_html_force_overwrites(mcp_server):
@@ -210,7 +210,7 @@ def test_upload_html_invalid_name(mcp_server):
     })
     assert payload["result"]["isError"] is True
     inner = json.loads(payload["result"]["content"][0]["text"])
-    assert inner["error"] == "InvalidName"
+    assert inner["error"] == "invalid_name"
 
 
 def test_upload_html_too_large(mcp_server):
@@ -222,7 +222,7 @@ def test_upload_html_too_large(mcp_server):
     })
     assert payload["result"]["isError"] is True
     inner = json.loads(payload["result"]["content"][0]["text"])
-    assert inner["error"] == "TooLarge"
+    assert inner["error"] == "too_large"
 
 
 def test_upload_html_unknown_tool(mcp_server):
@@ -281,7 +281,7 @@ def test_delete_html_missing(mcp_server):
     })
     assert payload["result"]["isError"] is True
     inner = json.loads(payload["result"]["content"][0]["text"])
-    assert inner["error"] == "NotFound"
+    assert inner["error"] == "not_found"
 
 
 # --- tools/call: get_public_url ----------------------------------------------

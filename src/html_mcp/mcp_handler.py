@@ -96,6 +96,36 @@ TOOL_SCHEMAS = [
             "required": ["name"],
         },
     },
+    {
+        "name": "list_annotations",
+        "description": (
+            "List all annotations on a given HTML file. Returns public metadata: "
+            "id, quote, comment, author (irreversible token hash), ts."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Filename of the HTML."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "delete_annotation",
+        "description": (
+            "Delete a single annotation by id. Agents can delete any annotation "
+            "(privileged deleter for spam cleanup); browser-side delete requires "
+            "author match (enforced in REST, not here)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "id": {"type": "string"},
+            },
+            "required": ["name", "id"],
+        },
+    },
 ]
 
 
@@ -134,6 +164,19 @@ def _storage_code(exc: storage.StorageError) -> int:
     if isinstance(exc, storage.NotFound):
         return -32020
     return -32603
+
+
+def _error_class_name(exc: storage.StorageError) -> str:
+    """Convert a storage exception class name to snake_case format."""
+    name = exc.__class__.__name__
+    # Simple conversion: NotFound → not_found, InvalidName → invalid_name, etc.
+    result = ""
+    for i, char in enumerate(name):
+        if i > 0 and char.isupper():
+            result += "_" + char.lower()
+        else:
+            result += char.lower()
+    return result
 
 
 # --- tool implementations ---------------------------------------------------
@@ -198,12 +241,39 @@ def _impl_get_public_url(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     return _tool_result(json.dumps({"url": url}))
 
 
+def _impl_list_annotations(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
+    from html_mcp.storage import annotations as anno_store
+    name = args.get("name")
+    if not isinstance(name, str):
+        raise ValueError("name must be a string")
+    entries = anno_store.list_for(Path(cfg.docroot), name)
+    return _tool_result(json.dumps({"name": name, "annotations": entries}, ensure_ascii=False))
+
+
+def _impl_delete_annotation(args: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
+    from html_mcp.storage import annotations as anno_store
+    name = args.get("name")
+    id_ = args.get("id")
+    if not isinstance(name, str) or not isinstance(id_, str):
+        raise ValueError("name and id must be strings")
+    doc = anno_store.load(Path(cfg.docroot), name)
+    before = len(doc["annotations"])
+    doc["annotations"] = [e for e in doc["annotations"] if e.get("id") != id_]
+    if len(doc["annotations"]) == before:
+        raise storage.NotFound("annotation not found: {}".format(id_))
+    anno_store.save(Path(cfg.docroot), name, doc)
+    return _tool_result(json.dumps({"deleted": True}))
+
+
 _TOOL_DISPATCH = {
     "upload_html": _impl_upload_html,
     "list_html": _impl_list_html,
     "delete_html": _impl_delete_html,
     "get_public_url": _impl_get_public_url,
 }
+
+_TOOL_DISPATCH["list_annotations"] = _impl_list_annotations
+_TOOL_DISPATCH["delete_annotation"] = _impl_delete_annotation
 
 
 # --- JSON-RPC dispatch ------------------------------------------------------
@@ -316,7 +386,7 @@ def handle(req, params, body: bytes, cfg: Config) -> Tuple[int, bytes, Dict[str,
                 # not a JSON-RPC error (which Claude Code treats as a
                 # protocol-level failure).
                 err_payload = {
-                    "error": exc.__class__.__name__,
+                    "error": _error_class_name(exc),
                     "message": str(exc),
                 }
                 return (
