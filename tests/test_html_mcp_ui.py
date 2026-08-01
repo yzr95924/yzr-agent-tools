@@ -70,9 +70,8 @@ def test_serves_app_js(ui_server):
     status, headers, body = _get(ui_server, "/app.js")
     assert status == 200
     assert "javascript" in headers.get("Content-Type", "")
-    # Read-only: the page must not store or send a Bearer token.
+    # Read-only for file list; anno mode uses Bearer in dialog only.
     assert b"localStorage" not in body
-    assert b"Authorization" not in body
 
 
 # --- no auth required on / --------------------------------------------------
@@ -86,9 +85,10 @@ def test_index_no_auth_required(ui_server):
 # --- HTML contains expected structure ---------------------------------------
 
 def test_index_has_no_token_ui(ui_server):
-    """The management page deliberately exposes no token input or save
-    button — the token only lives on the server config + the agent's
-    MCP config, never in the browser."""
+    """The management page deliberately exposes no save-token button —
+    the token only lives on the server config + the agent's MCP config,
+    never persisted in the browser. (Annotation mode has a dialog where
+    the user pastes the token per-session; nothing is stored.)"""
     _, _, body = _get(ui_server, "/")
     text = body.decode("utf-8")
     assert 'id="token-input"' not in text
@@ -96,18 +96,17 @@ def test_index_has_no_token_ui(ui_server):
     assert 'id="token-save"' not in text
     # Required structure stays.
     assert 'id="file-tbody"' in text
-    assert 'sandbox=""' in text  # iframe sandbox attribute
+    assert 'sandbox="allow-same-origin"' in text  # iframe sandbox for annotation DOM-walk
 
 
 def test_app_js_does_not_store_token(ui_server):
-    """The JS must not read or write the token to any storage. Bearer never
-    appears in the bundle — management page is read-only."""
+    """The JS must not persist the token to any storage. Bearer is sent
+    only as a one-shot Authorization header during the /api/auth login
+    flow; nothing is kept client-side."""
     _, _, body = _get(ui_server, "/app.js")
     text = body.decode("utf-8")
     assert "localStorage" not in text
     assert "sessionStorage" not in text
-    assert "Bearer" not in text
-    assert "Authorization" not in text
 
 
 def test_app_js_handles_401_as_version_mismatch(ui_server):
