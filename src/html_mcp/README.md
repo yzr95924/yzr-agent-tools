@@ -132,4 +132,29 @@ html-mcp status                          # 简报:config / token / docroot 状�
 - daemon 保活由用户负责(README hint:tmux / systemd 用户单元)
 - 管理页只读:list / 预览 / 复制公开 URL 在浏览器完成;**删除** 与 **上传** 只能通过
   agent MCP(本机 Claude Code / OpenCode 调 `delete_html` / `upload_html`),管理页
-  故意不做删除按钮 / 上传表单,token 也不在 UI 出现
+  故意不做删除按钮 / 上传表单,token 也不在 UI 出现。
+
+## 批注(可选)
+
+管理页支持浏览器侧批注：选中 iframe 中的文本，填评论，提交。批注不影响原始 HTML
+文件(`.html` 与 `.meta` 严格分离)，所以可以放心反复修改设计稿，批注留档。
+
+启用方式：
+
+1. 进入批注模式：管理页右上角 **"批注(需 token)"** 按钮 → 弹框 → 粘贴 token
+   （在 server 端跑 `html-mcp token show` 获取）→ 进入。
+2. 选中文本 → 弹出评论输入框 → 提交。批注高亮（`<mark>`）自动注入到 iframe。
+3. 退出批注模式：点 "退出" 链接。cookie 30 分钟自动过期。
+
+agent 视角：
+
+- `list_annotations(name)` —— 读取某文件的全部批注（结构化字段）
+- `delete_annotation(name, id)` —— 删除某条（用于清理 spam / 已解决）
+- **不开放** `add_annotation` 给 agent（写批注由浏览器发起）
+
+安全模型：
+
+- 浏览器写批注走短期 session cookie（30 分钟，HttpOnly / Secure / SameSite=Lax）
+- agent 改 HTML 走原有 Bearer token
+- 两条路径**互不重叠**，agent 无批注写接口，浏览器无 HTML 写接口
+- nginx 模板默认带 `limit_req` 防 `/api/auth` 暴力穷举
