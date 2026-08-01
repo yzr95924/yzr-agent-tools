@@ -59,15 +59,31 @@ PYPROJECT = ROOT / "pyproject.toml"
 # --- pyproject.toml contract -----------------------------------------------
 
 
-def test_pyproject_declares_model_switch_metadata():
+def test_pyproject_has_no_publish_metadata():
+    """pyproject.toml is pytest-only by design (no pip / no PyPI).
+
+    当前没有发布计划——安装走 scripts/install.sh,包用 PYTHONPATH=$REPO/src 直接
+    import src/。pyproject.toml 只留 [tool.pytest.ini_options] 让 pytest 能
+    找到 src/ 与 tests/。如果以后重新引入发布路径,要先把这条断言去掉,并改回
+    上一个版本的 `test_pyproject_declares_model_switch_metadata` 风格。
+    """
     text = PYPROJECT.read_text()
 
-    # Project identity
-    assert 'name = "model-switch"' in text
-    # Console-script entry — keeps the `pip install model-switch` path viable,
-    # even though install.sh doesn't use pip.
-    assert 'model-switch = "model_switch.cli:main"' in text
-    # Old yzr alias should not leak through
+    # No [project] / [project.scripts] / [build-system] / setuptools config.
+    assert "[project]" not in text, (
+        "pyproject.toml must not declare [project] — there is no publish plan"
+    )
+    assert "[project.scripts]" not in text, (
+        "pyproject.toml must not declare [project.scripts] — no console_scripts entry"
+    )
+    assert "[build-system]" not in text, (
+        "pyproject.toml must not declare [build-system] — no wheel build"
+    )
+    assert "[tool.setuptools" not in text, (
+        "pyproject.toml must not configure setuptools packages"
+    )
+    # And the literal old CLI entry must not leak back.
+    assert 'model-switch = "model_switch.cli:main"' not in text
     assert 'yzr = "model_switch.cli:main"' not in text
 
 

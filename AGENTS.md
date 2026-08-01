@@ -5,9 +5,12 @@
 
 ## 项目定位
 
-`model-switch` 是一个 CLI：切换 AI coding agent（V1 主目标 Claude Code）使用的 Anthropic 兼容模型。
-通过直接改写 agent 的全局配置文件（Claude Code 的 `~/.claude/settings.json` 等）实现——无 daemon、
-无代理、无协议转换。用户跑 `model-switch model use <name>` 然后重启 agent 即生效。
+`yzr-agent-tools` 是一个围绕 AI coding agent 的本地运维/配置工具集合——目前收录 `model-switch`，
+后续会按需添加新工具。每个工具独立成 CLI,共享同一套仓库规约(测试隔离、原子写、未知字段透传等)。
+
+`model-switch` 是本仓库的首个工具:切换 AI coding agent(V1 主目标 Claude Code)使用的 Anthropic
+兼容模型。通过直接改写 agent 的全局配置文件(Claude Code 的 `~/.claude/settings.json` 等)实现
+——无 daemon、无代理、无协议转换。用户跑 `model-switch model use <name>` 然后重启 agent 即生效。
 
 ## 仓库规约
 
