@@ -18,7 +18,9 @@ from html_mcp import nginx_config as nginx_mod
 from html_mcp import server as srv
 from html_mcp import _legacy_storage as storage
 from html_mcp.auth import check_bearer
+from html_mcp.auth_anno import ANNO_COOKIE_MAX_AGE, cookie_set_header, sign_cookie
 from html_mcp.config import Config
+from html_mcp.storage import annotations as anno_store
 
 from ._version import VERSION
 
@@ -64,13 +66,16 @@ def _err(code: str, msg: str) -> bytes:
     return json.dumps({"error": code, "message": msg}).encode("utf-8")
 
 
-def _file_info_payload(f: storage.FileInfo, public_base_url: str) -> Dict[str, Any]:
+def _file_info_payload(
+    f: storage.FileInfo, public_base_url: str, docroot: Path
+) -> Dict[str, Any]:
     return {
         "name": f.name,
         "size": f.size,
         "mtime": f.mtime,
         "url": public_base_url.rstrip("/") + "/" + f.name,
         "title": f.title,
+        "annotation_count": anno_store.count(docroot, f.name),
     }
 
 
@@ -89,9 +94,29 @@ def _make_list_files(cfg: Config):
         except storage.StorageError as exc:
             return _storage_error(exc)
         payload = {
-            "files": [_file_info_payload(f, cfg.public_base_url) for f in files]
+            "files": [
+                _file_info_payload(f, cfg.public_base_url, docroot) for f in files
+            ]
         }
         return (200, json.dumps(payload).encode("utf-8"), JSON)
+    return handler
+
+
+def _make_auth(cfg: Config):
+    """Exchange a valid Bearer token for an annotation session cookie."""
+    def handler(req, params, body):
+        if not check_bearer(req.headers.get("Authorization"), cfg.token):
+            return _unauthorized()
+        cookie_value = sign_cookie(cfg.token, max_age=ANNO_COOKIE_MAX_AGE)
+        return (
+            204,
+            b"",
+            {
+                "Set-Cookie": cookie_set_header(
+                    cookie_value, ANNO_COOKIE_MAX_AGE
+                )
+            },
+        )
     return handler
 
 
@@ -140,3 +165,4 @@ def register_routes(cfg: Config) -> None:
     srv.register("DELETE", r"^/api/files/(?P<name>[^/]+)$", _make_delete_file(cfg))
     srv.register("GET", r"^/api/nginx-config$", _make_nginx_config(cfg))
     srv.register("GET", r"^/api/health$", _health_handler)
+    srv.register("POST", r"^/api/auth$", _make_auth(cfg))
