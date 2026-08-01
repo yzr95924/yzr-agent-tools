@@ -370,3 +370,118 @@ def test_delete_annotation_by_author_succeeds(http_server):
             response.read()
     finally:
         conn.close()
+
+
+def test_post_annotation_with_json_null_returns_400(http_server):
+    """POST with body `null` → 400 invalid_args (must be JSON object)."""
+    from html_mcp.auth_anno import ANNO_COOKIE_NAME
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Step 1: get cookie.
+    conn, response = _post(
+        host,
+        port,
+        "/api/auth",
+        headers={"Authorization": "Bearer " + cfg.token},
+    )
+    try:
+        assert response.status == 204
+        sc = response.getheader("Set-Cookie")
+        cookie = SimpleCookie()
+        cookie.load(sc)
+        cookie_value = cookie[ANNO_COOKIE_NAME].value
+    finally:
+        response.read()
+        conn.close()
+
+    # Step 2: POST null.
+    conn, response = _post(
+        host,
+        port,
+        "/api/files/design.html/annotations",
+        body=b'null',
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Content-Type": "application/json",
+            "Origin": "https://notes.example.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 400
+        data = json.loads(response.read())
+        assert data["error"] == "invalid_args"
+    finally:
+        conn.close()
+
+
+def test_post_annotation_with_json_array_returns_400(http_server):
+    """POST with body `[1,2,3]` → 400 invalid_args (must be JSON object)."""
+    from html_mcp.auth_anno import ANNO_COOKIE_NAME
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Step 1: get cookie.
+    conn, response = _post(
+        host,
+        port,
+        "/api/auth",
+        headers={"Authorization": "Bearer " + cfg.token},
+    )
+    try:
+        assert response.status == 204
+        sc = response.getheader("Set-Cookie")
+        cookie = SimpleCookie()
+        cookie.load(sc)
+        cookie_value = cookie[ANNO_COOKIE_NAME].value
+    finally:
+        response.read()
+        conn.close()
+
+    # Step 2: POST array.
+    conn, response = _post(
+        host,
+        port,
+        "/api/files/design.html/annotations",
+        body=b'[1,2,3]',
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Content-Type": "application/json",
+            "Origin": "https://notes.example.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 400
+        data = json.loads(response.read())
+        assert data["error"] == "invalid_args"
+    finally:
+        conn.close()
+
+
+def test_patch_annotation_with_json_string_returns_400(http_server):
+    """PATCH with body `"a string"` → 400 invalid_args (must be JSON object)."""
+    from html_mcp.auth_anno import ANNO_COOKIE_NAME, sign_cookie
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    entry = anno_store.add(docroot, "design.html", "q", "old", cfg.token)
+    cookie_value = sign_cookie(cfg.token)
+
+    host, port = srv.server_address
+    response = _patch(
+        host,
+        port,
+        "/api/files/design.html/annotations/" + entry["id"],
+        body=b'"a string"',
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Content-Type": "application/json",
+            "Origin": "https://notes.example.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 400
+        data = json.loads(response.read())
+        assert data["error"] == "invalid_args"
+    finally:
+        response.read()

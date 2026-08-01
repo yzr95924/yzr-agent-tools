@@ -145,6 +145,8 @@ def _make_post_annotation(cfg: Config):
             payload = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return (400, _err("invalid_body", "body must be JSON"), JSON)
+        if not isinstance(payload, dict):
+            return (400, _err("invalid_args", "body must be a JSON object"), JSON)
         quote = payload.get("quote")
         comment = payload.get("comment")
         if not isinstance(quote, str) or not isinstance(comment, str):
@@ -183,6 +185,8 @@ def _make_patch_annotation(cfg: Config):
             payload = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return (400, _err("invalid_body", "body must be JSON"), JSON)
+        if not isinstance(payload, dict):
+            return (400, _err("invalid_args", "body must be a JSON object"), JSON)
         comment = payload.get("comment")
         if not isinstance(comment, str):
             return (400, _err("invalid_args", "comment must be a string"), JSON)
