@@ -47,7 +47,8 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 
 - **A1**：Claude Code / OpenCode 支持 MCP Streamable HTTP transport（不能只走 stdio / SSE）
 - **A2**：远端 server 由用户管（systemd / 包管理 / certbot / sudo 都能用）
-- **A3**：单用户信任模型，无多租户 / 多 token / 多 docroot
+- **A3**：单用户信任模型，无多租户 / 多 docroot
+- **A3'**：单 token 范式——agent 改 HTML 与浏览器写批注共用同一 Bearer token，浏览器在"批注模式"下临时出示以获得短期 session cookie；不引入多 token / 多角色
 - **A4**：上传的 HTML 都是"自包含的 UTF-8 文本 HTML"（`yzr-md-to-html` 的产物形态，CSS / Pygments 内联）
 - **A5**：docroot 用 ext4 / tmpfs / xfs / 之类标准 POSIX fs，符号链接行为正常
 - **A6**：nginx ≥ 1.18（HTTP/2 + TLS SNI + 反代基本盘）
@@ -73,8 +74,10 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 - **N5**：不做 systemd unit / Docker image / launchd plist（README 一句 hint）
 - **N6**：不存元数据库（mtime / size 从 `stat()` 取；title 从 HTML 解析）
 - **N7**：不上传非 `.html` 文件（regex 拒绝）
-- **N8**：不做管理页的登录 / session / cookie；管理页只读，无 token 入口（见 Q1）
+- **N8**：不做管理页长期登录 / session；批注写接口用"用户主动出示 token + 短期 cookie"的临时模式，不引入持久身份系统
 - **N9**：不做上传时自动渲染 mermaid / KaTeX 检查——daemon 不解析 HTML
+- **N10**：不做批注的多人协作 / 权限分级 / author 身份管理；单 token 范式延续到批注层
+- **N11**：不做 agent 端写批注——批注由浏览器发起，agent 仅读 + 删（V1）
 
 ## 3. 功能点拆解
 
@@ -98,6 +101,13 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 | F16 | config.toml 未知字段透传 | P0 | §7.2 |
 | F17 | 上传同名默认拒绝、`force=true` 覆盖 | P0 | §4, §7.3 |
 | F18 | 路径穿越 / 文件名非法 / 鉴权失败 / 磁盘满 各有清晰错误码 | P0 | §7.3, §8 |
+| F19 | 管理页头部"批注(需 token)"按钮 → 进入批注模式弹 token 框 | P0 | §3 入口形态, §9.3 |
+| F20 | `POST /api/auth` 提交 token → 签发短期 session cookie | P0 | §7.3, §9.3 |
+| F21 | 浏览器写 / 改 / 删批注（边车 `.html.meta` JSON） | P0 | §7.2, §7.3, §9.3 |
+| F22 | 浏览器在 iframe 选区触发批注提交；quote 从 `getSelection()` 取得 | P1 | §9.3 iframe 注入 |
+| F23 | agent 通过 MCP `list_annotations` 读 / `delete_annotation` 删 | P0 | §7.3 |
+| F24 | `list_html` 出参含每文件 `annotation_count` | P1 | §7.3 |
+| F25 | 批注 quote 在 iframe 失配时显示 ⚠️ 但保留 comment 文本 | P1 | §9.3 容错 |
 
 ## 4. 功能规格与约束
 
@@ -113,9 +123,14 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 - **HTTP method 白名单**：daemon 仅接受路径声明里的 method；其它直接 405
 - **HTTP body 限流**：累计 body 字节数超 `max_file_size` 立即断连 + 413（不读完整 body）
 - **路径穿越防护**：写文件前 `Path.resolve()` 算绝对路径，断言仍在 `docroot.resolve()` 下
-- **iframe sandbox**：管理页预览 iframe 加 `sandbox=""`（禁用 JS / 表单 / 同源 / 弹窗）
+- **iframe sandbox**：管理页预览 iframe 加 `sandbox="allow-same-origin"`（禁用 JS / 表单 / 弹窗；**允许同源**以便主页面注入 `<mark>` 高亮）
 - **Bearer 比较**：`hmac.compare_digest` 常量时间
-- **docroot**：扁平结构，文件直存 `<docroot>/<name>`
+- **docroot**：扁平结构，文件直存 `<docroot>/<name>`；批注以 `<docroot>/<name>.meta` 边车 JSON 文件存储
+- **批注 schema**：每条 `{id: ulid, quote: str, comment: str, author: "tk_<sha256[:8]>", ts: int}`；quote 用于 iframe 高亮定位，author 由 token 哈希得到（不可逆），同 token 多次提交 author 一致
+- **批注 cookie TTL**：30 分钟；`HttpOnly; Secure; SameSite=Lax`，无 refresh，关闭浏览器即失效
+- **批注写入口形态**：管理页 header 右上角"批注(需 token)"按钮 → 点击弹 token 输入对话框 → 校验通过后激活批注模式（高亮 + 选区 + 提交）。普通浏览者**不主动看到批注 UI 控件**——按钮文案明示"需 token"
+- **CSRF 防护**：批注写 API（`POST/PATCH/DELETE`）双层防御——`SameSite=Lax` cookie + 服务端 `Origin` 头校验（Origin 存在时必须等于 `https://<Host>`）
+- **nginx 限流**：`/api/auth` 与所有批注写接口经 `limit_req zone=auth limit=10r/s` 防暴力穷举；token 256 bit 随机本身已不可能穷举
 - **mtime / size 读取**：`os.stat()` 取
 - **title 解析**：`re.search(r'<title>(.*?)</title>', content, re.DOTALL | re.IGNORECASE)`；解析失败返 `null`
 - **公开 URL**：`public_base_url + '/' + name`（name 不再做 URL encode——regex 已限定安全字符）
@@ -177,6 +192,11 @@ agent 想主动把 HTML 推到 server 端、希望 server 端可观测 / 可治�
 | S33 | 大小写重名 + force | 分支 | S28 第二次带 force=true | 覆盖；200 | §4 |
 | S34 | content 为空 | 分支 | upload 空字符串 content | 写入 0 字节文件；200 | §7.3 |
 | S35 | title 解析失败 | 分支 | HTML 无 `<title>` | list_html 该项 `title=null` | §7.3 |
+| S36 | 浏览器进入批注模式 | 主流程 | 头部"批注(需 token)"按钮点击 → 弹 token 输入框 → 提交 | `POST /api/auth` 校验通过 → 签发短期 cookie → 页面进入批注模式 | §7.3, §9.3 |
+| S37 | 浏览器提交新批注 | 主流程 | 批注模式下在 iframe 选中文本 → 弹框写评论 → 提交 | `POST /api/files/<name>/annotations` 写 `<name>.meta`(atomic write)；iframe 重新扫描高亮；侧栏更新 | §7.3, §9.3 |
+| S38 | 浏览器改 / 删自己批注 | 主流程 | 批注模式下点侧栏笔 / 垃圾桶 | `PATCH / DELETE /api/files/<name>/annotations/<id>`；author 校验通过(hash(token) == entry.author) | §7.3, §9.3 |
+| S39 | agent 看批注改进文档 | 主流程 | agent 调 `list_annotations(name)` → 改 md → `upload_html(force=true)` | 改 .html 不动 .meta；批注留档，失效 quote 标 ⚠️ | §7.3 |
+| S40 | agent 删 spam 批注 | 分支 | agent 调 `delete_annotation(name, id)` | 不要求 author 匹配(token 已是 agent 凭据) | §7.3 |
 
 ---
 
@@ -356,11 +376,37 @@ token: str                 # secrets.token_hex(32); chmod 0600
 
 ```
 /var/www/notes/
-├── <name>.html            # 用户上传的 HTML 文件
+├── <name>.html            # agent 上传的 HTML 文件（nginx 直 serve）
+├── <name>.html.meta       # 边车 JSON：批注（仅 daemon 读写；nginx 不读）
 └── ...
 ```
 
-无 `index.html` 默认文件——用户自己写或不放。
+无 `index.html` 默认文件——用户自己写或不放。`.meta` 与 `.html` 严格共存：删除 `.html` 时**不**自动删 `.meta`（批注是独立资源），由调用方显式管理。
+
+**批注 schema（`<name>.meta` 文件内容）**：
+
+```json
+{
+  "version": 1,
+  "annotations": [
+    {
+      "id": "01JC8X1A2B3C4D5E6F7G8H9J0K",
+      "quote": "sudo mkdir -p",
+      "comment": "改成用户级目录",
+      "author": "tk_a1b2c3d4",
+      "ts": 1754025600
+    }
+  ]
+}
+```
+
+- `id`：ULID（lexicographically sortable, 26 chars）；生成不依赖外部库（`os.urandom` + base32 即可）
+- `quote`：用户选中的原文片段；用于 iframe 高亮定位（substring match + normalize whitespace）
+- `comment`：评论文本
+- `author`：`tk_<sha256(token)[:8]>`，不可逆；同 token 多次提交 author 一致；服务端比对以鉴"自己的批注"
+- `ts`：unix seconds，写入时刻
+- **原子写**：`.meta` 写盘沿用 `.tmp + os.replace`，与 `.html` 写规则一致（§4 + §7.1）
+- **空列表**：`{"version": 1, "annotations": []}`——文件存在即"有记录",空列表与"无批注"语义不区分
 
 **无元数据库**（N6）：mtime / size 从 `os.stat()` 取；title 从 HTML 解析
 （`re.search(r'<title>(.*?)</title>', content, re.DOTALL | re.IGNORECASE)`）。
@@ -373,21 +419,28 @@ token: str                 # secrets.token_hex(32); chmod 0600
 | Tool | 入参 | 出参 | 错误码 |
 | --- | --- | --- | --- |
 | `upload_html` | `{name: str, content: str, force?: bool}` | `{url: str, name: str, size: int}` | invalid_name / conflict / too_large / docroot_unwritable |
-| `list_html` | `{}` | `{files: [{name, size, mtime, url, title?}]}` | — |
+| `list_html` | `{}` | `{files: [{name, size, mtime, url, title?, annotation_count: int}]}` | — |
 | `delete_html` | `{name: str}` | `{deleted: bool}` | not_found |
 | `get_public_url` | `{name: str}` | `{url: str}` | — |
+| `list_annotations` | `{name: str}` | `{name: str, annotations: [{id, quote, comment, author, ts}]}` | not_found |
+| `delete_annotation` | `{name: str, id: str}` | `{deleted: bool}` | not_found |
 
 **HTTP API**（管理页背后）：
 
 | 方法 | 路径 | 鉴权 | 出参 |
 | --- | --- | --- | --- |
-| GET | `/api/files` | 无（公开元数据：docroot 文件 nginx 本来就公开 serve） | `{files: [...]}`（同 list_html） |
+| GET | `/api/files` | 无（公开元数据：docroot 文件 nginx 本来就公开 serve） | `{files: [...]}`（同 list_html，含 `annotation_count`） |
 | DELETE | `/api/files/<name>` | Bearer | `{deleted: bool}` |
 | GET | `/api/nginx-config` | Bearer | text/plain（server block） |
 | GET | `/api/health` | 无 | `{status, version}` |
 | GET | `/` | 无（管理页本身是只读 shell） | HTML |
 | POST | `/mcp` | Bearer | JSON-RPC |
 | GET | `/files/*` | （由 nginx 直 serve） | text/html |
+| POST | `/api/auth` | 无（提交 Bearer token） | 204 + `Set-Cookie: anno_session=...; HttpOnly; Secure; SameSite=Lax; Max-Age=1800`（成功）/ 401（失败） |
+| GET | `/api/files/<name>/annotations` | 无（公开：批注与 .html 同生命周期） | `{name, annotations: [...]}` |
+| POST | `/api/files/<name>/annotations` | session cookie + CSRF | `{id, quote, comment, author, ts}` |
+| PATCH | `/api/files/<name>/annotations/<id>` | session cookie + CSRF + author 匹配 | `{id, ...}` |
+| DELETE | `/api/files/<name>/annotations/<id>` | session cookie + CSRF + author 匹配 | `{deleted: bool}` |
 
 > 注：`/files/*` 实际**不走 daemon**——nginx 直接从 docroot 读取，daemon 不挂这条路由。
 
@@ -462,6 +515,11 @@ html-mcp status
 | iframe 逃逸 | iframe `sandbox=""` 禁用 JS / 表单 / 同源 / 顶级导航 / 弹窗 / 定向 | §9.3 |
 | token 文件权限被改宽（S32） | daemon 启动时 warning（不阻止） | §7.3 |
 | Bearer timing attack | `hmac.compare_digest` 常量时间比较 | §9.3 |
+| quote 失配 | 批注在 iframe 中找不到 quote（HTML 重传 / 改写）→ UI 显示 ⚠️ 但保留 comment 文本；不删除批注 | §9.3 |
+| 批注 cookie 过期 | session cookie 30 min TTL 到期 → 写接口返 401 → 前端弹框引导重新出示 token | §7.3, §9.3 |
+| Origin 头不匹配 | CSRF 攻击或浏览器异常 → 批注写接口返 403；`GET` 跨站仍允许（cookie 已 SameSite 拦截） | §9.3 |
+| 暴力点击 `/api/auth` | nginx `limit_req zone=auth limit=10r/s` 限流；超阈值返 503 + `Retry-After` | §9.3, §12 |
+| token 错配（agent 端） | agent 用旧 / 错 token 调 MCP → 401；用户跑 `html-mcp token show` + 改 agent MCP config | §7.3, §9.2 |
 
 最可能出线上事故的 3–5 条：**端口被占 / token 泄露 / docroot 不可写 / size 突破 / path traversal**——上面已逐条钉死技术处置。
 
@@ -523,11 +581,26 @@ html-mcp status
 
 **注入防护**：HTTP body 是 HTML 文本，daemon **不解析不执行**，存为 UTF-8 字节。nginx serve 时按 `text/html` 输出，浏览器渲染——这是用户想要的行为，不是攻击面。
 
-**iframe 隔离**：管理页预览 iframe `sandbox=""`（F6）。
+**iframe 隔离**：管理页预览 iframe `sandbox="allow-same-origin"`（F6）——禁用 JS / 表单 / 弹窗 / 顶级导航；**允许同源**以便主页面注入 `<mark data-anno-id>` 高亮；批注按钮的 `<dialog>` 与 iframe 的 DOM 严格隔离（iframe 内 CSS 不污染批注 UI，反之亦然）。
 
-**审计**：日志含 method + path + status + tool name + 文件名 + 大小，**无** token 明文、**无** HTML 内容。
+**批注写接口安全（§7.3 / F19–F25）**：
 
-**合规**：无个人敏感信息处理（仅文件元数据）；不涉及 GDPR / 等保场景。
+- **入口形态**：管理页 header 右上角"批注(需 token)"按钮，按钮文案明示"需 token"——访客点开后**必须出示有效 Bearer token** 才能进批注模式；不存在任何"匿名写批注"路径
+- **Cookie 策略**：`POST /api/auth` 校验 token 通过后签发 `anno_session=...` cookie，`HttpOnly; Secure; SameSite=Lax; Max-Age=1800`（30 分钟）。无 refresh token；关浏览器即失效
+- **CSRF 双层防御**：
+  1. **浏览器层**：`SameSite=Lax` cookie——`POST / PATCH / DELETE` 跨站不携带 cookie（2020+ 浏览器默认行为）
+  2. **服务端兜底**：所有批注写接口校验 `Origin` 头（存在时必须等于 `https://<Host>`，否则 403）；`GET` 跨站仍允许（公开读）
+- **暴力穷举防护**：
+  - token 是 `secrets.token_hex(32)` = 256 bit，**算力上不可能穷举**
+  - nginx `limit_req zone=auth limit=10r/s`（`/api/auth` 与批注写接口共享 zone）防单 IP 高频请求；超阈值返 503 + `Retry-After`
+  - token 比较用 `hmac.compare_digest` 常量时间
+- **author 身份模型**：`author = "tk_" + sha256(token)[:8]`，**不可逆**——同 token 多次提交 author 一致；PATCH/DELETE 时服务端：cookie 还原 token → 算 hash → 比对 entry.author。**不引入 alice/bob 角色概念**（N10）；两个 reviewer 用同一 token 共享 author 视图
+- **agent vs 浏览器边界**：agent 走 MCP `/mcp` Bearer 写 `.html`；浏览器走 REST session cookie 写 `.meta`。**两条路径互不重叠**——agent 无写批注接口（N11），浏览器无写 HTML 接口
+- **批注 vs HTML 资源独立性**：删除 `.html` 不删 `.meta`（批注是独立资源，跨文件版本可继续参考）；上传覆盖 `.html` 时 `.meta` 不动（quote 可能失效但保留，UI 标 ⚠️）
+
+**审计**：日志含 method + path + status + tool name + 文件名 + 大小，**无** token 明文、**无** session cookie 明文、**无** HTML 内容、**无** 批注 comment 文本。
+
+**合规**：无个人敏感信息处理（仅文件元数据 + 批注文本——owner 自托管自负）；不涉及 GDPR / 等保场景。
 
 ### 9.4 可服务性
 
@@ -610,6 +683,12 @@ html-mcp status
 **否决方案 I**：nginx config auto-generate + write 到 /etc/nginx/sites-available + reload。
 - 否决理由：需要 root / sudo；不同发行版 / macOS 路径不同；用户拷出来自己 reload 反而简单可控
 
+**否决方案 J**：agent 写批注（浏览器只读 / agent 写）——把"review"放进 agent 工作流。
+- 否决理由：1) 浏览器选区→quote 的语义在 agent 端是文本字符串，丢失选区上下文（offset / 富文本）；2) 人审稿后让 agent "替我提意见"是反模式（agent review 自己）；3) 破坏"批注由人触发"的协作直觉。**V1 浏览器写批注 + agent 读/删**
+
+**否决方案 K**：批注多 reviewer 协作（author 字段 = 真实用户名 / 多 token / 权限分级）。
+- 否决理由：1) 与单用户信任模型冲突（A3）；2) 引入 alice/bob 注册流 / token 分发 / 鉴权服务是另一条产品线；3) 同 token 多 reviewer 实际场景足够（团队共享 token 是常见自托管实践）。**V1 用 `tk_<hash8>` 同名共享；多 token 模型 V2+ 视需要**
+
 ---
 
 —— 落地层 ——————————————————————————
@@ -651,10 +730,14 @@ html-mcp status
 - **Q1**：~~管理页 token 输入框行为~~ ——**已闭环**：管理页不再接触 token。`GET /api/files` 公开（docroot 文件 nginx 本来就公开 serve），管理页无 token 输入框 / 不读 localStorage；删除 / 上传一律走 agent MCP（`POST /mcp` 仍要 Bearer）。`Config.token` 字段、`token show/rotate` CLI 保留（仅给 agent / 运维使用）。**变更日期**：2026-08-01。
 - **Q2**：MCP Streamable HTTP session 管理。**默认倾向**：无状态（每请求独立），符合单用户信任模型。**待谁确认**：用户 / 评审。
 - **Q3**：upload_html 是否返 mtime？**默认倾向**：不返，list_html 时取；若 agent 需要 V2 加。**待谁确认**：agent 端用法反馈。
-- **Q4**：管理页是否加"上传"按钮给人手动上传？**默认倾向**：不做——管理页只浏览 + 删除；上传走 MCP（设计本意）。**待谁确认**：用户。
+- **Q4**：管理页是否加"上传"按钮给人手动上传 HTML？**默认倾向**：不做——浏览器只写批注（不写 HTML）；上传 HTML 走 agent MCP（设计本意）。**待谁确认**：用户。
 - **Q5**：token rotate 是否保留旧 token 一段 grace period？**默认倾向**：不保留，rotate 立即失效（最简单）。**待谁确认**：用户 / 评审。
 - **Q6**：是否支持上传 `*.htm` / `*.xhtml`？**默认倾向**：不支持（regex 限定 `.html`）。**待谁确认**：用户。
 - **Q7**：是否要给 docroot 文件加 ACL（如 public / private 标志）？**默认倾向**：不加——docroot 整体视为公开（"推送即公开" 符合 yzr-md-to-html 设计本意）。**待谁确认**：用户。
+- **Q8**：批注入口按钮的文案 / 位置 / 显隐？**默认倾向**：header 右上角"批注(需 token)"，常驻显式（单用户自托管场景下"显式入口 = affordance"而非"误触面"）。**待谁确认**：用户。
+- **Q9**：批注 session cookie TTL 取值？**默认倾向**：30 分钟（`Max-Age=1800`），无 refresh——访客长时间离开再回来需重新出示 token，强制频次低。**待谁确认**：用户 / 评审。
+- **Q10**：nginx `limit_req` 阈值？**默认倾向**：`limit=10r/s`，单 IP 突发 10 次/秒足以挡住脚本狂点又不影响真人手点；burst 20。**待谁确认**：用户 / 评审。
+- **Q11**：iframe sandbox 用 `allow-same-origin` 还是更严？**默认倾向**：`sandbox="allow-same-origin"`——必须允许同源以便主页面注入 `<mark>` 高亮；同时**显式禁止** `allow-scripts`（防 yzr-md-to-html 产物里的 Mermaid/MathJax 在批注 iframe 里执行）。**待谁确认**：用户 / 安全评审。
 
 ## 14. 排期
 
