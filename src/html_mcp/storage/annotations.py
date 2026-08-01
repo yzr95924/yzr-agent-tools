@@ -100,3 +100,85 @@ def save(docroot: Path, name: str, doc: Dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+_MAX_QUOTE_LEN = 200
+_MAX_COMMENT_LEN = 2000
+
+
+def add(
+    docroot: Path,
+    name: str,
+    quote: str,
+    comment: str,
+    token: str,
+    *,
+    max_quote_len: int = _MAX_QUOTE_LEN,
+    max_comment_len: int = _MAX_COMMENT_LEN,
+) -> Dict[str, Any]:
+    """Append a new annotation. Atomic write of `<name>.meta`."""
+    if not isinstance(quote, str) or not isinstance(comment, str):
+        raise TypeError("quote and comment must be strings")
+    if len(comment) > max_comment_len:
+        raise ValueError(
+            "comment length {} exceeds max {}".format(len(comment), max_comment_len)
+        )
+    if not isinstance(token, str) or not token:
+        raise ValueError("token must be a non-empty string")
+    if not isinstance(name, str) or not name:
+        raise ValueError("name must be a non-empty string")
+
+    # Truncate quote silently (caps iframe match ambiguity).
+    q = quote[:max_quote_len]
+    entry = {
+        "id": ulid_new(),
+        "quote": q,
+        "comment": comment,
+        "author": author_of_token(token),
+        "ts": int(time.time()),
+    }
+    doc = load(docroot, name)
+    doc["annotations"].append(entry)
+    save(docroot, name, doc)
+    return entry
+
+
+def list_for(docroot: Path, name: str) -> List[Dict[str, Any]]:
+    """Return all annotations for `<name>`, oldest first."""
+    return list(load(docroot, name)["annotations"])
+
+
+def count(docroot: Path, name: str) -> int:
+    """Number of annotations for `<name>` (0 if no meta file)."""
+    return len(load(docroot, name)["annotations"])
+
+
+def get(docroot: Path, name: str, id: str) -> Optional[Dict[str, Any]]:  # noqa: A002 — design uses `id`
+    for entry in load(docroot, name)["annotations"]:
+        if entry.get("id") == id:
+            return entry
+    return None
+
+
+def delete(docroot: Path, name: str, id: str, token: str) -> bool:  # noqa: A002
+    """Delete annotation by id, but only if author matches token's hash.
+
+    Returns True if deleted, False if id not found OR author mismatch
+    (indistinguishable to caller — caller decides whether to surface as 404
+    vs 403; we return False in both cases per spec §8).
+    """
+    if not isinstance(token, str) or not token:
+        return False
+    doc = load(docroot, name)
+    target_author = author_of_token(token)
+    new_entries = []
+    removed = False
+    for entry in doc["annotations"]:
+        if entry.get("id") == id and entry.get("author") == target_author:
+            removed = True
+            continue
+        new_entries.append(entry)
+    if removed:
+        doc["annotations"] = new_entries
+        save(docroot, name, doc)
+    return removed
