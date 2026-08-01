@@ -820,26 +820,15 @@ def test_list_files_includes_annotation_count_zero(http_server):
     assert data["files"][0]["annotation_count"] == 0
 
 
-def test_list_files_includes_annotation_count_nonzero(http_server, cfg_factory):
-    docroot = Path(srv_docroot(http_server))  # see helper below
-    # Add an annotation by going through storage directly.
-    from html_mcp.storage.annotations import add
-    add(docroot, "design.html", "quote", "comment", "t")
-    srv, _ = http_server
+def test_list_files_includes_annotation_count_nonzero(http_server):
+    """Mutate docroot after server start, then re-fetch /api/files."""
+    from html_mcp.storage import annotations as anno_store
+    srv, cfg = http_server
+    anno_store.add(Path(cfg.docroot), "design.html", "quote", "comment", "any-token")
     host, port = srv.server_address
     r = _get(host, port, "/api/files")
     data = json.loads(r.read())
     assert data["files"][0]["annotation_count"] == 1
-
-
-# Helper — extract docroot from the cfg in http_server (needs re-registration
-# because we mutate after start). Instead, we use a separate flow: see below.
-
-
-def srv_docroot(http_server):
-    """http_server fixture yields (srv, cfg) — docroot is cfg.docroot."""
-    _, cfg = http_server
-    return cfg.docroot
 ```
 
 > **Note:** the `test_list_files_includes_annotation_count_nonzero` test mutates
@@ -966,7 +955,7 @@ git commit -m "feat(html-mcp): /api/auth + annotation_count in list_files"
 
 ```python
 # Append to tests/test_html_mcp_annotations_api.py
-from html_mcp.storage.annotations import add as anno_add
+from html_mcp.storage.annotations import add as anno_add, count as anno_store_count
 import http.client
 
 
@@ -2127,28 +2116,28 @@ function cssEscape(s) {
   return String(s).replace(/(["\\])/g, "\\$1");
 }
 
-// --- hook into existing preview() (defined elsewhere in app.js) ---
+// --- hook into existing preview() (defined earlier in app.js) ---
+//
+// Rather than monkey-patch `preview`, listen for iframe load events. When
+// the preview section becomes visible and the iframe fires load, we capture
+// the current file from the preview name label and refresh annotations.
 
-// Wrap the existing preview(name) so anno-mode refreshes the list.
-// We can't easily intercept a function declaration; instead we hook
-// via a MutationObserver on the preview section visibility.
-var previewObserver = new MutationObserver(function () {
-  if (!$previewSection.hidden && mode === "anno") {
-    // previewFrame.src changed in preview(); wait for load.
-    $previewFrame.addEventListener("load", function onload() {
-      $previewFrame.removeEventListener("load", onload);
-      refreshAnnoList();
-    }, { once: true });
+// Mark current file from previewName label (which V1's preview() fills with
+// "(" + name + ")"). Cheaper than re-parsing iframe.src.
+$previewFrame.addEventListener("load", function () {
+  var m = $previewName.textContent.match(/^\((.+)\)$/);
+  if (m) annoCurrentFile = m[1];
+  if (mode === "anno") refreshAnnoList();
+});
+
+// When preview is hidden, clear current file.
+var previewHiddenObserver = new MutationObserver(function () {
+  if ($previewSection.hidden) {
+    annoCurrentFile = null;
+    clearAnnoList();
   }
 });
-previewObserver.observe($previewSection, { attributes: true, attributeFilter: ["hidden"] });
-
-// When preview opens, remember the file name.
-var origPreview = preview;
-preview = function (name) {
-  origPreview(name);
-  annoCurrentFile = name;
-};
+previewHiddenObserver.observe($previewSection, { attributes: true, attributeFilter: ["hidden"] });
 ```
 
 > **Important:** This block requires that `preview`, `$previewFrame`, `$previewSection` are already declared elsewhere in `app.js` (they are — see current V1 implementation). Place this whole block **at the end** of `app.js`.
