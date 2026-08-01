@@ -1,5 +1,11 @@
 """Tests for html_mcp.storage.annotations — ULID, author hash, quote normalize."""
-from html_mcp.storage.annotations import ulid_new, author_of_token, normalize_quote
+from html_mcp.storage.annotations import load, ulid_new, author_of_token, normalize_quote
+
+
+def test_load_non_utf8_meta_returns_empty_doc(tmp_path):
+    (tmp_path / "example.meta").write_bytes(b"\xff\xfe\x80")
+
+    assert load(tmp_path, "example") == {"version": 1, "annotations": []}
 
 
 def test_ulid_new_is_26_chars():

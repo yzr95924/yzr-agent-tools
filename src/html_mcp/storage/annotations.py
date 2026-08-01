@@ -70,7 +70,7 @@ def load(docroot: Path, name: str) -> Dict[str, Any]:
     try:
         raw = p.read_text(encoding="utf-8")
         data = json.loads(raw)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         # Corrupt meta → treat as empty (do NOT raise; agents may rely on
         # graceful read even after partial writes).
         return _empty_doc()
