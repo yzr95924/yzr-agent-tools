@@ -1,22 +1,23 @@
 """Project-wide pytest fixtures.
 
-The autouse fixture below enforces the basic principle:
+The autouse fixtures below enforce the basic principle:
     TESTS MUST NEVER WRITE TO THE USER'S REAL CONFIG FILES.
 
 Any test that would touch `~/.claude/settings.json`, model-switch's own
-~/.config/model-switch/, etc., would wedge the current Claude Code
-session. So:
+~/.config/model-switch/, html-mcp's ~/.config/html-mcp/, etc., would
+wedge the current Claude Code session. So:
 
   1. Every test runs with HOME pointed at a tmp dir.
   2. model-switch's path functions are redirected to tmp.
-  3. The claude-code driver singleton in the registry is replaced with
+  3. html-mcp's path functions are redirected to tmp.
+  4. The claude-code driver singleton in the registry is replaced with
      one that points at a tmp settings file.
-  4. Before the test exits, the real `~/.claude/settings.json` (and
+  5. Before the test exits, the real `~/.claude/settings.json` (and
      any other tracked real configs) is verified to be untouched
      (mtime + content hash match pre-test snapshot).
 
 Tests that intentionally need to exercise real paths (e.g. a smoke
-e2e) should skip this fixture explicitly with
+e2e) should skip these fixtures explicitly with
 `@pytest.mark.no_isolation` — but that's not implemented yet because
 no such test exists.
 """
@@ -37,6 +38,10 @@ REAL_CLAUDE_SETTINGS = Path(os.path.expanduser("~")) / ".claude" / "settings.jso
 REAL_YZR_CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
     / "model-switch"
+)
+REAL_HTML_MCP_CONFIG_DIR = (
+    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    / "html-mcp"
 )
 # OpenCode's real global config (may hold the user's live custom providers).
 _REAL_CFG_BASE = Path(
@@ -64,6 +69,7 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     snapshot = {}
     for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
+                     ("html_mcp_config_dir", REAL_HTML_MCP_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG)):
         snapshot[label] = {
             "exists": p.exists(),
@@ -93,18 +99,36 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     # pre-empted with a tmp-path driver.
     registry._drivers["opencode"] = OpenCodeDriver(settings_path=opencode_p)
 
+    # Redirect html-mcp's own paths into tmp. Import lazily so importing
+    # this conftest does not pull in html_mcp when only model_switch is
+    # being exercised (e.g. in environments that haven't installed the
+    # tool yet).
+    from html_mcp import paths as html_mcp_paths
+
+    html_cfg_dir = tmp_path / "html-mcp-cfg"
+    html_cfg_dir.mkdir()
+    html_cfg_p = html_cfg_dir / "config.toml"
+    html_nginx_p = html_cfg_dir / "nginx.conf.example"
+    monkeypatch.setattr(html_mcp_paths, "config_dir", lambda: html_cfg_dir)
+    monkeypatch.setattr(html_mcp_paths, "config_file", lambda: html_cfg_p)
+    monkeypatch.setattr(html_mcp_paths, "nginx_example_file", lambda: html_nginx_p)
+
     paths_dict = {
         "config_dir": cfg_dir,
         "models": models_p,
         "state": state_p,
         "settings": settings_p,
         "opencode": opencode_p,
+        "html_mcp_config_dir": html_cfg_dir,
+        "html_mcp_config_file": html_cfg_p,
+        "html_mcp_nginx_example": html_nginx_p,
     }
     yield paths_dict
 
     # Integrity check: real configs must be byte-identical to the snapshot.
     for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
+                     ("html_mcp_config_dir", REAL_HTML_MCP_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG)):
         snap = snapshot[label]
         if snap["exists"]:

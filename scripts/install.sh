@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Install model-switch: write a thin bash wrapper at $PROJECT_ROOT/bin/model-switch
-# that runs `python3 -m model_switch` with PYTHONPATH pointing at $PROJECT_ROOT/src,
-# and append an idempotent PATH block to the user's shell rc.
+# Install yzr-agent-tools: write a thin bash wrapper per tool at $PROJECT_ROOT/bin,
+# link bash/fish completions, and append an idempotent PATH block to the user's
+# shell rc.
 #
 # No virtualenv, no `pip install`. See README "Install" for runtime / dev dep
 # notes (Python<3.11 needs tomli; running tests needs pytest + pytest-cov).
@@ -13,6 +13,12 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$PROJECT_ROOT/bin"
+
+# Tools shipped by this repo. Each gets its own wrapper + completions.
+TOOLS=(
+    "model-switch"
+    "html-mcp"
+)
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "Error: python3 not found on PATH." >&2
@@ -34,30 +40,39 @@ fi
 if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' >/dev/null 2>&1; then
     cat >&2 <<'NOTE'
 >> Note: Python < 3.11 detected.
-   model-switch needs tomli. Install it yourself before running the CLI:
+   yzr-agent-tools needs tomli. Install it yourself before running the CLI:
        pip install --user 'tomli>=1.1'
    Continuing with install — tomli will be required at runtime.
 NOTE
 fi
 
+# --- wrappers ---------------------------------------------------------------
+
 mkdir -p "$BIN_DIR"
-cat > "$BIN_DIR/model-switch" <<'WRAPPER'
+
+write_wrapper() {
+    local tool="$1"
+    local py_module
+    # Convert kebab-case tool name to python module name (model-switch -> model_switch).
+    py_module="${tool//-/_}"
+    cat > "$BIN_DIR/$tool" <<WRAPPER
 #!/usr/bin/env bash
 set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -B -m model_switch "$@"
+REPO="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="\$REPO/src\${PYTHONPATH:+:\$PYTHONPATH}"
+exec python3 -B -m ${py_module} "\$@"
 WRAPPER
-chmod +x "$BIN_DIR/model-switch"
+    chmod +x "$BIN_DIR/$tool"
+}
 
-# Shell completions (bash + fish). Symlinked (not copied) so a `git pull`
-# refreshes them without re-running install.
-#   bash: bash-completion's per-user dir + a source line inside the PATH
-#         marker block in ~/.bashrc (covers setups without the
-#         bash-completion package).
-#   fish: auto-loaded from ~/.config/fish/completions/, no rc edit needed.
-COMPLETION_SRC_BASH="$PROJECT_ROOT/completions/model-switch.bash"
-COMPLETION_SRC_FISH="$PROJECT_ROOT/completions/model-switch.fish"
+for tool in "${TOOLS[@]}"; do
+    write_wrapper "$tool"
+done
+
+# --- completions ------------------------------------------------------------
+
+COMPLETION_SRC_BASH_DIR="$PROJECT_ROOT/completions"
+COMPLETION_SRC_FISH_DIR="$PROJECT_ROOT/completions"
 BASH_COMPLETION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
 FISH_COMPLETION_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
 
@@ -72,15 +87,21 @@ link_completion() {
     echo ">> Linked completion: $dest -> $src"
 }
 
-link_completion "$COMPLETION_SRC_BASH" "$BASH_COMPLETION_DIR/model-switch"
-link_completion "$COMPLETION_SRC_FISH" "$FISH_COMPLETION_DIR/model-switch.fish"
+for tool in "${TOOLS[@]}"; do
+    bash_src="$COMPLETION_SRC_BASH_DIR/$tool.bash"
+    fish_src="$COMPLETION_SRC_FISH_DIR/$tool.fish"
+    [ -f "$bash_src" ] && link_completion "$bash_src" "$BASH_COMPLETION_DIR/$tool"
+    [ -f "$fish_src" ] && link_completion "$fish_src" "$FISH_COMPLETION_DIR/$tool.fish"
+done
+
+# --- PATH block -------------------------------------------------------------
 
 update_rc() {
     local rc_path="$1"
     local completion_src="${2:-}"
     local path_line="export PATH=\"$BIN_DIR:\$PATH\""
-    local begin="# model-switch PATH begin"
-    local end="# model-switch PATH end"
+    local begin="# yzr-agent-tools PATH begin"
+    local end="# yzr-agent-tools PATH end"
     local block="$begin
 $path_line"
     if [ -n "$completion_src" ]; then
@@ -99,6 +120,35 @@ $end"
         : > "$rc_path"
     fi
 
+    # Upgrade path (BEFORE idempotency check): installs from before this
+    # script's marker rename have the old `# model-switch PATH begin/end`
+    # block. Rewrite the labels in place so the idempotency check below
+    # doesn't see two blocks.
+    if grep -qxF "# model-switch PATH begin" "$rc_path"; then
+        sed -i.bak \
+            -e 's|^# model-switch PATH begin|# yzr-agent-tools PATH begin|' \
+            -e 's|^# model-switch PATH end|# yzr-agent-tools PATH end|' \
+            "$rc_path"
+        rm -f "$rc_path.bak"
+        echo ">> Rewrote legacy model-switch PATH marker to yzr-agent-tools in $rc_path"
+    fi
+
+    # Upgrade path: legacy installs have the marker block but no source
+    # line for bash completion (covers setups without the bash-completion
+    # package). Splice one in just before the end marker — the in-rc
+    # source is the fallback path when the XDG symlink isn't picked up.
+    if [ -n "$completion_src" ] && grep -qxF "$begin" "$rc_path" \
+            && ! grep -qF "$completion_src" "$rc_path"; then
+        local tmp
+        tmp="$(mktemp)"
+        awk -v end="$end" -v line="[ -f \"$completion_src\" ] && . \"$completion_src\"" '
+            $0 == end && !done { print line; done = 1 }
+            { print }
+        ' "$rc_path" > "$tmp"
+        mv "$tmp" "$rc_path"
+        echo ">> Spliced completion source line into existing block in $rc_path"
+    fi
+
     # Idempotency: marker line already present => skip.
     if grep -qxF "$begin" "$rc_path"; then
         echo ">> PATH entry already present in $rc_path"
@@ -109,19 +159,6 @@ $end"
         } >> "$rc_path"
         echo ">> Appended PATH entry to $rc_path"
     fi
-
-    # Upgrade path: installs from before completions existed have the marker
-    # block but no source line — splice one in just before the end marker.
-    if [ -n "$completion_src" ] && ! grep -qF "$completion_src" "$rc_path"; then
-        local tmp
-        tmp="$(mktemp)"
-        awk -v end="$end" -v line="[ -f \"$completion_src\" ] && . \"$completion_src\"" '
-            $0 == end && !done { print line; done = 1 }
-            { print }
-        ' "$rc_path" > "$tmp"
-        mv "$tmp" "$rc_path"
-        echo ">> Added completion source line to $rc_path"
-    fi
 }
 
 case "${SHELL:-}" in
@@ -129,7 +166,20 @@ case "${SHELL:-}" in
         update_rc "$HOME/.zshrc"
         ;;
     */bash|*)
-        update_rc "$HOME/.bashrc" "$COMPLETION_SRC_BASH"
+        # Source every bash completion we ship so even setups without
+        # bash-completion pick them up.
+        bash_srcs=()
+        for tool in "${TOOLS[@]}"; do
+            [ -f "$COMPLETION_SRC_BASH_DIR/$tool.bash" ] && bash_srcs+=("$COMPLETION_SRC_BASH_DIR/$tool.bash")
+        done
+        # Pass the first one for the in-rc source line. (Multiple sources
+        # are linked into $BASH_COMPLETION_DIR above; in-rc source is just
+        # a belt-and-suspenders fallback.)
+        if [ "${#bash_srcs[@]}" -gt 0 ]; then
+            update_rc "$HOME/.bashrc" "${bash_srcs[0]}"
+        else
+            update_rc "$HOME/.bashrc"
+        fi
         ;;
 esac
 
@@ -138,14 +188,14 @@ cat <<EOF
 Installed.
 
   repo : $PROJECT_ROOT
-  exec : $BIN_DIR/model-switch
-  comp : $BASH_COMPLETION_DIR/model-switch (symlink)
-         $FISH_COMPLETION_DIR/model-switch.fish (symlink)
+  bin  : $BIN_DIR
+  tools: ${TOOLS[@]}
+  comp : $BASH_COMPLETION_DIR/ (bash)  $FISH_COMPLETION_DIR/ (fish)
 
 To use it in this shell:
   source $HOME/.bashrc   # or ~/.zshrc
-  model-switch --help
+  html-mcp --help
 
 Or run it directly without PATH changes:
-  $BIN_DIR/model-switch --help
+  $BIN_DIR/html-mcp --help
 EOF

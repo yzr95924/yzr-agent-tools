@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>html-mcp 管理</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>html-mcp 管理</h1>
+    <div id="token-bar">
+      <label for="token-input">Bearer token:</label>
+      <input id="token-input" type="password" placeholder="粘贴 token 后回车">
+      <button id="token-save" type="button">保存</button>
+      <span id="token-status"></span>
+    </div>
+  </header>
+
+  <main>
+    <section id="files-section">
+      <h2>文件</h2>
+      <div id="empty-state" hidden>暂无文件 —— 调 MCP <code>upload_html</code> 上传第一篇。</div>
+      <table id="file-table">
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>大小</th>
+            <th>时间</th>
+            <th>公开 URL</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="file-tbody"></tbody>
+      </table>
+    </section>
+
+    <section id="preview-section" hidden>
+      <h2>预览 <span id="preview-name"></span></h2>
+      <iframe id="preview-frame" sandbox="" title="preview"></iframe>
+    </section>
+  </main>
+
+  <div id="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -5,12 +5,17 @@
 
 ## 项目定位
 
-`yzr-agent-tools` 是一个围绕 AI coding agent 的本地运维/配置工具集合——目前收录 `model-switch`，
-后续会按需添加新工具。每个工具独立成 CLI,共享同一套仓库规约(测试隔离、原子写、未知字段透传等)。
+`yzr-agent-tools` 是一个围绕 AI coding agent 的本地运维/配置工具集合——收录：
 
-`model-switch` 是本仓库的首个工具:切换 AI coding agent(V1 主目标 Claude Code)使用的 Anthropic
-兼容模型。通过直接改写 agent 的全局配置文件(Claude Code 的 `~/.claude/settings.json` 等)实现
-——无 daemon、无代理、无协议转换。用户跑 `model-switch model use <name>` 然后重启 agent 即生效。
+- **`model-switch`**：切换 AI coding agent(V1 主目标 Claude Code)使用的 Anthropic 兼容模型。
+  直接改写 agent 的全局配置文件(Claude Code 的 `~/.claude/settings.json` 等)实现——无 daemon、
+  无代理、无协议转换。用户跑 `model-switch model use <name>` 然后重启 agent 即生效。
+- **`html-mcp`**：常驻 HTTP daemon,让 agent(本机 Claude Code / OpenCode)通过 MCP(Streamable HTTP)
+  把 `yzr-md-to-html` 等产出的自包含 HTML 推到远端 nginx server,同时提供一个浏览器管理页
+  (列表 / 预览 / 删除 / 复制公开 URL)。详见 `docs/html-mcp-design.md`。
+
+后续按需添加新工具。每个工具独立成 CLI(或 daemon),共享同一套仓库规约(测试隔离、原子写、
+未知字段透传等)。
 
 ## 仓库规约
 
@@ -51,30 +56,80 @@ model-switch model list
 model-switch model add glm-z1 --base-url ... --api-key <KEY> --model-name glm-4
 model-switch model use glm-z1            # 交互式默认切全部 agent;加 --driver <name> 只切单个
 model-switch status
+
+# html-mcp —— 常驻 daemon (远端 nginx server 跑)
+html-mcp init                            # 初始化 ~/.config/html-mcp/,生成 bearer token
+html-mcp serve                           # 前台启动 (Ctrl+C 停);生产建议 tmux / systemd 用户单元
+html-mcp token show                      # 打印 token,配到 agent MCP config
+html-mcp nginx-config                    # 打印 nginx server block 到 stdout
+html-mcp nginx-config --write            # 写到 ~/.config/html-mcp/nginx.conf.example
+html-mcp status                          # config / token / docroot 状态
 ```
 
 ## 高层结构
 
+两个工具并存,各自独立成模块:
+
 ```
-cli.py                  argparse CLI（仅做编排）
-   │
-   ├─→ paths.py            XDG 路径解析
-   ├─→ store.py            TOML I/O + 透传未知字段
-   │     ModelEntry / Registry / State
-   │
-   └─→ drivers/             各 agent 配置适配器
-         base.py         AgentDriver Protocol + DriverRegistry 单例
-         claude_code.py  读写 Claude Code 的 ~/.claude/settings.json
+src/
+├── model_switch/        # CLI;无 daemon
+│   ├── cli.py           argparse (仅做编排)
+│   ├── paths.py         XDG 路径解析
+│   ├── store.py         TOML I/O + 透传未知字段
+│   │     ModelEntry / Registry / State
+│   └── drivers/         各 agent 配置适配器 (claude_code / opencode)
+│
+└── html_mcp/            # 常驻 daemon
+    ├── cli.py           argparse (init / serve / token / config / nginx-config / status)
+    ├── paths.py         XDG 路径解析
+    ├── config.py        TOML I/O + 透传未知字段 + validate_for_serve
+    ├── auth.py          Bearer token 常量时间比较 + redact_token
+    ├── server.py        http.server.ThreadingHTTPServer + 路由 + body 限流
+    ├── mcp_handler.py   JSON-RPC Streamable HTTP + 4 个 tool
+    ├── api.py           /api/files /api/nginx-config /api/health
+    ├── storage.py       docroot 文件 CRUD (atomic write / 命名 regex / 路径穿越防护)
+    ├── nginx_config.py  assets/nginx.conf.template 渲染
+    ├── ui.py            ui/{index.html,style.css,app.js} 静态路由
+    └── ui/              管理页 (单文件 vanilla JS)
 ```
 
-**Driver 抽象是核心**：每个 agent 一个 driver 类，实现 `read() / apply(model, api_key) / current()`。
-加新 agent = 写一个 driver + 注册。当前内置 `claude-code` 与 `opencode`：
-- `claude-code` 写 `~/.claude/settings.json` 的 `env` 块（`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`）+ 顶层 `model` 字段。
-- `opencode` 写 OpenCode 全局配置 `$XDG_CONFIG_HOME/opencode/opencode.json`（默认 `~/.config/opencode/opencode.json`，**不是** `~/.opencode.json`）的 `provider.yzr` 块：`npm: @ai-sdk/anthropic`（Anthropic 兼容上游必需的 adapter，否则 OpenCode 报 "Provider not found" 退回默认模型）+ `options.baseURL`（**driver 自动补 `/v1`**：`@ai-sdk/anthropic` 只在 baseURL 后追加 `/messages`，而 store 里 `base_url` 不带 /v1——那正是 claude-code driver 要的形式（Claude Code 自己补 /v1）；语义差异封装在各自 driver，同一 `base_url` 服务两个 agent。不补会让 opencode 打到 `.../anthropic/messages`，上游回 404 包在 HTTP 200，ai-sdk 静默丢包 → 空响应、零 token、无 error）+ `options.apiKey` **直接写解析后的明文 key**（同 claude-code driver，**不用** `{env:VAR}` 占位符；密钥落盘，注意文件权限）+ 顶层 `model: yzr/<name>`。**故意不写 `limit`**：OpenCode schema 要求 `limit` 存在时必须有 `limit.output`，而我们只追踪 `context_window`，写半截 `{limit:{context}}` 会让整份配置校验失败、模型不可用。
-通过 `--driver <name>` 选单个、`--all-drivers` 选全部;省略时——交互式(TTY)默认应用到全部已注册 driver(回车即 claude-code 与 opencode 都切,符合「切模型就该到处生效」),非交互(CI/脚本,无 TTY)回退到默认 `claude-code`,避免脚本意外写多个 agent 配置。
+### `model_switch` 的 driver 抽象
+
+每个 agent 一个 driver 类,实现 `read() / apply(model, api_key) / current()`。当前内置 `claude-code`
+与 `opencode`:
+- `claude-code` 写 `~/.claude/settings.json` 的 `env` 块(`ANTHROPIC_AUTH_TOKEN` /
+  `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`)+ 顶层 `model` 字段。
+- `opencode` 写 OpenCode 全局配置 `$XDG_CONFIG_HOME/opencode/opencode.json`(默认
+  `~/.config/opencode/opencode.json`,**不是** `~/.opencode.json`)的 `provider.yzr` 块。
+  关键细节:`npm: @ai-sdk/anthropic`(Anthropic 兼容上游必需的 adapter,否则 OpenCode 报
+  "Provider not found" 退回默认模型);`options.baseURL` 由 driver 自动补 `/v1`
+  (`@ai-sdk/anthropic` 只在 baseURL 后追加 `/messages`,而 store 里 `base_url` 不带 /v1——那正是
+  claude-code driver 要的形式;语义差异封装在各自 driver);`options.apiKey` 直接写明文 key
+  (**不用** `{env:VAR}` 占位符;密钥落盘,注意文件权限)。**故意不写 `limit`**:OpenCode schema
+  要求 `limit` 存在时必须有 `limit.output`,而我们只追踪 `context_window`,写半截
+  `{limit:{context}}` 会让整份配置校验失败、模型不可用。
+
+通过 `--driver <name>` 选单个、`--all-drivers` 选全部;省略时——交互式(TTY)默认应用到全部
+已注册 driver(回车即 claude-code 与 opencode 都切,符合「切模型就该到处生效」),非交互
+(CI/脚本,无 TTY)回退到默认 `claude-code`,避免脚本意外写多个 agent 配置。
 新 agent = 实现一个 driver 并在 `cli._ensure_default_registered()` 注册。
 
-**单模型槽**：`model use <name>` 写一个模型到所选 agent 配置。driver 负责把 model 渲染成对应 agent 协议的字段。
+**单模型槽**:`model use <name>` 写一个模型到所选 agent 配置。driver 负责把 model 渲染成对应
+agent 协议的字段。
+
+### `html_mcp` 的形态
+
+常驻 HTTP daemon(`html-mcp serve`),监听 `127.0.0.1:8765`(默认),由 nginx 在前面 HTTPS 反代
++ 终结 TLS。同一进程暴露 4 类入口:
+- `POST /mcp` —— MCP Streamable HTTP(agent 走这里,`Authorization: Bearer <token>` 强制)
+- `GET /` —— HTML 管理页(浏览器,粘贴 token 到 localStorage)
+- `* /api/*` —— JSON API(管理页背后)
+- `/files/*` —— nginx 直接从 docroot 读取(daemon 不参与)
+
+工具表(`tools/call`)共 4 个:`upload_html` / `list_html` / `delete_html` / `get_public_url`。
+MCP 协议自实现约 150 行 JSON-RPC,无第三方 SDK 依赖。
+
+详见 `docs/html-mcp-design.md` / `docs/html-mcp-tasks.md`。
 
 ## 跨会话记忆（索引）
 
