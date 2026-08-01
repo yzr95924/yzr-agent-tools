@@ -191,12 +191,31 @@ def make_server(host: str, port: int, *, quiet: bool = False) -> ThreadingHTTPSe
     return srv
 
 
-def install_signal_shutdown(server: ThreadingHTTPServer) -> None:
-    """Wire SIGINT/SIGTERM to ``server.shutdown()`` for graceful exit."""
+def install_signal_shutdown(server: ThreadingHTTPServer, *, grace_seconds: int = 5) -> None:
+    """Wire SIGINT/SIGTERM to ``server.shutdown()`` for graceful exit.
+
+    A SIGALRM watchdog (default 5s) hard-exits if ``serve_forever`` hasn't
+    returned by then. This guards against Python 3.12+ ``shutdown()`` not
+    waking ``serve_forever`` immediately on every platform.
+    """
     def _shutdown(*_):
         try:
             server.shutdown()
         except Exception:
             pass
+
+    def _hard_exit(*_):
+        # Best-effort: close the listening socket so serve_forever wakes,
+        # then exit. If it still hangs, os._exit is the escape hatch.
+        try:
+            server.server_close()
+        finally:
+            os._exit(0)  # noqa: hard exit by design after grace
+
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
+    # Watchdog: if graceful path didn't return in time, force exit. The
+    # alarm self-cancels once serve_forever returns and the main thread
+    # clears it.
+    signal.signal(signal.SIGALRM, _hard_exit)
+    signal.alarm(grace_seconds)

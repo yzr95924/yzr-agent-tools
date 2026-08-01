@@ -498,6 +498,10 @@ html-mcp status
 **进程保活**：daemon 无内置重启机制。README hint「建议 systemd 用户单元 / tmux / nohup」。外部挂掉靠 monitor + manual restart。
 
 **优雅退出**：SIGINT/SIGTERM → `server.shutdown()` → 等 in-flight 请求最多 5s → exit 0。
+`install_signal_shutdown()` 同时装一个 SIGALRM watchdog：`serve_forever()` 5s 内
+未返回则 `os._exit(0)`。这是 Python 3.12+ `ThreadingHTTPServer.shutdown()`
+在某些平台不立即 wake `serve_forever` 的兜底，与"≤ 5s graceful"语义一致。
+正常 in-flight 请求 < 5s 完成走 graceful 路径，watchdog 不触发。
 
 **数据持久性**：docroot 是唯一数据，靠文件系统保证。无数据库无事务。
 

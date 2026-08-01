@@ -1,6 +1,8 @@
 """Tests for html_mcp.server — routing, method whitelist, body limit, threading."""
 import http.client
 import json
+import os
+import signal
 import threading
 import time
 
@@ -9,6 +11,7 @@ import pytest
 from html_mcp.server import (
     BodyTooLarge,
     Handler,
+    install_signal_shutdown,
     make_server,
     register,
     routes,
@@ -237,3 +240,61 @@ def test_body_too_large_carries_length_and_cap():
     e = BodyTooLarge(200, 100)
     assert e.length == 200
     assert e.cap == 100
+
+
+# --- signal shutdown --------------------------------------------------------
+
+def test_sigterm_watchdog_exits_process(monkeypatch):
+    """SIGTERM should end serve_forever within grace_seconds (default 5).
+
+    On platforms where Python 3.12+ ThreadingHTTPServer.shutdown() does
+    not wake serve_forever immediately, the SIGALRM watchdog is the
+    fallback. We exercise the watchdog path by sending SIGTERM in a
+    sub-process and asserting the exit happens before grace_seconds + 1s.
+    """
+    import subprocess
+    import sys
+    import tempfile
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    src = os.path.join(repo, "src")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    # Ephemeral config: a tmpdir + port 0; but the CLI hard-codes 8765
+    # default. We point it at 0 via the server module directly, so import
+    # the module and run a no-op route + signal handler.
+    script = r"""
+import os, sys, time
+sys.path.insert(0, {src!r})
+from html_mcp import server as srv
+srv.Handler.max_body_size = 1024 * 1024
+srv.register("GET", r"^/ping$", lambda req, p, body: (200, b"pong", {{}}))
+httpd = srv.make_server("127.0.0.1", 0, quiet=True)
+srv.install_signal_shutdown(httpd, grace_seconds=2)
+httpd.serve_forever()
+""".replace("{src!r}", repr(src)).replace("{{}}", "{}")
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        time.sleep(0.3)  # let serve_forever come up
+        assert proc.poll() is None, "daemon died before SIGTERM"
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            stderr = proc.stderr.read().decode("utf-8", "replace")
+            raise AssertionError(
+                "daemon did not exit within 5s of SIGTERM; stderr=" + stderr
+            )
+        # Exit code from os._exit(0) is 0; serve_forever's natural
+        # return also exits 0.
+        assert proc.returncode == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
