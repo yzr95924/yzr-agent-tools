@@ -66,6 +66,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self._dispatch()
 
+    def do_PATCH(self) -> None:
+        self._dispatch()
+
     def do_DELETE(self) -> None:
         self._dispatch()
 
@@ -160,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
         hdrs = dict(headers or {})
         hdrs.setdefault("Content-Length", str(len(body)))
         # Tell well-behaved clients we don't speak anything other than GET/POST/DELETE.
-        hdrs.setdefault("Allow", "GET, POST, DELETE")
+        hdrs.setdefault("Allow", "GET, POST, PATCH, DELETE")
         for k, v in hdrs.items():
             self.send_header(k, v)
         self.end_headers()

@@ -2,6 +2,7 @@
 import http.client
 import json
 import threading
+from http.cookies import SimpleCookie
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from html_mcp.api import register_routes
 from html_mcp.config import Config
 from html_mcp.server import make_server, routes
+from html_mcp.storage import annotations as anno_store
 
 
 @pytest.fixture
@@ -147,5 +149,224 @@ def test_list_files_includes_annotation_count_nonzero(http_server):
     try:
         data = json.loads(response.read())
         assert data["files"][0]["annotation_count"] == 1
+    finally:
+        conn.close()
+
+
+def _cookie_header(cookie_value):
+    return {"Cookie": "anno_session=" + cookie_value}
+
+
+def _patch(host, port, path, body=b"", headers=None):
+    hdrs = {"Content-Length": str(len(body))}
+    if headers:
+        hdrs.update(headers)
+    conn = http.client.HTTPConnection(host, port, timeout=2)
+    try:
+        conn.request("PATCH", path, body=body, headers=hdrs)
+        return conn.getresponse()
+    finally:
+        conn.close()
+
+
+def test_get_annotations_public_returns_list(http_server):
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    anno_store.add(docroot, "design.html", "q1", "c1", "tok-x")
+    anno_store.add(docroot, "design.html", "q2", "c2", "tok-y")
+    host, port = srv.server_address
+    conn, response = _get(host, port, "/api/files/design.html/annotations")
+    try:
+        assert response.status == 200
+        data = json.loads(response.read())
+        assert data["name"] == "design.html"
+        assert len(data["annotations"]) == 2
+    finally:
+        conn.close()
+
+
+def test_post_annotation_without_cookie_returns_401(http_server):
+    srv, _ = http_server
+    host, port = srv.server_address
+    conn, response = _post(
+        host,
+        port,
+        "/api/files/design.html/annotations",
+        body=b'{"quote":"q","comment":"c"}',
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        assert response.status == 401
+    finally:
+        response.read()
+        conn.close()
+
+
+def test_post_annotation_with_cookie_and_origin_creates(http_server):
+    """End-to-end: get a cookie via /api/auth, then POST annotation."""
+    from html_mcp.auth_anno import ANNO_COOKIE_NAME, sign_cookie
+    srv, cfg = http_server
+    host, port = srv.server_address
+    # Step 1: get cookie.
+    conn, response = _post(
+        host,
+        port,
+        "/api/auth",
+        headers={"Authorization": "Bearer " + cfg.token},
+    )
+    try:
+        assert response.status == 204
+        sc = response.getheader("Set-Cookie")
+        cookie = SimpleCookie()
+        cookie.load(sc)
+        cookie_value = cookie[ANNO_COOKIE_NAME].value
+    finally:
+        response.read()
+        conn.close()
+
+    # Step 2: POST annotation with cookie + matching Origin.
+    conn, response = _post(
+        host,
+        port,
+        "/api/files/design.html/annotations",
+        body=b'{"quote":"sudo mkdir","comment":"change"}',
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Content-Type": "application/json",
+            "Origin": "https://notes.example.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 201
+        data = json.loads(response.read())
+        assert data["quote"] == "sudo mkdir"
+        assert data["comment"] == "change"
+        assert data["author"].startswith("tk_")
+    finally:
+        conn.close()
+
+
+def test_post_annotation_with_wrong_origin_returns_403(http_server):
+    from html_mcp.auth_anno import ANNO_COOKIE_NAME, sign_cookie
+    srv, cfg = http_server
+    host, port = srv.server_address
+    conn, response = _post(
+        host,
+        port,
+        "/api/auth",
+        headers={"Authorization": "Bearer " + cfg.token},
+    )
+    try:
+        sc = response.getheader("Set-Cookie")
+        cookie = SimpleCookie()
+        cookie.load(sc)
+        cookie_value = cookie[ANNO_COOKIE_NAME].value
+    finally:
+        response.read()
+        conn.close()
+
+    conn, response = _post(
+        host,
+        port,
+        "/api/files/design.html/annotations",
+        body=b'{"quote":"q","comment":"c"}',
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Content-Type": "application/json",
+            "Origin": "https://evil.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 403
+    finally:
+        response.read()
+        conn.close()
+
+
+def test_patch_annotation_by_author_updates_comment(http_server):
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    entry = anno_store.add(docroot, "design.html", "q", "old", cfg.token)
+
+    from html_mcp.auth_anno import ANNO_COOKIE_NAME, sign_cookie
+    cookie_value = sign_cookie(cfg.token)
+
+    host, port = srv.server_address
+    response = _patch(
+        host,
+        port,
+        "/api/files/design.html/annotations/" + entry["id"],
+        body=b'{"comment":"new"}',
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Content-Type": "application/json",
+            "Origin": "https://notes.example.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 200
+        data = json.loads(response.read())
+        assert data["comment"] == "new"
+    finally:
+        response.read()
+
+
+def test_patch_by_other_token_returns_403(http_server):
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    entry = anno_store.add(docroot, "design.html", "q", "old", "other-token")
+
+    from html_mcp.auth_anno import ANNO_COOKIE_NAME, sign_cookie
+    cookie_value = sign_cookie(cfg.token)
+
+    host, port = srv.server_address
+    response = _patch(
+        host,
+        port,
+        "/api/files/design.html/annotations/" + entry["id"],
+        body=b'{"comment":"hijacked"}',
+        headers={
+            "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+            "Content-Type": "application/json",
+            "Origin": "https://notes.example.com",
+            "Host": "notes.example.com",
+        },
+    )
+    try:
+        assert response.status == 403
+    finally:
+        response.read()
+
+
+def test_delete_annotation_by_author_succeeds(http_server):
+    srv, cfg = http_server
+    docroot = Path(cfg.docroot)
+    entry = anno_store.add(docroot, "design.html", "q", "c", cfg.token)
+
+    from html_mcp.auth_anno import ANNO_COOKIE_NAME, sign_cookie
+    cookie_value = sign_cookie(cfg.token)
+
+    host, port = srv.server_address
+    conn = http.client.HTTPConnection(host, port, timeout=2)
+    try:
+        conn.request(
+            "DELETE",
+            "/api/files/design.html/annotations/" + entry["id"],
+            headers={
+                "Cookie": ANNO_COOKIE_NAME + "=" + cookie_value,
+                "Origin": "https://notes.example.com",
+                "Host": "notes.example.com",
+            },
+        )
+        response = conn.getresponse()
+        try:
+            assert response.status == 200
+            assert json.loads(response.read()) == {"deleted": True}
+            assert anno_store.count(docroot, "design.html") == 0
+        finally:
+            response.read()
     finally:
         conn.close()
