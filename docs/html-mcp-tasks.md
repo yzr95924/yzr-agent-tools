@@ -4,7 +4,7 @@
 >
 > | 状态 | 关联设计文档 | 设计版本 | 创建日期 | 最近更新 |
 > | --- | --- | --- | --- | --- |
-> | 未开始 | [`html-mcp-design.md`](./html-mcp-design.md) | 草稿（评审未通过） | 2026-08-01 | 2026-08-01 |
+> | T1–T12 已验收（V1）；T13+ 进行中（批注扩展） | [`html-mcp-design.md`](./html-mcp-design.md) | V1 + 批注扩展（草稿评审中） | 2026-08-01 | 2026-08-01 |
 
 <!-- 本文件"活文档"段与 §3 循环纪律，与 SKILL.md 执行原则「设计 SSOT、任务书活文档」故意重复：
 生成的任务书脱离 skill 给执行者单读，必须自包含。SSOT 在 SKILL.md 执行原则；
@@ -34,18 +34,24 @@
 
 | 编号 | 任务 | 关联功能点 | 设计落点 | 验收场景 | 依赖 | 状态 | 预估 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| T1 | `paths.py` + `config.py`（XDG 解析 + TOML I/O + 未知字段透传）+ 单元测试 | F16, F9 | §7.2, §4 | S21, S32 | 无 | 未开始 | 半天 |
-| T2 | `storage.py`（原子写 / 文件名 regex / 大小上限 / 路径穿越 / 冲突 + force）+ 单元测试 | F1, F17, F18 | §7.1.2, §7.3, §4 | S4, S12, S13, S14, S15, S18, S19, S28, S33, S34 | T1 | 未开始 | 1 天 |
-| T3 | `auth.py`（Bearer 常量时间比较 + redact_token）+ 单元测试 | F18 | §7.3, §9.3 | S16, S17 | T1 | 未开始 | 半天 |
-| T4 | `server.py`（HTTP server 装配 + 路由分发 + method 白名单 + body 限流）+ 单元测试 | — | §7.1.1, §7.3 | S3, S15 | T1 | 未开始 | 1 天 |
-| T5 | `api.py`（`/api/files` GET/DELETE、`/api/nginx-config`、`/api/health`）+ 单元测试 | F2, F3, F5, F7, F13 | §7.3 | S5, S6, S10, S23, S24 | T2, T3, T4 | 未开始 | 1 天 |
-| T6 | `mcp_handler.py`（JSON-RPC + Streamable HTTP + 4 个 tool）+ 单元测试 | F1, F2, F3, F4 | §7.3, §7.1.2 | S4, S5, S6, S7, S12, S13, S14, S15, S16, S17, S18, S28, S33, S34, S35 | T2, T3, T4 | 未开始 | 1.5 天 |
-| T7 | `ui/index.html` + `ui/style.css`（管理页：列表 / iframe 预览 / 删除 / 复制 URL / token 输入框）+ smoke 测试 | F5, F6, F7, F8 | §7.3, §9.3 | S8, S9, S10, S11 | T4 | 未开始 | 1 天 |
-| T8 | `assets/nginx.conf.template` + `nginx-config` 渲染逻辑 + 单元测试 | F13 | §7.3, §12 | S2, S23, S24 | T1 | 未开始 | 半天 |
-| T9 | `cli.py`（9 个子命令）+ 单元测试 | F9–F14 | §7.3, §12 | S1, S2, S3, S11, S21, S22, S31, S32 | T1–T8 | 未开始 | 1.5 天 |
-| T10 | `scripts/install.sh` / `scripts/uninstall.sh` 扩展 + `bin/html-mcp` wrapper + `completions/html-mcp.{bash,fish}` + 测试 | F15 | §7.4, §12 | S1, S26, S27 | T9 | 未开始 | 1 天 |
-| T11 | README.md / AGENTS.md 更新（新增 html-mcp 工具章节） | — | §1, §12 | — | T9 | 未开始 | 半天 |
-| T12 | 端到端 smoke：跑一次 install → init → serve → nginx-config → 上传 → list → delete，确认全链路 | — | §12 | S1–S11 全跑一遍 | T1–T11 | 未开始 | 半天 |
+| T1 | `paths.py` + `config.py`（XDG 解析 + TOML I/O + 未知字段透传）+ 单元测试 | F16, F9 | §7.2, §4 | S21, S32 | 无 | 已验收 | 半天 |
+| T2 | `storage.py`（原子写 / 文件名 regex / 大小上限 / 路径穿越 / 冲突 + force）+ 单元测试 | F1, F17, F18 | §7.1.2, §7.3, §4 | S4, S12, S13, S14, S15, S18, S19, S28, S33, S34 | T1 | 已验收 | 1 天 |
+| T3 | `auth.py`（Bearer 常量时间比较 + redact_token）+ 单元测试 | F18 | §7.3, §9.3 | S16, S17 | T1 | 已验收 | 半天 |
+| T4 | `server.py`（HTTP server 装配 + 路由分发 + method 白名单 + body 限流）+ 单元测试 | — | §7.1.1, §7.3 | S3, S15 | T1 | 已验收 | 1 天 |
+| T5 | `api.py`（`/api/files` GET/DELETE、`/api/nginx-config`、`/api/health`）+ 单元测试 | F2, F3, F5, F7, F13 | §7.3 | S5, S6, S10, S23, S24 | T2, T3, T4 | 已验收 | 1 天 |
+| T6 | `mcp_handler.py`（JSON-RPC + Streamable HTTP + 4 个 tool）+ 单元测试 | F1, F2, F3, F4 | §7.3, §7.1.2 | S4, S5, S6, S7, S12, S13, S14, S15, S16, S17, S18, S28, S33, S34, S35 | T2, T3, T4 | 已验收 | 1.5 天 |
+| T7 | `ui/index.html` + `ui/style.css`（管理页：列表 / iframe 预览 / 删除 / 复制 URL / token 输入框）+ smoke 测试 | F5, F6, F7, F8 | §7.3, §9.3 | S8, S9, S10, S11 | T4 | 已验收 | 1 天 |
+| T8 | `assets/nginx.conf.template` + `nginx-config` 渲染逻辑 + 单元测试 | F13 | §7.3, §12 | S2, S23, S24 | T1 | 已验收 | 半天 |
+| T9 | `cli.py`（9 个子命令）+ 单元测试 | F9–F14 | §7.3, §12 | S1, S2, S3, S11, S21, S22, S31, S32 | T1–T8 | 已验收 | 1.5 天 |
+| T10 | `scripts/install.sh` / `scripts/uninstall.sh` 扩展 + `bin/html-mcp` wrapper + `completions/html-mcp.{bash,fish}` + 测试 | F15 | §7.4, §12 | S1, S26, S27 | T9 | 已验收 | 1 天 |
+| T11 | README.md / AGENTS.md 更新（新增 html-mcp 工具章节） | — | §1, §12 | — | T9 | 已验收 | 半天 |
+| T12 | 端到端 smoke：跑一次 install → init → serve → nginx-config → 上传 → list → delete，确认全链路 | — | §12 | S1–S11 全跑一遍 | T1–T11 | 已验收 | 半天 |
+| T13 | `storage/annotations.py`（读 / 写 / 改 / 删 / 列 / 计数；`<name>.meta` 边车 JSON；ULID；author hash；atomic write）+ 单元测试 | F21, F23 | §4, §7.2, §9.3 | S37, S38, S40 | T2 | 未开始 | 1 天 |
+| T14 | `api.py` 扩展：`POST /api/auth` + 批注 REST CRUD（GET/POST/PATCH/DELETE）+ session cookie + CSRF + `list_files` 增 `annotation_count` + 单元测试 | F20, F21, F24 | §7.3, §9.3 | S36, S37, S38, S8' | T3, T5, T13 | 未开始 | 1.5 天 |
+| T15 | `mcp_handler.py` 扩展：`list_annotations` / `delete_annotation` 2 个 tool + 单元测试 | F23 | §7.3 | S39, S40 | T6, T13 | 未开始 | 半天 |
+| T16 | `ui/index.html` + `ui/style.css` + `ui/app.js` 扩展：批注模式入口（header 按钮 + token 弹窗 + 状态切换）+ iframe 选区 → quote + 高亮注入（`<mark data-anno-id>`）+ 批注侧栏 + smoke 测试 | F19, F22, F25 | §7.3, §9.3 | S36, S37, S38, S39 | T7, T14 | 未开始 | 2 天 |
+| T17 | `nginx.conf.template` + README 更新：加 `proxy_cookie_path ... SameSite=Lax` 行 + `limit_req` 注释 + nginx.conf.example | — | §9.3, §12 | S36 | T8, T14 | 未开始 | 半天 |
+| T18 | 端到端 smoke：浏览器进入批注模式 → 写批注 → 高亮 → 改/删 → agent `list_annotations` 看批注改进 HTML | — | §9.3, §12 | S36–S40 全跑一遍 | T13–T17 | 未开始 | 半天 |
 
 纪律：
 
@@ -61,82 +67,129 @@
 
 ### T1 paths.py + config.py + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/paths.py` + `config.py`，含未知字段透传；`tests/test_html_mcp_paths.py` + `test_html_mcp_config.py` 全过
+- 验收：S21（损坏 config → 退出码 2）/ S32（权限警告）覆盖；与 model_switch store.py 同规约
 
 ### T2 storage.py + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/storage.py` + `tests/test_html_mcp_storage.py`；atomic write / name regex / path traversal / case-insensitive conflict 全覆盖
+- 验收：S4 / S12 / S13 / S14 / S15 / S18 / S19 / S28 / S33 / S34 覆盖
 
 ### T3 auth.py + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/auth.py` + `tests/test_html_mcp_auth.py`；`hmac.compare_digest` 常量时间 + `redact_token`
+- 验收：S16 / S17（Bearer 缺失 / 错误）覆盖
 
 ### T4 server.py + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/server.py` + `tests/test_html_mcp_server.py`；ThreadingHTTPServer + 路由注册 + 405 Allow + body 限流
+  - 2026-08-01（commit `bcc3601`）补：SIGALRM watchdog 兜底优雅退出
+- 验收：S3（启动）/ S15（size 突破 413）覆盖；测试同时覆盖 SIGTERM watchdog
 
 ### T5 api.py + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/api.py` + `tests/test_html_mcp_api.py`
+  - 2026-08-01（commit `6d46ea2`）调整：`GET /api/files` 去 Bearer（公开元数据）；保留 Bearer 在 `DELETE /api/files/<name>` 与 `GET /api/nginx-config`
+- 验收：S5 / S6 / S10 / S23 / S24 覆盖
 
 ### T6 mcp_handler.py + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/mcp_handler.py` + `tests/test_html_mcp_mcp.py`；JSON-RPC 2.0 自实现 + 4 个 tool + Bearer 鉴权
+- 验收：S4 / S5 / S6 / S7 / S12–S15 / S16 / S17 / S18 / S28 / S33 / S34 / S35 覆盖
 
 ### T7 ui/index.html + style.css + smoke
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/ui/{index.html,style.css,app.js}` + `tests/test_html_mcp_ui.py`
+  - 2026-08-01（commit `6d46ea2`）调整：删除"操作"列 + token-bar；token 不再走 localStorage；401 触发版本不匹配 toast
+- 验收：S8 / S9 / S11 覆盖；S10 验证管理页无删除按钮
 
 ### T8 nginx.conf.template + nginx-config 渲染 + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/assets/nginx.conf.template` + `nginx_config.py` + `tests/test_html_mcp_nginx.py`
+- 验收：S2 / S23 / S24 覆盖
 
 ### T9 cli.py + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `1b466fa`）交付：`src/html_mcp/cli.py` + `tests/test_html_mcp_cli.py`；9 个子命令全跑
+- 验收：S1 / S2 / S3 / S11 / S21 / S22 / S31 / S32 覆盖
 
 ### T10 install.sh/uninstall.sh + wrapper + completions + 测试
 
-- 状态：未开始
+- 状态：已验收
 - 执行记录：
-  - （待填）
-- 验收：（待填）
+  - 2026-08-01（commit `b98826b`）交付：`bin/html-mcp` wrapper
+  - 2026-08-01（commit `152e21f`）调整：bin/ wrappers 不入库；install.sh 重新生成
+- 验收：S1 / S26 / S27 覆盖
 
 ### T11 README.md / AGENTS.md 更新
 
+- 状态：已验收
+- 执行记录：
+  - 2026-08-01（commit `6809322`）交付：`src/html_mcp/README.md` + `AGENTS.md` 更新（多工具形态）
+  - 2026-08-01（commit `6d46ea2`）调整：管理页只读 + token 不在 UI 章节
+- 验收：文档与代码一致
+
+### T12 端到端 smoke
+
+- 状态：已验收
+- 执行记录：
+  - 2026-08-01（commit `1b466fa`）交付：`tests/test_html_mcp_smoke.py`；install → init → serve → nginx-config → upload → list → delete 全链路
+- 验收：S1–S11 全过
+
+### T13 storage/annotations.py + 测试
+
 - 状态：未开始
 - 执行记录：
   - （待填）
 - 验收：（待填）
 
-### T12 端到端 smoke
+### T14 api.py 扩展（/api/auth + 批注 REST CRUD）
+
+- 状态：未开始
+- 执行记录：
+  - （待填）
+- 验收：（待填）
+
+### T15 mcp_handler.py 扩展（list_annotations / delete_annotation）
+
+- 状态：未开始
+- 执行记录：
+  - （待填）
+- 验收：（待填）
+
+### T16 ui/index.html + style.css + app.js 扩展（批注模式 + iframe 高亮）
+
+- 状态：未开始
+- 执行记录：
+  - （待填）
+- 验收：（待填）
+
+### T17 nginx.conf.template + README 更新（SameSite + limit_req）
+
+- 状态：未开始
+- 执行记录：
+  - （待填）
+- 验收：（待填）
+
+### T18 端到端 smoke（批注模式）
 
 - 状态：未开始
 - 执行记录：
@@ -156,7 +209,7 @@
 
 | 日期 | 设计文档变更（章节 + 摘要） | 同步更新的任务 | 操作人 |
 | --- | --- | --- | --- |
-|  |  |  |  |
+| 2026-08-01 | §1 假设 A3 拆 A3 / A3'(单 token 浏览器+agent 共用)；§2 非目标 N8 改写 + N10 / N11；§3 F19–F25；§4 批注字段 / cookie / CSRF / nginx 限流；§5 S36–S40；§7.2 `.meta` schema；§7.3 `/api/auth` + 批注 REST + MCP `list_annotations` / `delete_annotation`；§8 异常 +5；§9.3 批注写接口安全段；§10 否决 J / K；§13 Q8–Q11 | T13–T18 全新增（§1 §11 段落同步更新） | Zuoru YANG |
 
 循环纪律（偏差回流）：
 
