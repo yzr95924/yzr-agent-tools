@@ -15,9 +15,6 @@
   `~/.claude.json` 的 `mcpServers` 与 OpenCode 的 `opencode.json` 的 `mcp`(位置/字段/type 词表各异),
   只改自己那一段、其余原样保留。与 model-switch 同构(模型 vs MCP 服务)。详见 `docs/mcp-plugin-mgr-design.md`。
 
-> **`html-mcp` 已于 2026-08 迁出**：独立为单工具仓库 [`agent-html-drop`](https://github.com/yzr95924/agent-html-drop)
-> （`~/agent-html-drop`），本仓库不再维护该工具。
-
 后续按需添加新工具。每个工具独立成 CLI(或 daemon),共享同一套仓库规约(测试隔离、原子写、
 未知字段透传等)。
 

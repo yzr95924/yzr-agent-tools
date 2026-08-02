@@ -12,8 +12,7 @@
 | [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI;管理 Claude Code / OpenCode 的自定义 MCP 服务(起点:Outline wiki),一份注册表翻译到各 agent | 已发布 |
 
 > 新工具按需添加;同一份仓库规约对所有工具生效。完整仓库规约、目录结构、跨工具注意事项
-> 见 [`AGENTS.md`](AGENTS.md)。**`html-mcp` 已于 2026-08 迁出**,独立为
-> [`agent-html-drop`](https://github.com/yzr95924/agent-html-drop) 单工具仓库。
+> 见 [`AGENTS.md`](AGENTS.md)。
 
 ## 一句话简介
 
