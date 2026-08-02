@@ -13,6 +13,10 @@
 - **`html-mcp`**：常驻 HTTP daemon,让 agent(本机 Claude Code / OpenCode)通过 MCP(Streamable HTTP)
   把 `yzr-md-to-html` 等产出的自包含 HTML 推到远端 nginx server,同时提供一个浏览器管理页
   (列表 / 预览 / 删除 / 复制公开 URL)。详见 `docs/html-mcp-design.md`。
+- **`mcp-plugin-mgr`**：CLI,管理 Claude Code / OpenCode 的自定义 MCP 服务(起点 Outline wiki)。维护
+  一份 `~/.config/mcp-plugin-mgr/servers.toml` 作为规范真源,driver 把它翻译进 Claude Code 的
+  `~/.claude.json` 的 `mcpServers` 与 OpenCode 的 `opencode.json` 的 `mcp`(位置/字段/type 词表各异),
+  只改自己那一段、其余原样保留。与 model-switch 同构(模型 vs MCP 服务)。详见 `docs/mcp-plugin-mgr-design.md`。
 
 后续按需添加新工具。每个工具独立成 CLI(或 daemon),共享同一套仓库规约(测试隔离、原子写、
 未知字段透传等)。
@@ -24,7 +28,7 @@
 
 ## 仓库规约
 
-- **测试绝不能触碰真实的 agent 全局配置**（如 `~/.claude/settings.json`）。当前 Claude Code session
+- **测试绝不能触碰真实的 agent 全局配置**（如 `~/.claude/settings.json`、`~/.claude.json`）。当前 Claude Code session
   用的就是真配置；任何 driver bug 都会让 session 立刻 API error 报。`tests/conftest.py` 的 autouse fixture
   强制：snapshot 真实配置的 mtime + sha256，重定向 `paths.*` 到 tmp，替换 registry driver 指向 tmp，
   测试结束后断言真配置字节完全一致。详细 [[test-isolation-invariants]]。
@@ -47,6 +51,9 @@
 bash scripts/install.sh
 # 卸载（删 wrapper + 剥 PATH marker + 删补全 symlink；不动 ~/.config/model-switch/ 下的数据）
 bash scripts/uninstall.sh
+# 单工具增删：每工具一个 scripts/<tool>.sh，参数 install|uninstall（参考 scripts/html-mcp.sh
+# 的子命令风格；只动该工具 wrapper + 补全，不改 shell rc）。例：
+#   scripts/mcp-plugin-mgr.sh install ; scripts/html-mcp.sh uninstall
 
 # 测试 — 需要 pytest + pytest-cov 自装（pip install --user pytest pytest-cov）。
 # pyproject.toml 的 [tool.pytest.ini_options].pythonpath 已含 src/，
@@ -69,6 +76,16 @@ html-mcp token show                      # 打印 token,配到 agent MCP config
 html-mcp nginx-config                    # 打印 nginx server block 到 stdout
 html-mcp nginx-config --write            # 写到 ~/.config/html-mcp/nginx.conf.example
 html-mcp status                          # config / token / docroot 状态
+
+# mcp-plugin-mgr —— 管理 agent 的自定义 MCP 服务(Outline 起步)
+mcp-plugin-mgr init                      # 初始化 ~/.config/mcp-plugin-mgr/
+mcp-plugin-mgr add outline --url ... --token ol_api_... --all-drivers   # 加服务(preset 名或显式 flag)
+mcp-plugin-mgr list                      # 列已注册服务(+ 每 agent 是否已写入)
+mcp-plugin-mgr remove outline --all-drivers
+mcp-plugin-mgr presets                   # 列内置 preset(outline / memos)
+mcp-plugin-mgr status
+mcp-plugin-mgr test outline              # 探活:发 initialize 握手,诊断连不通根因(含 ddnsto middlebox)
+# add/remove 还可加 --auto-allow:一并把该 MCP 的工具写进 Claude Code permissions.allow(避免 auto-mode 拦大文档)
 ```
 
 ## 高层结构
@@ -112,6 +129,22 @@ src/
     │   ├── style.css
     │   └── app.js
     └── README.md                详细用户文档
+│
+└── mcp_plugin_mgr/              # CLI;管理 agent 的自定义 MCP 服务
+    ├── cli.py                   argparse (init/add/list/remove/presets/status)
+    ├── __main__.py              python -m mcp_plugin_mgr 入口
+    ├── paths.py                 XDG 路径(config_dir / servers_file / claude_json_file / opencode_config_file)
+    ├── _compat.py               TOML loader (tomllib/tomli) + 手写 dumper(自包含副本)
+    ├── store.py                 servers.toml I/O + 透传未知字段 (ServerEntry / ServerRegistry)
+    ├── presets/                 内置 preset 包(每 plugin 一文件:_types/outline/memos;__init__ 聚合)
+    ├── probe.py                 test 命令:MCP initialize 握手探活 + 故障分类(http middlebox / stdio)
+    ├── allow.py                 --auto-allow:写 Claude Code permissions.allow(保留 env/model)
+    ├── drivers/
+    │   ├── base.py              McpDriver Protocol + BaseMcpDriver(通用 JSON read/list/add/remove)+ Registry
+    │   ├── _atomic.py           atomic JSON write(driver 共享)
+    │   ├── claude_code.py       ~/.claude.json mcpServers 适配器(http/stdio)
+    │   └── opencode.py          opencode.json mcp 适配器(remote/local;command 合并数组;environment)
+    └── README.md                详细用户文档
 ```
 
 ### `model_switch` 的 driver 抽象
@@ -151,6 +184,29 @@ agent 协议的字段。
 MCP 协议自实现约 150 行 JSON-RPC,无第三方 SDK 依赖。
 
 详见 `docs/html-mcp-design.md` / `docs/html-mcp-tasks.md`。
+
+### `mcp_plugin_mgr` 的形态
+
+CLI(`mcp-plugin-mgr`),与 model-switch 同构:一份规范注册表(`~/.config/mcp-plugin-mgr/servers.toml`)
++ 每 agent 一个 driver 负责翻译。两个 driver:
+- `claude-code` 写 `~/.claude.json` 的 `mcpServers`(**不是** `~/.claude/settings.json`——后者归
+  model-switch;两者是不同文件)。http→`{type:http,url,headers?}`,stdio→`{type:stdio,command,args,env}`。
+- `opencode` 写 `opencode.json` 的 `mcp`。词表不同:http→`{type:remote,url,enabled:true,headers?}`,
+  stdio→`{type:local,command:[cmd]+args,enabled:true,environment?}`(`command` 是 cmd+args 合并的数组,
+  env 字段叫 `environment`)。
+
+`BaseMcpDriver` 实现通用 read/list/add/remove(只动 `self._KEY` 那段,保留文件里其它键——Claude Code 的
+userID/onboarding、OpenCode 的 provider/model/$schema);子类只设 `_KEY` + `render(entry)`。V1 命令面
+**增删查 + test 探活**(add/list/remove/test/presets/status),不做 enable/disable:两 agent 的 enable 语义不对称
+(Claude Code 无原生 disable,OpenCode 有 `enabled`),V1 回避。内置 preset:`outline` + `memos`(均 http,需 --url/--token);
+任意 http/stdio MCP 不在 preset 里也能用 flag 配。`test` 命令(`probe.py`)对**每种传输一套流程**:
+http 发 `initialize` 握手按状态分类(ok/auth/404/conn/middlebox-empty),stdio spawn + 握手;专门诊断
+`*.ddnsto.com` 那类反代盒(http 返空 200 → 自动探 https 变体并给修复)。**协议握手共享,根因解读 per-plugin**:
+每个 preset 可选声明 `diagnose(result)` 覆盖层,`test` 在通用 probe 返回后调用它叠专属根因(outline→Settings→AI/ddnsto;
+memos→Access Tokens/v0.27+/`/mcp`)。`~/.claude.json` 同时是当前 session 自己 MCP 服务所在地,测试隔离把它纳入
+mtime+sha256 快照(见上「仓库规约」)。
+
+详见 `docs/mcp-plugin-mgr-design.md`。
 
 ## 跨会话记忆（索引）
 

@@ -17,7 +17,15 @@
 #     html-mcp-service stop       # SIGTERM, then SIGKILL after 5s
 #     html-mcp-service restart    # stop + start
 #     html-mcp-service status     # pid + uptime + port listener check
+#     html-mcp-service install    # write bin/html-mcp wrapper + link completions
+#     html-mcp-service uninstall  # remove wrapper + completion links
 set -euo pipefail
+
+# Shared install helpers (write_wrapper / do_install_tool / do_uninstall_tool).
+# Sourced BEFORE the local log() below, so this script's timestamped log()
+# overrides the plain one from _common.sh.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/_common.sh"
 
 PROG="html-mcp"
 SCRIPT_NAME="html-mcp-service"
@@ -215,7 +223,17 @@ cmd_status() {
 
 usage() {
     cat >&2 <<EOF
-Usage: $SCRIPT_NAME {start|stop|restart|status}
+Usage: $SCRIPT_NAME {start|stop|restart|status|install|uninstall}
+
+Service control:
+  start      background; logs to daemon.log
+  stop       SIGTERM, then SIGKILL after 5s
+  restart    stop + start
+  status     pid + uptime + port listener check
+
+Install (manage ONE tool's wrapper + completions; does not touch shell rc):
+  install    Write the $PROG wrapper ($BIN_DIR/$PROG) and link bash/fish completions.
+  uninstall  Remove the $PROG wrapper and its completion symlinks.
 
 Env:
   HTML_MCP_STATE_DIR   default: \$HOME/.config/html-mcp
@@ -233,6 +251,8 @@ case "$sub" in
     stop)    cmd_stop ;;
     restart) cmd_restart ;;
     status)  cmd_status ;;
+    install)   do_install_tool "$PROG" ;;
+    uninstall) do_uninstall_tool "$PROG" ;;
     -h|--help|help) usage ;;
     *) log "Unknown subcommand: $sub"; usage ;;
 esac

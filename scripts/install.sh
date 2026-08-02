@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Install yzr-agent-tools: write a thin bash wrapper per tool at $PROJECT_ROOT/bin,
-# link bash/fish completions, and append an idempotent PATH block to the user's
-# shell rc.
+# Install yzr-agent-tools — every tool + the shared PATH block.
+#
+# Per-tool artifacts (the bin/<tool> wrapper + bash/fish completion symlinks)
+# are owned by scripts/<tool>.sh install. This script is the AGGREGATOR: it
+# runs each per-tool install, then manages the one repo-global PATH marker
+# block in the user's shell rc (one block for all tools).
 #
 # No virtualenv, no `pip install`. See README "Install" for runtime / dev dep
 # notes (Python<3.11 needs tomli; running tests needs pytest + pytest-cov).
@@ -12,12 +15,14 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$PROJECT_ROOT/scripts"
 BIN_DIR="$PROJECT_ROOT/bin"
 
-# Tools shipped by this repo. Each gets its own wrapper + completions.
+# Tools shipped by this repo. Each has its own scripts/<tool>.sh install.
 TOOLS=(
     "model-switch"
     "html-mcp"
+    "mcp-plugin-mgr"
 )
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -46,55 +51,17 @@ if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' >
 NOTE
 fi
 
-# --- wrappers ---------------------------------------------------------------
-
-mkdir -p "$BIN_DIR"
-
-write_wrapper() {
-    local tool="$1"
-    local py_module
-    # Convert kebab-case tool name to python module name (model-switch -> model_switch).
-    py_module="${tool//-/_}"
-    cat > "$BIN_DIR/$tool" <<WRAPPER
-#!/usr/bin/env bash
-set -euo pipefail
-REPO="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
-export PYTHONPATH="\$REPO/src\${PYTHONPATH:+:\$PYTHONPATH}"
-exec python3 -B -m ${py_module} "\$@"
-WRAPPER
-    chmod +x "$BIN_DIR/$tool"
-}
+# --- per-tool wrapper + completions -----------------------------------------
 
 for tool in "${TOOLS[@]}"; do
-    write_wrapper "$tool"
+    bash "$SCRIPT_DIR/$tool.sh" install
 done
 
-# --- completions ------------------------------------------------------------
+# --- shared PATH block in shell rc ------------------------------------------
 
 COMPLETION_SRC_BASH_DIR="$PROJECT_ROOT/completions"
-COMPLETION_SRC_FISH_DIR="$PROJECT_ROOT/completions"
 BASH_COMPLETION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
 FISH_COMPLETION_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
-
-link_completion() {
-    local src="$1" dest="$2"
-    mkdir -p "$(dirname "$dest")"
-    if [ -e "$dest" ] && [ ! -L "$dest" ]; then
-        echo ">> $dest exists and is not a symlink; leaving it alone" >&2
-        return 0
-    fi
-    ln -sfn "$src" "$dest"
-    echo ">> Linked completion: $dest -> $src"
-}
-
-for tool in "${TOOLS[@]}"; do
-    bash_src="$COMPLETION_SRC_BASH_DIR/$tool.bash"
-    fish_src="$COMPLETION_SRC_FISH_DIR/$tool.fish"
-    [ -f "$bash_src" ] && link_completion "$bash_src" "$BASH_COMPLETION_DIR/$tool"
-    [ -f "$fish_src" ] && link_completion "$fish_src" "$FISH_COMPLETION_DIR/$tool.fish"
-done
-
-# --- PATH block -------------------------------------------------------------
 
 update_rc() {
     local rc_path="$1"
@@ -167,14 +134,12 @@ case "${SHELL:-}" in
         ;;
     */bash|*)
         # Source every bash completion we ship so even setups without
-        # bash-completion pick them up.
+        # bash-completion pick them up. Pass the first one for the in-rc
+        # source line (belt-and-suspenders fallback).
         bash_srcs=()
         for tool in "${TOOLS[@]}"; do
             [ -f "$COMPLETION_SRC_BASH_DIR/$tool.bash" ] && bash_srcs+=("$COMPLETION_SRC_BASH_DIR/$tool.bash")
         done
-        # Pass the first one for the in-rc source line. (Multiple sources
-        # are linked into $BASH_COMPLETION_DIR above; in-rc source is just
-        # a belt-and-suspenders fallback.)
         if [ "${#bash_srcs[@]}" -gt 0 ]; then
             update_rc "$HOME/.bashrc" "${bash_srcs[0]}"
         else
@@ -191,6 +156,9 @@ Installed.
   bin  : $BIN_DIR
   tools: ${TOOLS[@]}
   comp : $BASH_COMPLETION_DIR/ (bash)  $FISH_COMPLETION_DIR/ (fish)
+
+To install a single tool only (no shell-rc change):
+  scripts/<tool>.sh install      # e.g. scripts/mcp-plugin-mgr.sh install
 
 To use it in this shell:
   source $HOME/.bashrc   # or ~/.zshrc

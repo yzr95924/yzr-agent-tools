@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Uninstall yzr-agent-tools:
-#   1. remove per-tool repo-local wrappers under bin/
-#   2. strip the idempotent PATH marker from the user's shell rc
-#      (matches the marker block written by install.sh)
-#   3. remove per-tool completion symlinks (only those pointing into this repo)
+# Uninstall yzr-agent-tools — every tool + the shared PATH block.
+#
+# Per-tool cleanup (bin/<tool> wrapper + completion symlinks) is owned by
+# scripts/<tool>.sh uninstall. This script is the AGGREGATOR: it runs each
+# per-tool uninstall, then strips the one repo-global PATH marker block from
+# the user's shell rc.
 #
 # Notes:
 #   - Does NOT touch a legacy .venv/ — that was created by an earlier install
@@ -14,12 +15,22 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$PROJECT_ROOT/scripts"
 BIN_DIR="$PROJECT_ROOT/bin"
 
 TOOLS=(
     "model-switch"
     "html-mcp"
+    "mcp-plugin-mgr"
 )
+
+# --- per-tool wrapper + completions -----------------------------------------
+
+for tool in "${TOOLS[@]}"; do
+    bash "$SCRIPT_DIR/$tool.sh" uninstall
+done
+
+# --- strip the shared PATH marker from shell rc -----------------------------
 
 # Two possible markers — the new (post-html-mcp) one and the legacy one
 # written by older installs. Both are stripped.
@@ -28,25 +39,12 @@ end_marker="# yzr-agent-tools PATH end"
 legacy_begin="# model-switch PATH begin"
 legacy_end="# model-switch PATH end"
 
-# 1. Remove wrappers (idempotent: missing wrapper is fine).
-for tool in "${TOOLS[@]}"; do
-    if [ -f "$BIN_DIR/$tool" ]; then
-        rm -f "$BIN_DIR/$tool"
-        echo "Removed wrapper: $BIN_DIR/$tool"
-    else
-        echo "No wrapper at $BIN_DIR/$tool (already gone)"
-    fi
-done
-
-# 2. Strip the marker block from the user's shell rc.
-#    Uses awk: print lines OUTSIDE the [begin, end] inclusive range.
-#    Strips both new and legacy markers.
+# Uses awk: print lines OUTSIDE the [begin, end] inclusive range.
+# Runs one pass per marker pair so a file can have both (unlikely, but safe).
 strip_marker() {
     local rc_path="$1"
     [ ! -f "$rc_path" ] && return 0
 
-    # Run multiple awk passes — one per marker pair — so a file can have
-    # both the new and legacy blocks (highly unlikely, but safe).
     for pair in "$begin_marker|$end_marker" "$legacy_begin|$legacy_end"; do
         local b="${pair%|*}"
         local e="${pair#*|}"
@@ -76,35 +74,15 @@ case "${SHELL:-}" in
         ;;
 esac
 
-# 3. Remove completion symlinks (only those pointing into this repo).
-remove_completion_link() {
-    local link="$1"
-    if [ -L "$link" ]; then
-        case "$(readlink "$link")" in
-            "$PROJECT_ROOT"/completions/*)
-                rm -f "$link"
-                echo "Removed completion link: $link"
-                ;;
-            *)
-                echo "  $link points elsewhere, leaving it alone"
-                ;;
-        esac
-    fi
-}
-
-BASH_COMPLETION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
-FISH_COMPLETION_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
-for tool in "${TOOLS[@]}"; do
-    remove_completion_link "$BASH_COMPLETION_DIR/$tool"
-    remove_completion_link "$FISH_COMPLETION_DIR/$tool.fish"
-done
-
 cat <<EOF
 
 Uninstalled.
 
   removed : ${TOOLS[@]/#/$BIN_DIR/}
   rc      : PATH marker stripped (per detected shell)
+
+To uninstall a single tool only (no shell-rc change):
+  scripts/<tool>.sh uninstall    # e.g. scripts/mcp-plugin-mgr.sh uninstall
 
 Restart your shell (or 'source ~/.bashrc' / '~/.zshrc') to drop the
 PATH entry from the running session.

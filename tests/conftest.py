@@ -35,6 +35,10 @@ from model_switch.drivers.opencode import OpenCodeDriver
 
 # Real paths we MUST NOT touch during tests. Tracked for integrity checks.
 REAL_CLAUDE_SETTINGS = Path(os.path.expanduser("~")) / ".claude" / "settings.json"
+# Claude Code's user-scope config — holds the running session's OWN mcpServers
+# (e.g. outline). mcp-plugin-mgr's claude-code driver
+# writes here, so it is just as load-bearing as settings.json.
+REAL_CLAUDE_JSON = Path(os.path.expanduser("~")) / ".claude.json"
 REAL_YZR_CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
     / "model-switch"
@@ -42,6 +46,11 @@ REAL_YZR_CONFIG_DIR = (
 REAL_HTML_MCP_CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
     / "html-mcp"
+)
+# mcp-plugin-mgr's own config dir (holds servers.toml with any saved tokens).
+REAL_MCP_PLUGIN_MGR_CONFIG_DIR = (
+    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    / "mcp-plugin-mgr"
 )
 # OpenCode's real global config (may hold the user's live custom providers).
 _REAL_CFG_BASE = Path(
@@ -68,8 +77,10 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     # Snapshot real configs so we can verify they were not modified.
     snapshot = {}
     for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
+                     ("claude_json", REAL_CLAUDE_JSON),
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
                      ("html_mcp_config_dir", REAL_HTML_MCP_CONFIG_DIR),
+                     ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG)):
         snapshot[label] = {
             "exists": p.exists(),
@@ -113,6 +124,33 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     monkeypatch.setattr(html_mcp_paths, "config_file", lambda: html_cfg_p)
     monkeypatch.setattr(html_mcp_paths, "nginx_example_file", lambda: html_nginx_p)
 
+    # Redirect mcp-plugin-mgr's own paths into tmp. Import lazily so this
+    # conftest doesn't pull in mcp_plugin_mgr when only other tools are
+    # exercised. The claude-code driver writes ~/.claude.json — a DIFFERENT
+    # file from model-switch's settings.json — so it gets its own tmp path.
+    from mcp_plugin_mgr import paths as mcp_paths
+    from mcp_plugin_mgr.drivers.base import registry as mcp_registry
+    from mcp_plugin_mgr.drivers.claude_code import ClaudeCodeMcpDriver
+    from mcp_plugin_mgr.drivers.opencode import OpenCodeMcpDriver
+
+    mcp_cfg_dir = tmp_path / "mcp-plugin-mgr-cfg"
+    mcp_cfg_dir.mkdir()
+    mcp_servers_p = mcp_cfg_dir / "servers.toml"
+    claude_json_p = tmp_path / ".claude.json"
+    # opencode_p (created above) is shared: model-switch writes provider/model,
+    # mcp-plugin-mgr writes mcp — disjoint keys, same tmp file is fine.
+    monkeypatch.setattr(mcp_paths, "config_dir", lambda: mcp_cfg_dir)
+    monkeypatch.setattr(mcp_paths, "servers_file", lambda: mcp_servers_p)
+    monkeypatch.setattr(mcp_paths, "claude_json_file", lambda: claude_json_p)
+    monkeypatch.setattr(mcp_paths, "claude_settings_file", lambda: settings_p)
+    monkeypatch.setattr(mcp_paths, "opencode_config_file", lambda: opencode_p)
+
+    # Replace any pre-existing mcp-plugin-mgr drivers with tmp-path ones, so
+    # lazy registration in cli._ensure_default_registered is a no-op and never
+    # builds a driver pointed at the real ~/.claude.json.
+    mcp_registry._drivers["claude-code"] = ClaudeCodeMcpDriver(config_path=claude_json_p)
+    mcp_registry._drivers["opencode"] = OpenCodeMcpDriver(config_path=opencode_p)
+
     paths_dict = {
         "config_dir": cfg_dir,
         "models": models_p,
@@ -122,13 +160,18 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
         "html_mcp_config_dir": html_cfg_dir,
         "html_mcp_config_file": html_cfg_p,
         "html_mcp_nginx_example": html_nginx_p,
+        "mcp_cfg_dir": mcp_cfg_dir,
+        "mcp_servers": mcp_servers_p,
+        "claude_json": claude_json_p,
     }
     yield paths_dict
 
     # Integrity check: real configs must be byte-identical to the snapshot.
     for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
+                     ("claude_json", REAL_CLAUDE_JSON),
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
                      ("html_mcp_config_dir", REAL_HTML_MCP_CONFIG_DIR),
+                     ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG)):
         snap = snapshot[label]
         if snap["exists"]:

@@ -10,6 +10,7 @@
 | ---------------- | ------------------------------------------------------------------------------- | -------- |
 | [`model-switch`](src/model_switch/README.md) | CLI;切换 AI coding agent 使用的 Anthropic 兼容模型 | 已发布   |
 | [`html-mcp`](src/html_mcp/README.md)         | 常驻 HTTP daemon;agent 通过 MCP 把自包含 HTML 推到 nginx server,带管理页 | 已发布 |
+| [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI;管理 Claude Code / OpenCode 的自定义 MCP 服务(起点:Outline wiki),一份注册表翻译到各 agent | 已发布 |
 
 > 新工具按需添加;同一份仓库规约对所有工具生效。完整仓库规约、目录结构、跨工具注意事项
 > 见 [`AGENTS.md`](AGENTS.md)。
@@ -22,6 +23,9 @@
 - **`html-mcp`** — 一个常驻 HTTP daemon,把 agent 产出的自包含 HTML(`yzr-md-to-html`
   之类工具的输出)推到远端 nginx 的 docroot,带 Bearer token 鉴权 + HTML 管理页;
   agent 侧通过标准 MCP Streamable HTTP 接。
+- **`mcp-plugin-mgr`** — 一份 `servers.toml` 注册表管你的自定义 MCP 服务(以 Outline wiki 为
+  起点),`add <name>` 翻译成 Claude Code(`~/.claude.json` 的 `mcpServers`)与 OpenCode
+  (`opencode.json` 的 `mcp`)各自的位置/字段/type 词表,只改自己那一段、其余原样保留,重启即生效。
 
 ## 仓库共用规约
 
@@ -46,6 +50,12 @@ source ~/.bashrc
 # 卸载 — 删 wrapper + 剥 PATH marker + 删补全 symlink;不动 ~/.config/<tool>/ 下的数据
 bash scripts/uninstall.sh
 
+# 单工具增删(只动该工具的 wrapper + 补全,不改 shell rc):
+#   scripts/<tool>.sh install | uninstall
+# 例:
+scripts/mcp-plugin-mgr.sh install
+scripts/html-mcp.sh uninstall
+
 # 测试 — pyproject.toml 已含 src/ 到 pythonpath,不需要 `pip install -e .`
 pytest
 pytest --cov=model_switch
@@ -56,6 +66,8 @@ model-switch model list
 model-switch model use glm-z1-plus
 html-mcp status
 html-mcp serve
+mcp-plugin-mgr add outline --url https://your-outline/mcp --token ol_api_xxx --all-drivers
+mcp-plugin-mgr list
 ```
 
 ## 许可证
