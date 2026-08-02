@@ -16,8 +16,7 @@ from typing import Iterable, List, Optional
 from mcp_plugin_mgr.drivers._atomic import atomic_write_json
 
 
-def allow_entries_for(name, preset=None):
-    # type: (str, Optional[object]) -> List[str]
+def allow_entries_for(name: str, preset: Optional[object] = None) -> List[str]:
     """Permission rules to pre-approve for a server.
 
     Uses the preset's explicit ``allow_tools`` when it has them (outline's
@@ -37,8 +36,7 @@ def _read(path):
     return json.loads(text)
 
 
-def add_allowed_tools(path, entries):
-    # type: (Path, Iterable[str]) -> List[str]
+def add_allowed_tools(path: Path, entries: Iterable[str]) -> List[str]:
     """Merge `entries` into permissions.allow (dedup, preserve other keys).
 
     Returns the entries that were newly added (empty if all already present).
@@ -63,8 +61,7 @@ def add_allowed_tools(path, entries):
     return added
 
 
-def remove_allowed_tools(path, entries):
-    # type: (Path, Iterable[str]) -> List[str]
+def remove_allowed_tools(path: Path, entries: Iterable[str]) -> List[str]:
     """Remove `entries` from permissions.allow (preserve other keys).
 
     Returns the entries that were actually present and removed.

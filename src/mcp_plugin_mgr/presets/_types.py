@@ -11,7 +11,6 @@ from typing import Callable, Dict, List, Optional
 from mcp_plugin_mgr.store import (
     ServerEntry,
     TRANSPORT_HTTP,
-    TRANSPORT_STDIO,
 )
 
 
