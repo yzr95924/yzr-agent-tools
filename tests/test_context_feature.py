@@ -22,14 +22,6 @@ def glm_main() -> Model:
     )
 
 
-    return Model(
-        model_id="glm",
-        base_url="https://api.example.com",
-        api_key="KEY",
-        name="MiniMax-M3",
-    )
-
-
 def _make_claude_driver(tmp_path: Path, monkeypatch) -> ClaudeCodeDriver:
     monkeypatch.setenv("HOME", str(tmp_path))
     d = ClaudeCodeDriver()
