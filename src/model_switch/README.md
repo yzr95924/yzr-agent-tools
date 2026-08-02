@@ -74,9 +74,13 @@ model-switch status
 active main:  glm-z1-plus (name: glm-4-plus)
 
 Agent (claude-code) effective env in /root/.claude/settings.json:
-  ANTHROPIC_BASE_URL    = https://open.bigmodel.cn/api/anthropic
-  ANTHROPIC_AUTH_TOKEN  = sk-...
-  ANTHROPIC_MODEL       = glm-4-plus
+  ANTHROPIC_BASE_URL              = https://open.bigmodel.cn/api/anthropic
+  ANTHROPIC_AUTH_TOKEN            = sk-...
+  ANTHROPIC_MODEL                 = glm-4-plus
+  ANTHROPIC_DEFAULT_SONNET_MODEL  = glm-4-plus
+  ANTHROPIC_DEFAULT_OPUS_MODEL    = glm-4-plus
+  ANTHROPIC_DEFAULT_HAIKU_MODEL   = glm-4-plus
+  ANTHROPIC_SMALL_FAST_MODEL      = glm-4-plus
 ```
 
 ## 命令一览
@@ -107,6 +111,11 @@ model-switch status [--driver NAME] [--all-drivers]
 - `ANTHROPIC_BASE_URL` — 上游 base URL
 - `ANTHROPIC_AUTH_TOKEN` — `models.toml` 里这个模型对应的 `api_key`
 - `ANTHROPIC_MODEL` — `<name>`,或当 `context_window >= 1_000_000` 时为 `<name>[1m]`
+- `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL` + `ANTHROPIC_SMALL_FAST_MODEL` —
+  把 Claude Code 的**每个模型档位**都钉到同一个 `<name>`(含 `[1m]` 后缀)。Claude Code
+  的辅助调用(auto 模式的 Bash 安全分类器、标题/摘要生成等)经这些档位解析;不覆盖就会回落到
+  内置 Claude id(如 `claude-sonnet-5[1m]`),自定义上游提供不了 → 表现为
+  "auto mode temporarily unavailable"。钉死它们,这些调用才跟着走你的上游。
 - 顶层 `model` — 与 `ANTHROPIC_MODEL` 同步
 
 `settings.json` 里其它所有内容(主题、插件、`DISABLE_TELEMETRY` 之类的自定义 env)

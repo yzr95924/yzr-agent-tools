@@ -81,3 +81,76 @@ def test_current_returns_empty_when_file_missing(driver):
 
 def test_driver_name_is_claude_code(driver):
     assert driver.name == "claude-code"
+
+
+# --- tier overrides -----------------------------------------------------------
+
+# Claude Code resolves auxiliary calls (Bash safety classifier, title/summary
+# generation, ...) through these tier slots. The driver pins every one to our
+# model id so they don't leak to a hardcoded Claude id the upstream can't serve.
+_TIER_KEYS = (
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+)
+
+
+def test_apply_pins_all_tiers_to_model_id(driver, glm_main):
+    driver.settings_path.parent.mkdir(parents=True)
+    driver.apply(model=glm_main, api_key="k")
+
+    env = json.loads(driver.settings_path.read_text())["env"]
+    for k in _TIER_KEYS:
+        assert env[k] == glm_main.name  # glm_main has no context_window -> bare id
+
+
+def test_apply_tier_keys_get_1m_suffix(driver):
+    """Tier keys mirror ANTHROPIC_MODEL's [1m] suffix for 1M-context models."""
+    driver.settings_path.parent.mkdir(parents=True)
+    big = Model(
+        model_id="glm",
+        base_url="https://api.example.com",
+        api_key="KEY",
+        name="glm-4-plus",
+        context_window=1_000_000,
+    )
+    driver.apply(model=big, api_key="k")
+
+    env = json.loads(driver.settings_path.read_text())["env"]
+    assert env["ANTHROPIC_MODEL"] == "glm-4-plus[1m]"
+    for k in _TIER_KEYS:
+        assert env[k] == "glm-4-plus[1m]"
+
+
+def test_apply_clears_old_tier_refs_on_switch(driver, glm_main):
+    """Switching models must not leave the previous model's tier values."""
+    driver.settings_path.parent.mkdir(parents=True)
+    other = Model(
+        model_id="other",
+        base_url="https://api.example.com",
+        api_key="KEY",
+        name="other-model",
+    )
+    driver.apply(model=other, api_key="k")
+    assert json.loads(driver.settings_path.read_text())["env"][
+        "ANTHROPIC_DEFAULT_SONNET_MODEL"
+    ] == "other-model"
+
+    driver.apply(model=glm_main, api_key="k")
+    env = json.loads(driver.settings_path.read_text())["env"]
+    for k in _TIER_KEYS:
+        assert env[k] == glm_main.name  # no stale "other-model"
+
+
+def test_apply_preserves_unrelated_keys_with_tiers(driver, glm_main):
+    driver.settings_path.parent.mkdir(parents=True)
+    driver.settings_path.write_text(
+        json.dumps({"env": {"FOO": "keep"}, "userID": "u"})
+    )
+    driver.apply(model=glm_main, api_key="k")
+
+    data = json.loads(driver.settings_path.read_text())
+    assert data["env"]["FOO"] == "keep"
+    assert data["userID"] == "u"
+    assert data["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == glm_main.name
