@@ -9,15 +9,15 @@
 ## 安装
 
 ```bash
-# 在本仓库下,使用自带的安装脚本
-bash scripts/install.sh
+# 在本仓库下,运行该工具的自包含安装脚本(写 wrapper + 装补全 + 加 PATH 块)
+bash scripts/model-switch.sh install
 source ~/.bashrc   # 或 ~/.zshrc
 
 # 验证
 model-switch --help
 
 # 卸载
-bash scripts/uninstall.sh
+bash scripts/model-switch.sh uninstall
 ```
 
 需要 Python 3.7+。安装脚本很薄:写一个 `bin/model-switch`（4 行 bash wrapper,
@@ -38,7 +38,7 @@ PATH 块。不创建虚拟环境,不调 `pip install`。
 
 ### Shell 补全(bash + fish)
 
-`install.sh` 还会装好 tab 补全:
+`model-switch.sh install` 还会装好 tab 补全:
 
 - **bash** — 软链到 `~/.local/share/bash-completion/completions/`,**并且** 在 `~/.bashrc`
   的 PATH 块里 source 一份,所以即使没装 bash-completion 包也能用。
@@ -46,7 +46,7 @@ PATH 块。不创建虚拟环境,不调 `pip install`。
 
 补全覆盖子命令、flag、`--driver` 取值,以及 `model use/show/remove` 的模型名。
 动态候选项直接由 CLI 自身产出(隐藏的 `model-switch _complete models|drivers` 管道
-命令),所以始终和你 `models.toml` 里的内容一致。`uninstall.sh` 会清理这些软链和
+命令),所以始终和你 `models.toml` 里的内容一致。`model-switch.sh uninstall` 会清理这些软链和
 source 行。脚本本体在 `completions/`,想自己接也可以。
 
 ## 快速上手

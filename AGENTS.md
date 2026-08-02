@@ -42,15 +42,12 @@
 ## 常用命令
 
 ```bash
-# 安装 — 走 shell wrapper + PYTHONPATH 路线（不创建 venv，不调用 pip）。
+# 安装 — 每工具一个自包含脚本（wrapper + 补全 + PATH 块），不创建 venv，不调用 pip。
 # 需要 Python 3.7+；Python < 3.11 时请自备 tomli（pip install --user 'tomli>=1.1'）。
-# 同时安装 bash/fish 补全：symlink 到 XDG 补全目录 + ~/.bashrc marker block 内 source 行。
-bash scripts/install.sh
-# 卸载（删 wrapper + 剥 PATH marker + 删补全 symlink；不动 ~/.config/model-switch/ 下的数据）
-bash scripts/uninstall.sh
-# 单工具增删：每工具一个 scripts/<tool>.sh，参数 install|uninstall（一个脚本内
-# 子命令分发；只动该工具 wrapper + 补全，不改 shell rc）。例：
-#   scripts/mcp-plugin-mgr.sh install ; scripts/model-switch.sh uninstall
+# bash/fish 补全：symlink 到 XDG 补全目录 + ~/.bashrc marker block 内 source 行。
+bash scripts/model-switch.sh install        # mcp-plugin-mgr 同理：scripts/mcp-plugin-mgr.sh install
+# 卸载（删 wrapper + 剥该工具的 PATH marker + 删补全 symlink；不动 ~/.config/<tool>/ 下的数据）
+bash scripts/model-switch.sh uninstall
 
 # 测试 — 需要 pytest + pytest-cov 自装（pip install --user pytest pytest-cov）。
 # pyproject.toml 的 [tool.pytest.ini_options].pythonpath 已含 src/，

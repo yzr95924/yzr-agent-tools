@@ -39,18 +39,14 @@
 ## 常用命令
 
 ```bash
-# 安装 — shell wrapper + PYTHONPATH,无 venv,无 pip
-bash scripts/install.sh
-source ~/.bashrc
+# 安装 — 每工具一个自包含脚本:写 wrapper + 装补全 + 加 PATH 块。无 venv,无 pip。
+bash scripts/model-switch.sh install
+bash scripts/mcp-plugin-mgr.sh install
+source ~/.bashrc   # 或 ~/.zshrc
 
-# 卸载 — 删 wrapper + 剥 PATH marker + 删补全 symlink;不动 ~/.config/<tool>/ 下的数据
-bash scripts/uninstall.sh
-
-# 单工具增删(只动该工具的 wrapper + 补全,不改 shell rc):
-#   scripts/<tool>.sh install | uninstall
-# 例:
-scripts/mcp-plugin-mgr.sh install
-scripts/model-switch.sh uninstall
+# 卸载 — 删 wrapper + 剥该工具的 PATH marker + 删补全 symlink;不动 ~/.config/<tool>/ 下的数据
+bash scripts/model-switch.sh uninstall
+bash scripts/mcp-plugin-mgr.sh uninstall
 
 # 测试 — pyproject.toml 已含 src/ 到 pythonpath,不需要 `pip install -e .`
 pytest

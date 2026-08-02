@@ -217,7 +217,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# yzr-agent-tools: install.sh writes a thin bash wrapper per tool into
-# ./bin/ on every run (idempotent, templated). Don't track generated
-# artifacts — re-run install.sh after a fresh clone.
+# yzr-agent-tools: scripts/<tool>.sh install writes a thin bash wrapper per
+# tool into ./bin/ on every run (idempotent, templated). Don't track generated
+# artifacts — re-run scripts/<tool>.sh install after a fresh clone.
 /bin/

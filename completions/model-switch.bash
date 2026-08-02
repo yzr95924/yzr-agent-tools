@@ -4,7 +4,7 @@
 # `model-switch _complete <what>` plumbing command, so completion always
 # reflects the real models.toml / driver registry.
 #
-# Loaded two ways by scripts/install.sh (both harmless if repeated):
+# Loaded two ways by scripts/model-switch.sh install (both harmless if repeated):
 #   - symlinked into ~/.local/share/bash-completion/completions/model-switch
 #   - sourced from the PATH marker block in ~/.bashrc
 

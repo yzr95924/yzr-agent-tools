@@ -22,7 +22,7 @@ driver 负责把统一的「服务定义」渲染成该 agent 的字段与位置
 随仓库一起装(见根 [`README`](../../README.md)):
 
 ```bash
-bash scripts/install.sh
+bash scripts/mcp-plugin-mgr.sh install
 source ~/.bashrc
 ```
 

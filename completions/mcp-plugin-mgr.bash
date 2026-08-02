@@ -4,7 +4,7 @@
 # `mcp-plugin-mgr _complete <what>` plumbing command, so completion always
 # reflects the real servers.toml / driver registry / built-in presets.
 #
-# Loaded two ways by scripts/install.sh (both harmless if repeated):
+# Loaded two ways by scripts/mcp-plugin-mgr.sh install (both harmless if repeated):
 #   - symlinked into ~/.local/share/bash-completion/completions/mcp-plugin-mgr
 #   - sourced from the PATH marker block in ~/.bashrc
 

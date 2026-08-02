@@ -4,7 +4,7 @@
 # `model-switch _complete <what>` plumbing command, so completion always
 # reflects the real models.toml / driver registry.
 #
-# scripts/install.sh symlinks this file into ~/.config/fish/completions/.
+# scripts/model-switch.sh install symlinks this file into ~/.config/fish/completions/.
 #
 # Note on helpers: `commandline -opc` under completion yields only the
 # *completed* tokens (the partial token under the cursor is excluded), so

@@ -3,7 +3,7 @@
 # Dynamic candidates (server / driver / preset names) come from the hidden
 # `mcp-plugin-mgr _complete <what>` plumbing command.
 #
-# scripts/install.sh symlinks this file into ~/.config/fish/completions/.
+# scripts/mcp-plugin-mgr.sh install symlinks this file into ~/.config/fish/completions/.
 
 function __fish_mcp_plugin_mgr_servers
     mcp-plugin-mgr _complete servers 2>/dev/null
