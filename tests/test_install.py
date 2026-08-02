@@ -259,67 +259,6 @@ def repo_root_for(wrapper_path: Path) -> Path:
     return wrapper_path.parent.parent
 
 
-# --- html-mcp wrapper runtime contract --------------------------------------
-
-HTML_MCP_WRAPPER = ROOT / "bin" / "html-mcp"
-
-
-def test_html_mcp_wrapper_exists_and_is_executable():
-    """bin/html-mcp is created by install.sh, but we can pin its file mode."""
-    # install.sh writes it on every install; in this checkout, running
-    # install.sh in test mode would write into the working tree. Instead
-    # we just verify the file exists in a fresh env via the install flow.
-    # For a cheaper check: confirm install.sh writes the wrapper.
-    text = INSTALL_SH.read_text()
-    assert '"html-mcp"' in text or "html-mcp" in text
-    # And confirm the wrapper file mode contract (install.sh makes it 755).
-    # We don't create it here to avoid touching the working tree; the test
-    # suite relies on install.sh's e2e tests for actual creation.
-    assert HTML_MCP_WRAPPER.parent.exists()
-
-
-def test_html_mcp_wrapper_forwards_arguments(tmp_path):
-    """End-to-end: stub src/html_mcp + run wrapper."""
-    wrapper_dst = tmp_path / "bin" / "html-mcp"
-    wrapper_dst.parent.mkdir()
-    # install.sh generates the wrapper from a template. Use the template
-    # shape directly (it's the only stable contract; install.sh has the
-    # one copy).
-    wrapper_dst.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        'REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\n'
-        'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"\n'
-        'exec python3 -B -m html_mcp "$@"\n'
-    )
-    wrapper_dst.chmod(0o755)
-
-    fake_pkg_dir = tmp_path / "src" / "html_mcp"
-    fake_pkg_dir.mkdir(parents=True)
-    (fake_pkg_dir / "__init__.py").write_text("")
-    (fake_pkg_dir / "__main__.py").write_text(
-        "import json, os, sys\n"
-        "print(json.dumps({\n"
-        "    'argv': sys.argv[1:],\n"
-        "    'pythonpath': os.environ.get('PYTHONPATH', ''),\n"
-        "}))\n"
-    )
-
-    result = subprocess.run(
-        [str(wrapper_dst), "status"],
-        check=False, capture_output=True, text=True,
-    )
-    assert result.returncode == 0, (
-        f"wrapper exited non-zero: rc={result.returncode}\n"
-        f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
-    )
-    payload = json.loads(result.stdout.strip())
-    assert payload["argv"] == ["status"]
-    paths = payload["pythonpath"].split(os.pathsep)
-    expected_src = os.path.realpath(str(tmp_path / "src"))
-    assert any(os.path.realpath(p) == expected_src for p in paths)
-
-
 # --- install.sh behavior in fresh environments ----------------------------
 
 
@@ -507,7 +446,7 @@ def _prepare_fake_env(tmp_path):
 def test_install_links_bash_and_fish_completions(tmp_path):
     """install.sh must symlink both completion scripts into the XDG dirs.
 
-    Both tools (model-switch and html-mcp) get their own symlinks.
+    Every shipped tool gets its own symlinks.
     """
     fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
 
@@ -524,14 +463,6 @@ def test_install_links_bash_and_fish_completions(tmp_path):
     assert ms_bash.resolve() == (fake_repo / "completions" / "model-switch.bash").resolve()
     assert ms_fish.is_symlink(), f"model-switch fish completion symlink missing: {ms_fish}"
     assert ms_fish.resolve() == (fake_repo / "completions" / "model-switch.fish").resolve()
-
-    # html-mcp links (the new tool must also be wired up).
-    hm_bash = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "html-mcp"
-    hm_fish = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "html-mcp.fish"
-    assert hm_bash.is_symlink(), f"html-mcp bash completion symlink missing: {hm_bash}"
-    assert hm_bash.resolve() == (fake_repo / "completions" / "html-mcp.bash").resolve()
-    assert hm_fish.is_symlink(), f"html-mcp fish completion symlink missing: {hm_fish}"
-    assert hm_fish.resolve() == (fake_repo / "completions" / "html-mcp.fish").resolve()
 
     # bashrc marker block should source a bash completion (covers setups
     # without the bash-completion package). We don't pin which tool —

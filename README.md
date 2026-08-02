@@ -9,20 +9,17 @@
 | 工具             | 简介                                                                            | 状态     |
 | ---------------- | ------------------------------------------------------------------------------- | -------- |
 | [`model-switch`](src/model_switch/README.md) | CLI;切换 AI coding agent 使用的 Anthropic 兼容模型 | 已发布   |
-| [`html-mcp`](src/html_mcp/README.md)         | 常驻 HTTP daemon;agent 通过 MCP 把自包含 HTML 推到 nginx server,带管理页 | 已发布 |
 | [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI;管理 Claude Code / OpenCode 的自定义 MCP 服务(起点:Outline wiki),一份注册表翻译到各 agent | 已发布 |
 
 > 新工具按需添加;同一份仓库规约对所有工具生效。完整仓库规约、目录结构、跨工具注意事项
-> 见 [`AGENTS.md`](AGENTS.md)。
+> 见 [`AGENTS.md`](AGENTS.md)。**`html-mcp` 已于 2026-08 迁出**,独立为
+> [`agent-html-drop`](https://github.com/yzr95924/agent-html-drop) 单工具仓库。
 
 ## 一句话简介
 
 - **`model-switch`** — 把 Anthropic 兼容模型(任何与 `ANTHROPIC_*` 协议兼容的上游,
   包括 yzr / GLM / 各种代理网关)注册到本地仓库,然后一行 `model use <name>` 写进
   Claude Code / OpenCode 的全局配置,重启 agent 即生效。
-- **`html-mcp`** — 一个常驻 HTTP daemon,把 agent 产出的自包含 HTML(`yzr-md-to-html`
-  之类工具的输出)推到远端 nginx 的 docroot,带 Bearer token 鉴权 + HTML 管理页;
-  agent 侧通过标准 MCP Streamable HTTP 接。
 - **`mcp-plugin-mgr`** — 一份 `servers.toml` 注册表管你的自定义 MCP 服务(以 Outline wiki 为
   起点),`add <name>` 翻译成 Claude Code(`~/.claude.json` 的 `mcpServers`)与 OpenCode
   (`opencode.json` 的 `mcp`)各自的位置/字段/type 词表,只改自己那一段、其余原样保留,重启即生效。
@@ -30,7 +27,7 @@
 ## 仓库共用规约
 
 - **测试隔离** — `tests/conftest.py` 的 autouse fixture 快照真实用户级配置
-  (`~/.claude/settings.json`、`~/.config/html-mcp/`)的 mtime + sha256,把工具相关路径
+  (`~/.claude/settings.json`、`~/.claude.json`)的 mtime + sha256,把工具相关路径
   重定向到 tmp,替换 driver / handler 指向 tmp,teardown 时断言真实配置字节级一致。
   任何 driver / storage / handler bug 都不会污染你的真实配置。
 - **原子写** — TOML(JSON)写流程都是先 `.tmp` + `os.replace()`;绝不出现半写状态。
@@ -54,18 +51,16 @@ bash scripts/uninstall.sh
 #   scripts/<tool>.sh install | uninstall
 # 例:
 scripts/mcp-plugin-mgr.sh install
-scripts/html-mcp.sh uninstall
+scripts/model-switch.sh uninstall
 
 # 测试 — pyproject.toml 已含 src/ 到 pythonpath,不需要 `pip install -e .`
 pytest
 pytest --cov=model_switch
-pytest --cov=html_mcp
+pytest --cov=mcp_plugin_mgr
 
 # 各 CLI
 model-switch model list
 model-switch model use glm-z1-plus
-html-mcp status
-html-mcp serve
 mcp-plugin-mgr add outline --url https://your-outline/mcp --token ol_api_xxx --all-drivers
 mcp-plugin-mgr list
 ```

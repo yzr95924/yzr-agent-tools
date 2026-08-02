@@ -10,20 +10,20 @@
 - **`model-switch`**：切换 AI coding agent(V1 主目标 Claude Code)使用的 Anthropic 兼容模型。
   直接改写 agent 的全局配置文件(Claude Code 的 `~/.claude/settings.json` 等)实现——无 daemon、
   无代理、无协议转换。用户跑 `model-switch model use <name>` 然后重启 agent 即生效。
-- **`html-mcp`**：常驻 HTTP daemon,让 agent(本机 Claude Code / OpenCode)通过 MCP(Streamable HTTP)
-  把 `yzr-md-to-html` 等产出的自包含 HTML 推到远端 nginx server,同时提供一个浏览器管理页
-  (列表 / 预览 / 删除 / 复制公开 URL)。详见 `docs/html-mcp-design.md`。
 - **`mcp-plugin-mgr`**：CLI,管理 Claude Code / OpenCode 的自定义 MCP 服务(起点 Outline wiki)。维护
   一份 `~/.config/mcp-plugin-mgr/servers.toml` 作为规范真源,driver 把它翻译进 Claude Code 的
   `~/.claude.json` 的 `mcpServers` 与 OpenCode 的 `opencode.json` 的 `mcp`(位置/字段/type 词表各异),
   只改自己那一段、其余原样保留。与 model-switch 同构(模型 vs MCP 服务)。详见 `docs/mcp-plugin-mgr-design.md`。
+
+> **`html-mcp` 已于 2026-08 迁出**：独立为单工具仓库 [`agent-html-drop`](https://github.com/yzr95924/agent-html-drop)
+> （`~/agent-html-drop`），本仓库不再维护该工具。
 
 后续按需添加新工具。每个工具独立成 CLI(或 daemon),共享同一套仓库规约(测试隔离、原子写、
 未知字段透传等)。
 
 > **文档分层**:本文件承载 agent 工作上下文(规约 / 命令 / 架构);**用户文档**(安装 /
 > 快速上手 / 命令一览 / 局限性)见 `src/model_switch/README.md` 与
-> `src/html_mcp/README.md`,根 `README.md` 仅作索引(工具表格 + 共用规约)。**设计文档**
+> `src/mcp_plugin_mgr/README.md`,根 `README.md` 仅作索引(工具表格 + 共用规约)。**设计文档**
 > (`docs/<slug>-design.md` + `docs/<slug>-tasks.md`)在仓库根,新工具按此约定产出。
 
 ## 仓库规约
@@ -51,9 +51,9 @@
 bash scripts/install.sh
 # 卸载（删 wrapper + 剥 PATH marker + 删补全 symlink；不动 ~/.config/model-switch/ 下的数据）
 bash scripts/uninstall.sh
-# 单工具增删：每工具一个 scripts/<tool>.sh，参数 install|uninstall（参考 scripts/html-mcp.sh
-# 的子命令风格；只动该工具 wrapper + 补全，不改 shell rc）。例：
-#   scripts/mcp-plugin-mgr.sh install ; scripts/html-mcp.sh uninstall
+# 单工具增删：每工具一个 scripts/<tool>.sh，参数 install|uninstall（一个脚本内
+# 子命令分发；只动该工具 wrapper + 补全，不改 shell rc）。例：
+#   scripts/mcp-plugin-mgr.sh install ; scripts/model-switch.sh uninstall
 
 # 测试 — 需要 pytest + pytest-cov 自装（pip install --user pytest pytest-cov）。
 # pyproject.toml 的 [tool.pytest.ini_options].pythonpath 已含 src/，
@@ -69,14 +69,6 @@ model-switch model add glm-z1 --base-url ... --api-key <KEY> --model-name glm-4
 model-switch model use glm-z1            # 交互式默认切全部 agent;加 --driver <name> 只切单个
 model-switch status
 
-# html-mcp —— 常驻 daemon (远端 nginx server 跑)
-html-mcp init                            # 初始化 ~/.config/html-mcp/,生成 bearer token
-html-mcp serve                           # 前台启动 (Ctrl+C 停);生产建议 tmux / systemd 用户单元
-html-mcp token show                      # 打印 token,配到 agent MCP config
-html-mcp nginx-config                    # 打印 nginx server block 到 stdout
-html-mcp nginx-config --write            # 写到 ~/.config/html-mcp/nginx.conf.example
-html-mcp status                          # config / token / docroot 状态
-
 # mcp-plugin-mgr —— 管理 agent 的自定义 MCP 服务(Outline 起步)
 mcp-plugin-mgr init                      # 初始化 ~/.config/mcp-plugin-mgr/
 mcp-plugin-mgr add outline --url ... --token ol_api_... --all-drivers   # 加服务(preset 名或显式 flag)
@@ -90,7 +82,7 @@ mcp-plugin-mgr test outline              # 探活:发 initialize 握手,诊断�
 
 ## 高层结构
 
-两个工具并存,各自独立成模块(`__pycache__` / `.egg-info` 等已省略):
+各工具独立成模块(`__pycache__` / `.egg-info` 等已省略):
 
 ```
 src/
@@ -107,28 +99,6 @@ src/
 │   │   ├── claude_code.py       ~/.claude/settings.json 适配器
 │   │   └── opencode.py          ~/.config/opencode/opencode.json 适配器
 │   └── README.md                详细用户文档
-│
-└── html_mcp/                    # 常驻 daemon
-    ├── cli.py                   argparse (init / serve / token / config / nginx-config / status)
-    ├── __main__.py              python -m html_mcp 入口
-    ├── _version.py              VERSION 字符串 (/api/health + CLI --version)
-    ├── paths.py                 XDG 路径解析
-    ├── config.py                TOML I/O + 透传未知字段 + validate_for_serve
-    ├── auth.py                  Bearer token 常量时间比较 + redact_token
-    ├── storage.py               docroot 文件 CRUD (atomic write / 命名 regex / 路径穿越防护)
-    ├── server.py                http.server.ThreadingHTTPServer + 路由 + body 限流
-    ├── mcp_handler.py           JSON-RPC Streamable HTTP + 4 个 tool
-    ├── api.py                   /api/files /api/nginx-config /api/health
-    ├── nginx_config.py          assets/nginx.conf.template 渲染
-    ├── ui.py                    ui/{index.html,style.css,app.js} 静态路由
-    ├── _compat.py               TOML loader (tomllib/tomli)
-    ├── assets/
-    │   └── nginx.conf.template  nginx server block 模板
-    ├── ui/                      管理页静态资源 (vanilla JS)
-    │   ├── index.html
-    │   ├── style.css
-    │   └── app.js
-    └── README.md                详细用户文档
 │
 └── mcp_plugin_mgr/              # CLI;管理 agent 的自定义 MCP 服务
     ├── cli.py                   argparse (init/add/list/remove/presets/status)
@@ -170,20 +140,6 @@ src/
 
 **单模型槽**:`model use <name>` 写一个模型到所选 agent 配置。driver 负责把 model 渲染成对应
 agent 协议的字段。
-
-### `html_mcp` 的形态
-
-常驻 HTTP daemon(`html-mcp serve`),监听 `127.0.0.1:8765`(默认),由 nginx 在前面 HTTPS 反代
-+ 终结 TLS。同一进程暴露 4 类入口:
-- `POST /mcp` —— MCP Streamable HTTP(agent 走这里,`Authorization: Bearer <token>` 强制)
-- `GET /` —— HTML 管理页(浏览器,粘贴 token 到 localStorage)
-- `* /api/*` —— JSON API(管理页背后)
-- `/files/*` —— nginx 直接从 docroot 读取(daemon 不参与)
-
-工具表(`tools/call`)共 4 个:`upload_html` / `list_html` / `delete_html` / `get_public_url`。
-MCP 协议自实现约 150 行 JSON-RPC,无第三方 SDK 依赖。
-
-详见 `docs/html-mcp-design.md` / `docs/html-mcp-tasks.md`。
 
 ### `mcp_plugin_mgr` 的形态
 

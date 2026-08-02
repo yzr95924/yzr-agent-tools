@@ -1,7 +1,7 @@
 """Tests for the per-tool control scripts (scripts/<tool>.sh install|uninstall).
 
 These pin the refactored contract: each tool has ONE script that takes
-install|uninstall as a subcommand (mirroring scripts/html-mcp.sh), managing
+install|uninstall as a subcommand, managing
 only that tool's wrapper + completion symlinks — without touching the shell rc
 (which remains scripts/install.sh's job).
 """
@@ -117,31 +117,6 @@ def test_mcp_plugin_mgr_install_creates_wrapper_and_completions(tmp_path):
     fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "mcp-plugin-mgr.fish"
     assert bash_link.is_symlink()
     assert fish_link.is_symlink()
-
-
-# --- html-mcp.sh gains install/uninstall -------------------------------------
-
-def test_html_mcp_script_supports_install_subcommand(tmp_path):
-    """html-mcp.sh is the ONE script for html-mcp: install/uninstall alongside start/stop."""
-    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
-    r = _run(fake_repo / "scripts" / "html-mcp.sh", "install", env)
-    assert r.returncode == 0, f"install failed:\n{r.stderr}"
-
-    wrapper = fake_repo / "bin" / "html-mcp"
-    assert wrapper.exists() and (wrapper.stat().st_mode & stat.S_IXUSR)
-    text = wrapper.read_text()
-    assert " -m html_mcp" in text
-
-    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "html-mcp"
-    fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "html-mcp.fish"
-    assert bash_link.is_symlink()
-    assert fish_link.is_symlink()
-
-    # uninstall cleans up
-    r = _run(fake_repo / "scripts" / "html-mcp.sh", "uninstall", env)
-    assert r.returncode == 0, f"uninstall failed:\n{r.stderr}"
-    assert not (fake_repo / "bin" / "html-mcp").exists()
-    assert not bash_link.exists() and not bash_link.is_symlink()
 
 
 # --- _common.sh is a library, not a command ----------------------------------

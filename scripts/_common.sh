@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared install/uninstall helpers for the per-tool control scripts
-# (scripts/model-switch.sh, scripts/html-mcp.sh, scripts/mcp-plugin-mgr.sh).
+# (scripts/model-switch.sh, scripts/mcp-plugin-mgr.sh).
 #
 # This file is a LIBRARY — source it, don't execute it directly:
 #     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,7 +23,7 @@ COMPLETION_SRC_DIR="$PROJECT_ROOT/completions"
 BASH_COMPLETION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
 FISH_COMPLETION_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
 
-# Default logger. html-mcp.sh overrides this with a timestamped variant after
+# Default logger. A per-tool script may override this with a timestamped variant after
 # sourcing; per-tool scripts use this one.
 log() { printf '>> %s\n' "$*" >&2; }
 

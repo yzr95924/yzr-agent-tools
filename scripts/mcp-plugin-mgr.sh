@@ -10,7 +10,7 @@
 #     scripts/mcp-plugin-mgr.sh install      # write wrapper + link completions
 #     scripts/mcp-plugin-mgr.sh uninstall    # remove wrapper + completion links
 #
-# Pattern mirrors scripts/html-mcp.sh (one script, subcommand dispatch).
+# Pattern: one script per tool, subcommand dispatch (install/uninstall + extras).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -20,7 +20,6 @@ BIN_DIR="$PROJECT_ROOT/bin"
 
 TOOLS=(
     "model-switch"
-    "html-mcp"
     "mcp-plugin-mgr"
 )
 
@@ -32,8 +31,8 @@ done
 
 # --- strip the shared PATH marker from shell rc -----------------------------
 
-# Two possible markers — the new (post-html-mcp) one and the legacy one
-# written by older installs. Both are stripped.
+# Two possible markers — the current one and the legacy one written by
+# older installs. Both are stripped.
 begin_marker="# yzr-agent-tools PATH begin"
 end_marker="# yzr-agent-tools PATH end"
 legacy_begin="# model-switch PATH begin"

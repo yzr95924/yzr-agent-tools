@@ -21,7 +21,6 @@ BIN_DIR="$PROJECT_ROOT/bin"
 # Tools shipped by this repo. Each has its own scripts/<tool>.sh install.
 TOOLS=(
     "model-switch"
-    "html-mcp"
     "mcp-plugin-mgr"
 )
 
@@ -162,8 +161,8 @@ To install a single tool only (no shell-rc change):
 
 To use it in this shell:
   source $HOME/.bashrc   # or ~/.zshrc
-  html-mcp --help
+  model-switch --help
 
 Or run it directly without PATH changes:
-  $BIN_DIR/html-mcp --help
+  $BIN_DIR/model-switch --help
 EOF

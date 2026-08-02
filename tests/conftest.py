@@ -4,12 +4,12 @@ The autouse fixtures below enforce the basic principle:
     TESTS MUST NEVER WRITE TO THE USER'S REAL CONFIG FILES.
 
 Any test that would touch `~/.claude/settings.json`, model-switch's own
-~/.config/model-switch/, html-mcp's ~/.config/html-mcp/, etc., would
-wedge the current Claude Code session. So:
+~/.config/model-switch/, mcp-plugin-mgr's ~/.config/mcp-plugin-mgr/, etc.,
+would wedge the current Claude Code session. So:
 
   1. Every test runs with HOME pointed at a tmp dir.
   2. model-switch's path functions are redirected to tmp.
-  3. html-mcp's path functions are redirected to tmp.
+  3. mcp-plugin-mgr's path functions are redirected to tmp.
   4. The claude-code driver singleton in the registry is replaced with
      one that points at a tmp settings file.
   5. Before the test exits, the real `~/.claude/settings.json` (and
@@ -43,10 +43,6 @@ REAL_YZR_CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
     / "model-switch"
 )
-REAL_HTML_MCP_CONFIG_DIR = (
-    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
-    / "html-mcp"
-)
 # mcp-plugin-mgr's own config dir (holds servers.toml with any saved tokens).
 REAL_MCP_PLUGIN_MGR_CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
@@ -79,7 +75,6 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
                      ("claude_json", REAL_CLAUDE_JSON),
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
-                     ("html_mcp_config_dir", REAL_HTML_MCP_CONFIG_DIR),
                      ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG)):
         snapshot[label] = {
@@ -109,20 +104,6 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     # ~/.config/opencode/opencode.json, so lazy registration MUST be
     # pre-empted with a tmp-path driver.
     registry._drivers["opencode"] = OpenCodeDriver(settings_path=opencode_p)
-
-    # Redirect html-mcp's own paths into tmp. Import lazily so importing
-    # this conftest does not pull in html_mcp when only model_switch is
-    # being exercised (e.g. in environments that haven't installed the
-    # tool yet).
-    from html_mcp import paths as html_mcp_paths
-
-    html_cfg_dir = tmp_path / "html-mcp-cfg"
-    html_cfg_dir.mkdir()
-    html_cfg_p = html_cfg_dir / "config.toml"
-    html_nginx_p = html_cfg_dir / "nginx.conf.example"
-    monkeypatch.setattr(html_mcp_paths, "config_dir", lambda: html_cfg_dir)
-    monkeypatch.setattr(html_mcp_paths, "config_file", lambda: html_cfg_p)
-    monkeypatch.setattr(html_mcp_paths, "nginx_example_file", lambda: html_nginx_p)
 
     # Redirect mcp-plugin-mgr's own paths into tmp. Import lazily so this
     # conftest doesn't pull in mcp_plugin_mgr when only other tools are
@@ -157,9 +138,6 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
         "state": state_p,
         "settings": settings_p,
         "opencode": opencode_p,
-        "html_mcp_config_dir": html_cfg_dir,
-        "html_mcp_config_file": html_cfg_p,
-        "html_mcp_nginx_example": html_nginx_p,
         "mcp_cfg_dir": mcp_cfg_dir,
         "mcp_servers": mcp_servers_p,
         "claude_json": claude_json_p,
@@ -170,7 +148,6 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     for label, p in (("claude_settings", REAL_CLAUDE_SETTINGS),
                      ("claude_json", REAL_CLAUDE_JSON),
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
-                     ("html_mcp_config_dir", REAL_HTML_MCP_CONFIG_DIR),
                      ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG)):
         snap = snapshot[label]
