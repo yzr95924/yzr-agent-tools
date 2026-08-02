@@ -1,9 +1,8 @@
 """Tests for the per-tool control scripts (scripts/<tool>.sh install|uninstall).
 
-These pin the refactored contract: each tool has ONE script that takes
-install|uninstall as a subcommand, managing
-only that tool's wrapper + completion symlinks — without touching the shell rc
-(which remains scripts/install.sh's job).
+Each tool has ONE self-contained script that takes install|uninstall as a
+subcommand. install writes that tool's wrapper + bash/fish completion symlinks
+AND its own per-tool PATH block in the shell rc; uninstall reverses all of it.
 """
 import os
 import shutil
@@ -72,20 +71,38 @@ def test_model_switch_install_creates_wrapper_and_completions(tmp_path):
     assert fish_link.resolve() == (fake_repo / "completions" / "model-switch.fish").resolve()
 
 
-def test_model_switch_install_does_not_touch_shell_rc(tmp_path):
-    """A single-tool install must NOT write the repo PATH block — that's install.sh's job."""
+def test_model_switch_install_writes_its_own_path_block(tmp_path):
+    """install writes a per-tool PATH block (not the old shared one)."""
     fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
     r = _run(fake_repo / "scripts" / "model-switch.sh", "install", env)
     assert r.returncode == 0, f"install failed:\n{r.stderr}"
+
     bashrc = fake_home / ".bashrc"
-    assert not bashrc.exists(), "per-tool install must not create/touch the shell rc"
+    assert bashrc.exists(), "install must create/touch the shell rc"
+    text = bashrc.read_text()
+    assert "# yzr-agent-tools model-switch PATH begin" in text
+    assert "# yzr-agent-tools model-switch PATH end" in text
+    assert "export PATH=" in text
+
+
+def test_model_switch_uninstall_strips_its_path_block(tmp_path):
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    sh = fake_repo / "scripts" / "model-switch.sh"
+    assert _run(sh, "install", env).returncode == 0
+    assert (fake_home / ".bashrc").exists()
+
+    r = _run(sh, "uninstall", env)
+    assert r.returncode == 0, f"uninstall failed:\n{r.stderr}"
+    text = (fake_home / ".bashrc").read_text()
+    assert "# yzr-agent-tools model-switch PATH begin" not in text
 
 
 def test_model_switch_uninstall_removes_wrapper_and_completions(tmp_path):
     fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
-    _run(fake_repo / "scripts" / "model-switch.sh", "install", env)
+    sh = fake_repo / "scripts" / "model-switch.sh"
+    _run(sh, "install", env)
 
-    r = _run(fake_repo / "scripts" / "model-switch.sh", "uninstall", env)
+    r = _run(sh, "uninstall", env)
     assert r.returncode == 0, f"uninstall failed:\n{r.stderr}"
 
     assert not (fake_repo / "bin" / "model-switch").exists()
@@ -119,12 +136,11 @@ def test_mcp_plugin_mgr_install_creates_wrapper_and_completions(tmp_path):
     assert fish_link.is_symlink()
 
 
-# --- _common.sh is a library, not a command ----------------------------------
+def test_mcp_plugin_mgr_install_writes_its_own_path_block(tmp_path):
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    r = _run(fake_repo / "scripts" / "mcp-plugin-mgr.sh", "install", env)
+    assert r.returncode == 0, f"install failed:\n{r.stderr}"
 
-def test_common_sh_is_not_executable():
-    """_common.sh is meant to be sourced; it must not carry the +x bit."""
-    p = ROOT / "scripts" / "_common.sh"
-    assert p.exists()
-    assert not (p.stat().st_mode & stat.S_IXUSR), (
-        "_common.sh is a sourced library; it should not be executable"
-    )
+    text = (fake_home / ".bashrc").read_text()
+    assert "# yzr-agent-tools mcp-plugin-mgr PATH begin" in text
+    assert "# yzr-agent-tools mcp-plugin-mgr PATH end" in text
