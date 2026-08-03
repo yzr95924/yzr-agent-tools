@@ -33,5 +33,13 @@ jobs:
         # tomllib is stdlib). pip's resolver honors Requires-Python, so on 3.7
         # it auto-selects the last 3.7-compatible pytest (7.4.x) / pytest-cov.
         run: pip install pytest pytest-cov 'tomli>=1.1'
+      - name: Generate ./bin/ wrappers
+        # bin/<tool> are gitignored install artifacts (see .gitignore: "re-run
+        # scripts/<tool>.sh install after a fresh clone"). A fresh CI checkout
+        # has none, so regenerate them here — several wrapper-content and
+        # shell-completion tests read / shell out to bin/model-switch.
+        run: |
+          bash scripts/model-switch.sh install
+          bash scripts/mcp-plugin-mgr.sh install
       - name: Run tests
         run: pytest
