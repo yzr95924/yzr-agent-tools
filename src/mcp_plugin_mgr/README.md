@@ -111,9 +111,10 @@ mcp-plugin-mgr add mytool --stdio --command "uvx --from git+https://example/x ru
 
 - `outline` — Outline wiki(Streamable HTTP)。需 `--url` + `--token`。
 - `memos` — [Memos](https://usememos.com)(Streamable HTTP)。需 `--url`(实例地址,含 `/mcp`)+ `--token`(Memos 设置里的 personal access token)。
+- `agent-html-drop` — 自托管 HTML drop(Streamable HTTP)。需 `--url`(HTTPS origin,含 `/mcp`)+ `--token`(server 端 Bearer token)。让本机 agent 把 `yzr-md-to-html` 等产出的自包含 HTML 推到远端 server,提供 6 个 tool(`upload_html` / `list_html` / `delete_html` / `get_public_url` / `list_annotations` / `delete_annotation`)。
 
 > 任意 http/stdio MCP 都能用 flag 配(不限于 preset);需要更多开箱 preset 时往
-> `src/mcp_plugin_mgr/presets.py` 加即可。
+> `src/mcp_plugin_mgr/presets/` 下加一个模块即可。
 
 加 Memos:
 
@@ -122,6 +123,17 @@ mcp-plugin-mgr add memos \
   --url https://your-memos.example.com/mcp \
   --token <personal-access-token> \
   --all-drivers
+```
+
+加 agent-html-drop(token 在 server 端取:`agent-html-drop token show` 或容器
+`docker compose exec agent-html-drop agent-html-drop token show`):
+
+```bash
+mcp-plugin-mgr add agent-html-drop \
+  --url https://notes.example.com/mcp \
+  --token <server-side-bearer-token> \
+  --all-drivers \
+  --auto-allow   # upload_html 写大 HTML(默认上限 50MB),预批 6 个工具避免 auto-mode 误拦
 ```
 
 ## 诊断:`test` 探活

@@ -258,6 +258,31 @@ def test_memos_diagnose_notfound_mentions_version_and_path():
     assert "/mcp" in r.remediation
 
 
+def test_agent_html_drop_diagnose_auth_points_at_token_show():
+    r = get_preset("agent-html-drop").diagnose(
+        ProbeResult(ok=False, code="auth", summary="x")
+    )
+    assert "token show" in r.remediation
+
+
+def test_agent_html_drop_diagnose_conn_points_at_daemon_and_nginx():
+    r = get_preset("agent-html-drop").diagnose(
+        ProbeResult(ok=False, code="conn", summary="x")
+    )
+    # Both root causes: daemon not running + nginx not forwarding /mcp.
+    assert "docker compose ps" in r.detail
+    assert "/mcp" in r.detail
+
+
+def test_agent_html_drop_diagnose_ok_adds_auto_allow_hint():
+    # upload_html writes large HTML — the auto-allow hint matters here.
+    r = get_preset("agent-html-drop").diagnose(
+        ProbeResult(ok=True, code="ok", summary="x")
+    )
+    assert "auto-allow" in r.detail
+    assert "upload_html" in r.detail
+
+
 def test_cli_test_outline_applies_outline_overlay_not_memos(monkeypatch):
     run(["add", "outline", "--url", "https://x/mcp", "--token", "t", "--no-apply"])
 

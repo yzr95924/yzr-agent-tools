@@ -9,11 +9,12 @@ one ``Preset``. This package aggregates them into ``PRESETS`` (keyed by
 Add a preset = add a module under this package + one import line below.
 """
 from mcp_plugin_mgr.presets._types import Preset, PresetError
+from mcp_plugin_mgr.presets.agent_html_drop import PRESET as _AGENT_HTML_DROP
 from mcp_plugin_mgr.presets.memos import PRESET as _MEMOS
 from mcp_plugin_mgr.presets.outline import PRESET as _OUTLINE
 
 # Keyed by preset.name so the dict key and the name can't drift apart.
-PRESETS = {p.name: p for p in (_OUTLINE, _MEMOS)}
+PRESETS = {p.name: p for p in (_OUTLINE, _MEMOS, _AGENT_HTML_DROP)}
 
 
 def get_preset(name):

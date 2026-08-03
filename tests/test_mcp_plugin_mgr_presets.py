@@ -53,3 +53,36 @@ def test_get_preset_unknown_returns_none():
 def test_presets_registry_contains_outline_and_memos():
     assert "outline" in PRESETS
     assert "memos" in PRESETS
+
+
+def test_agent_html_drop_preset_is_http_and_needs_url_and_token():
+    p = get_preset("agent-html-drop")
+    assert p is not None
+    assert p.transport == "http"
+    with pytest.raises(PresetError):
+        p.to_entry()                       # no url
+    with pytest.raises(PresetError):
+        p.to_entry(url="https://notes.example/mcp")  # no token
+
+
+def test_agent_html_drop_preset_renders_bearer_header():
+    e = get_preset("agent-html-drop").to_entry(
+        url="https://notes.example/mcp", token="drop_tok"
+    )
+    assert e.url == "https://notes.example/mcp"
+    assert e.headers == {"Authorization": "Bearer drop_tok"}
+
+
+def test_agent_html_drop_preset_preapproves_all_six_tools():
+    # upload_html writes large HTML (≤50MB) — exactly what the auto-mode
+    # classifier false-positive blocks, so the preset enumerates all 6 tools
+    # for --auto-allow rather than falling back to the server wildcard.
+    p = get_preset("agent-html-drop")
+    assert set(p.allow_tools) == {
+        "mcp__agent-html-drop__upload_html",
+        "mcp__agent-html-drop__list_html",
+        "mcp__agent-html-drop__delete_html",
+        "mcp__agent-html-drop__get_public_url",
+        "mcp__agent-html-drop__list_annotations",
+        "mcp__agent-html-drop__delete_annotation",
+    }

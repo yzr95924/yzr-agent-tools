@@ -23,6 +23,14 @@ def test_entries_use_preset_allow_tools_when_present():
     assert all(e.startswith("mcp__outline__") for e in entries)
 
 
+def test_entries_use_agent_html_drop_six_tools():
+    # upload_html writes large HTML -> preset enumerates all 6 tools (no wildcard).
+    entries = allow.allow_entries_for("agent-html-drop", get_preset("agent-html-drop"))
+    assert len(entries) == 6
+    assert all(e.startswith("mcp__agent-html-drop__") for e in entries)
+    assert "mcp__agent-html-drop__upload_html" in entries
+
+
 def test_entries_fall_back_to_server_wildcard():
     # memos preset has no allow_tools -> mcp__memos wildcard.
     assert allow.allow_entries_for("memos", get_preset("memos")) == ["mcp__memos"]
@@ -125,6 +133,16 @@ def test_cli_add_memos_auto_allow_uses_wildcard():
     assert r.exit_code == 0, r.stdout
     data = json.loads(paths.claude_settings_file().read_text())
     assert data["permissions"]["allow"] == ["mcp__memos"]
+
+
+def test_cli_add_agent_html_drop_auto_allow_writes_six_rules():
+    r = run(["add", "agent-html-drop", "--url", "https://notes/mcp", "--token", "t",
+             "--all-drivers", "--auto-allow"])
+    assert r.exit_code == 0, r.stdout
+    assert "Pre-approved 6 tool" in r.stdout
+    allow_list = json.loads(paths.claude_settings_file().read_text())["permissions"]["allow"]
+    assert len(allow_list) == 6
+    assert "mcp__agent-html-drop__upload_html" in allow_list
 
 
 def test_cli_add_without_auto_allow_does_not_touch_settings():

@@ -33,7 +33,7 @@ src/mcp_plugin_mgr/
 ├── paths.py             XDG: config_dir / servers_file / claude_json_file / opencode_config_file
 ├── _compat.py           TOML loader(tomllib/tomli)+ 手写 dumper(自包含副本)
 ├── store.py             ServerEntry + ServerRegistry;servers.toml I/O + 未知字段透传 + 校验
-├── presets/             内置 preset(每 plugin 一文件:_types.py + outline.py + memos.py;__init__ 聚合 PRESETS)
+├── presets/             内置 preset(每 plugin 一文件:_types.py + outline.py + memos.py + agent_html_drop.py;__init__ 聚合 PRESETS)
 ├── probe.py             test 命令:MCP initialize 握手探活 + 故障分类(http middlebox / stdio)
 ├── allow.py             --auto-allow:写 Claude Code permissions.allow(只动 permissions 键,保留 env/model)
 ├── drivers/
@@ -78,10 +78,11 @@ description = "..."
 (与 model-switch/store.py 同纪律)。`transport` / http 的 `url` / stdio 的 `command` 在 load 与
 显式 `validate()` 时强校验。
 
-**preset**:`presets/` 包,每 plugin 一个文件(`outline.py` / `memos.py`),`__init__` 聚合成 `PRESETS`(按 `preset.name`
-作 key,键名与 name 不漂移)。每个是部分填充的模板:V1 有 `outline` + `memos`(均 http),各留 `url`+`token` 两个洞
+**preset**:`presets/` 包,每 plugin 一个文件(`outline.py` / `memos.py` / `agent_html_drop.py`),`__init__` 聚合成 `PRESETS`(按 `preset.name`
+作 key,键名与 name 不漂移)。每个是部分填充的模板:V1 有 `outline` + `memos` + `agent-html-drop`(均 http),各留 `url`+`token` 两个洞
 (`--url`/`--token` 或 TTY 交互补齐),把 token 套进 `Authorization: Bearer {token}`;`--header` 叠加在 preset 头之上并
-覆盖同名键。outline 还自带 `allow_tools`(15 个工具名,供 `--auto-allow` 用)。任意 http/stdio MCP 不在 preset 里也能用 flag 配。
+覆盖同名键。outline 自带 `allow_tools`(15 个工具名)、`agent-html-drop` 自带 `allow_tools`(6 个,含写大 HTML 的 `upload_html`),
+供 `--auto-allow` 用。任意 http/stdio MCP 不在 preset 里也能用 flag 配。
 加一个 preset = 新建一个 plugin 文件 + `__init__` 加一行 import。
 
 ## 4. 选 agent 的 UX
@@ -126,7 +127,7 @@ description = "..."
 - 只读、不写 agent 配置;退出码 0/1,可脚本化。
 - **per-plugin 诊断覆盖层**:协议握手共享,但根因解读 per-plugin——每个 preset 可选声明 `diagnose(result)`
   钩子,`test` 在通用 probe 返回后调用它,为该服务叠专属根因/修复(outline→Settings→AI / ddnsto 反代;
-  memos→Access Tokens / v0.27+ / `/mcp` 路径)。非 preset / ad-hoc `--url` 无覆盖层,只用通用结论。
+  memos→Access Tokens / v0.27+ / `/mcp` 路径;agent-html-drop→`token show` / daemon 存活 / nginx 转发 `/mcp`)。非 preset / ad-hoc `--url` 无覆盖层,只用通用结论。
 
 ## 8. 权限预批(`--auto-allow` / `allow.py`)
 
@@ -134,7 +135,7 @@ Claude Code auto-mode classifier 对「已批准 + 新内容改写」保守,outl
 会偶发 false-positive 拦截。`add <name> --auto-allow` 在写完 MCP 配置后,把该服务的工具名合并进
 `~/.claude/settings.json#permissions.allow`,分类器即跳过二次判断。`remove <name> --auto-allow` 反向清理。
 
-- 条目来源:preset 自带 `allow_tools`(outline 是实测的 15 个)→ 否则回退 server 级通配 `mcp__<name>`。
+- 条目来源:preset 自带 `allow_tools`(outline 实测的 15 个;agent-html-drop 6 个,含写大 HTML 的 `upload_html`)→ 否则回退 server 级通配 `mcp__<name>`。
 - 写入用 `allow.py`:`add_allowed_tools` / `remove_allowed_tools`,**只动 `permissions` 键**,保留 `env`/`model`/`theme`
   (model-switch 的键)——同 opencode.json 那样按 key 分权共享 `settings.json`。原子写 + 合并去重。
 - 与 model-switch 共享 `~/.claude/settings.json`:两者各管不同键、保留其余,顺序执行不丢字段(单用户 CLI 无并发)。

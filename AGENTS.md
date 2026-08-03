@@ -68,7 +68,7 @@ mcp-plugin-mgr init                      # 初始化 ~/.config/mcp-plugin-mgr/
 mcp-plugin-mgr add outline --url ... --token ol_api_... --all-drivers   # 加服务(preset 名或显式 flag)
 mcp-plugin-mgr list                      # 列已注册服务(+ 每 agent 是否已写入)
 mcp-plugin-mgr remove outline --all-drivers
-mcp-plugin-mgr presets                   # 列内置 preset(outline / memos)
+mcp-plugin-mgr presets                   # 列内置 preset(outline / memos / agent-html-drop)
 mcp-plugin-mgr status
 mcp-plugin-mgr test outline              # 探活:发 initialize 握手,诊断连不通根因(含 ddnsto middlebox)
 # add/remove 还可加 --auto-allow:一并把该 MCP 的工具写进 Claude Code permissions.allow(避免 auto-mode 拦大文档)
@@ -100,7 +100,7 @@ src/
     ├── paths.py                 XDG 路径(config_dir / servers_file / claude_json_file / opencode_config_file)
     ├── _compat.py               TOML loader (tomllib/tomli) + 手写 dumper(自包含副本)
     ├── store.py                 servers.toml I/O + 透传未知字段 (ServerEntry / ServerRegistry)
-    ├── presets/                 内置 preset 包(每 plugin 一文件:_types/outline/memos;__init__ 聚合)
+    ├── presets/                 内置 preset 包(每 plugin 一文件:_types/outline/memos/agent_html_drop;__init__ 聚合)
     ├── probe.py                 test 命令:MCP initialize 握手探活 + 故障分类(http middlebox / stdio)
     ├── allow.py                 --auto-allow:写 Claude Code permissions.allow(保留 env/model)
     ├── drivers/
@@ -148,7 +148,7 @@ CLI(`mcp-plugin-mgr`),与 model-switch 同构:一份规范注册表(`~/.config/m
 `BaseMcpDriver` 实现通用 read/list/add/remove(只动 `self._KEY` 那段,保留文件里其它键——Claude Code 的
 userID/onboarding、OpenCode 的 provider/model/$schema);子类只设 `_KEY` + `render(entry)`。V1 命令面
 **增删查 + test 探活**(add/list/remove/test/presets/status),不做 enable/disable:两 agent 的 enable 语义不对称
-(Claude Code 无原生 disable,OpenCode 有 `enabled`),V1 回避。内置 preset:`outline` + `memos`(均 http,需 --url/--token);
+(Claude Code 无原生 disable,OpenCode 有 `enabled`),V1 回避。内置 preset:`outline` + `memos` + `agent-html-drop`(均 http,需 --url/--token);
 任意 http/stdio MCP 不在 preset 里也能用 flag 配。`test` 命令(`probe.py`)对**每种传输一套流程**:
 http 发 `initialize` 握手按状态分类(ok/auth/404/conn/middlebox-empty),stdio spawn + 握手;专门诊断
 `*.ddnsto.com` 那类反代盒(http 返空 200 → 自动探 https 变体并给修复)。**协议握手共享,根因解读 per-plugin**:
