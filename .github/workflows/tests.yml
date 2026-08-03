@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: py${{ matrix.python-version }}
+    # Pinned to ubuntu-22.04: Python 3.7 (this project's stated floor) is NOT
+    # available on ubuntu-24.04 / ubuntu-latest — 3.7 is EOL and was pruned
+    # from those runners. If ubuntu-22.04 is ever retired by GitHub, move the
+    # 3.7 entry onto a `container: python:3.7.17-slim` job instead.
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.7 = project floor (exercises the typing.Protocol fallback shim +
+        # tomli loader); 3.8 = first version with real typing.Protocol;
+        # 3.11/3.12 = stdlib tomllib path. A regression of any 3.7-incompatible
+        # import turns the 3.7 job red first.
+        python-version: ["3.7", "3.8", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install test deps
+        # tomli is the TOML reader for Python <3.11 (harmless on 3.11+ where
+        # tomllib is stdlib). pip's resolver honors Requires-Python, so on 3.7
+        # it auto-selects the last 3.7-compatible pytest (7.4.x) / pytest-cov.
+        run: pip install pytest pytest-cov 'tomli>=1.1'
+      - name: Run tests
+        run: pytest

@@ -5,7 +5,17 @@ specific agent's global configuration file (e.g., Claude Code's
 ~/.claude/settings.json, OpenCode's ~/.config/opencode/opencode.json).
 """
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol
+from typing import Dict, List, Optional
+
+# typing.Protocol is Python 3.8+ (PEP 544); fall back to a plain stand-in on
+# 3.7. Used here only as a structural type hint (no isinstance / nothing
+# subclasses it), so a plain class is behaviorally equivalent on 3.7. Mirrors
+# _compat.py's tomllib/tomli fallback.
+try:
+    from typing import Protocol
+except ImportError:  # Python <3.8
+    class Protocol:  # type: ignore[no-redef]
+        pass
 
 from model_switch.store import ModelEntry as Model
 
