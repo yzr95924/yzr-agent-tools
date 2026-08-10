@@ -141,19 +141,21 @@ def _prompt(label: str, default=None, *, optional: bool = False):
 
 
 def _prompt_secret(label: str) -> str:
-    """Read a secret from stdin WITHOUT echoing (getpass)."""
-    import getpass
+    """Read a secret from stdin, echoing what's typed.
 
+    The token is persisted in plaintext to servers.toml anyway, so hiding the
+    input buys nothing and makes typos hard to catch.
+    """
     if not sys.stdin.isatty():
         print(
-            "Error: {} is required (no TTY for secure prompt). Pass it via --token.".format(
+            "Error: {} is required (no TTY for prompt). Pass it via --token.".format(
                 label
             ),
             file=sys.stderr,
         )
         sys.exit(1)
     try:
-        value = getpass.getpass("{}: ".format(label))
+        value = input("{}: ".format(label))
     except EOFError:
         print(
             "Error: {} is required (input exhausted). Pass it via --token.".format(label),

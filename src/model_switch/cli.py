@@ -178,23 +178,22 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
 
 
 def _prompt_secret(label: str) -> str:
-    """Read a secret (the API key) from stdin WITHOUT echoing.
+    """Read a secret (the API key) from stdin, echoing what's typed.
 
-    Uses `getpass` so the key isn't displayed on the terminal. In
-    non-interactive contexts with no input, exit with a clear error
-    telling the user to pass `--api-key`.
+    The key is persisted in plaintext to models.toml anyway, so hiding the
+    input buys nothing and makes typos hard to catch. In non-interactive
+    contexts with no input, exit with a clear error telling the user to
+    pass `--api-key`.
     """
-    import getpass
-
     if not sys.stdin.isatty():
         print(
-            f"Error: {label} is required (no TTY for secure prompt). "
+            f"Error: {label} is required (no TTY for prompt). "
             f"Pass it via --api-key.",
             file=sys.stderr,
         )
         sys.exit(1)
     try:
-        value = getpass.getpass(f"{label}: ")
+        value = input(f"{label}: ")
     except EOFError:
         print(
             f"Error: {label} is required (input exhausted). "
