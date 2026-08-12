@@ -35,6 +35,15 @@ def test_add_outline_preset_applies_to_all_drivers():
         "headers": {"Authorization": "Bearer tok"},
     }
 
+    # qodercli is the third default driver — --all-drivers fans out to it too,
+    # rendering http with type: http (same key name `mcpServers` as Claude Code
+    # but a different file: ~/.qoder/settings.json).
+    qd = json.loads(paths.qoder_settings_file().read_text())
+    assert qd["mcpServers"]["outline"] == {
+        "url": "https://my/mcp", "type": "http",
+        "headers": {"Authorization": "Bearer tok"},
+    }
+
 
 def test_add_outline_interactive_prompts_url_and_token():
     # --all-drivers skips the driver-selection prompt; only url+token are prompted.
@@ -209,6 +218,7 @@ def test_complete_drivers():
     names = r.stdout.split()
     assert "claude-code" in names
     assert "opencode" in names
+    assert "qodercli" in names
 
 
 def test_complete_presets():

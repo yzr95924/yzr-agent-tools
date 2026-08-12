@@ -1,6 +1,6 @@
 # mcp-plugin-mgr
 
-管理 Claude Code / OpenCode 的自定义 MCP 服务(以 **Outline wiki** 为起点)。把你在本地注册的
+管理 Claude Code / OpenCode / Qoder CLI 的自定义 MCP 服务(以 **Outline wiki** 为起点)。把你在本地注册的
 MCP 服务翻译成各 agent 自己的协议写进各自配置,重启 agent 即生效。
 
 和 [`model-switch`](../model_switch/README.md) 同构:**一个工具,多个 agent**,每个 agent 一个
@@ -9,11 +9,13 @@ driver 负责把统一的「服务定义」渲染成该 agent 的字段与位置
 ## 它解决什么
 
 - Claude Code 的 MCP 服务在 `~/.claude.json` 的 `mcpServers`;OpenCode 的在
-  `~/.config/opencode/opencode.json` 的 `mcp`。**位置不同、字段名不同、type 词表不同**
+  `~/.config/opencode/opencode.json` 的 `mcp`;Qoder CLI 的在 `~/.qoder/settings.json` 的
+  `mcpServers`(与 Claude Code 同键名、不同文件)。**位置不同、字段名不同、type 词表不同**
   (Claude Code: `http`/`stdio`;OpenCode: `remote`/`local`,且 `command` 是 cmd+args 合并的
-  数组,env 字段叫 `environment`)。
-- 手改两个文件、两套写法、还要保留下沉在同一个文件里的其它字段(Claude Code 的 onboarding /
-  projects / OpenCode 的 provider/model)——容易出错。
+  数组,env 字段叫 `environment`;Qoder CLI: 接近 Claude Code,但 stdio **不写 `type` 字段**、
+  空 env 省略 `env` 键——对齐 `qodercli mcp add` 的产出)。
+- 手改三个文件、三套写法、还要保留下沉在同一个文件里的其它字段(Claude Code 的 onboarding /
+  projects、OpenCode 的 provider/model、Qoder CLI 的 model/ui/permissions)——容易出错。
 - 本工具:你只维护一份 `~/.config/mcp-plugin-mgr/servers.toml`,driver 负责翻译并**只改自己那一段,
   其余字段原样保留**。
 
@@ -51,11 +53,13 @@ mcp-plugin-mgr add outline --url ... --token ... --all-drivers --auto-allow
 
 - Claude Code `~/.claude.json` → `mcpServers.outline = {"type":"http","url":...,"headers":{"Authorization":"Bearer ..."}}`
 - OpenCode `~/.config/opencode/opencode.json` → `mcp.outline = {"type":"remote","url":...,"enabled":true,"headers":{...}}`
+- Qoder CLI `~/.qoder/settings.json` → `mcpServers.outline = {"url":...,"type":"http","headers":{...}}`
 
 重启 agent 即加载:
 
 - Claude Code:Ctrl+D 退出后重新 `claude`
 - OpenCode:重启 CLI
+- Qoder CLI:重启 `qodercli`
 
 > 同一个 `opencode.json` 里的 `provider`/`model` 归 `model-switch` 管;本工具只动 `mcp` 那一段,
 > 两者**字段不重叠**,可并存。`~/.claude.json` 与 `~/.claude/settings.json` 是两个不同的文件
@@ -194,14 +198,16 @@ args = ["--from", "git+https://example/some-mcp", "run"]
 
 ## 设计要点 / 局限
 
-- **只做增删查**(V1):`add` / `list` / `remove`,不做 enable/disable / 连通性探测。两个 agent 的
-  enable 语义不对称(Claude Code 无原生 disable,OpenCode 有 `enabled` 字段),V1 暂不碰。
+- **只做增删查**(V1):`add` / `list` / `remove`,不做 enable/disable / 连通性探测。各 agent 的
+  enable 语义不对称(Claude Code 无原生 disable;OpenCode 有 `enabled` 字段;Qoder CLI 有
+  `qodercli mcp enable/disable` 但落盘形式又不同),V1 暂不碰。
 - **写 agent 配置 = 原子写 + 字段透传**:读全 JSON → 只改自己的那段(`mcpServers` / `mcp`)→
-  写 `.tmp` 再 `os.replace`,绝不半写;文件里其它字段(userID、onboarding、provider/model、$schema)一字不动。
+  写 `.tmp` 再 `os.replace`,绝不半写;文件里其它字段(userID、onboarding、provider/model、$schema、
+  model/ui/permissions)一字不动。
 - **明文 token**:token 写进 `servers.toml` 与 agent 配置(同 model-switch 的本地信任模型,
   注意文件权限)。
-- **测试隔离**:tests 绝不碰真实的 `~/.claude.json` / `opencode.json`;`tests/conftest.py` 把路径
-  重定向到 tmp,teardown 断言真实配置字节级一致。
+- **测试隔离**:tests 绝不碰真实的 `~/.claude.json` / `opencode.json` / `~/.qoder/settings.json`;
+  `tests/conftest.py` 把路径重定向到 tmp,teardown 断言真实配置字节级一致。
 - **lazy 注册 driver**:import 时不创建指向 `Path.home()/...` 的实例,首次用时才注册,避免测试隔离漏洞。
 
 设计详情见 [`docs/mcp-plugin-mgr-design.md`](../../docs/mcp-plugin-mgr-design.md)。

@@ -8,6 +8,13 @@ metadata:
 **结论（2026-07-31 实测，qodercli 1.0.43）：qodercli 不适配，不再讨论。** model-switch 的核心场景
 （把 agent 指向任意 Anthropic 兼容上游）在 qodercli 上无法实现，不要再做调研或写 driver。
 
+> **适用范围**：本记忆**只针对 model-switch（推理上游切换）**。qodercli 的 **MCP 服务注册是另一回事
+> ——纯客户端配置，完全可行且已实现**：qodercli 自带 `qodercli mcp add/remove/list`（仿 `claude mcp`），
+> 从 `~/.qoder/settings.json` 的 `mcpServers` 键读用户级 MCP 服务（同文件还有 model/ui/permissions，互不干扰）。
+> mcp-plugin-mgr 已加 `qodercli` driver（2026-08-13），render 对齐 `qodercli mcp add` 产出
+> （http 带 `type:"http"`；stdio **不写 `type`**、空 env 省略）。**不要把本记忆的「不可行」误用到 MCP。**
+
+
 **Why（三层实证，均用 `--config-dir` 重定向到 tmp 验证，未碰真实配置）：**
 
 1. **没有客户端直连路径**。所有推理请求（含 BYOK 自定义模型）都发到

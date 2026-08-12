@@ -97,7 +97,7 @@ src/
 └── mcp_plugin_mgr/              # CLI;管理 agent 的自定义 MCP 服务
     ├── cli.py                   argparse (init/add/list/remove/presets/status)
     ├── __main__.py              python -m mcp_plugin_mgr 入口
-    ├── paths.py                 XDG 路径(config_dir / servers_file / claude_json_file / opencode_config_file)
+    ├── paths.py                 XDG 路径(config_dir / servers_file / claude_json_file / opencode_config_file / qoder_settings_file)
     ├── _compat.py               TOML loader (tomllib/tomli) + 手写 dumper(自包含副本)
     ├── store.py                 servers.toml I/O + 透传未知字段 (ServerEntry / ServerRegistry)
     ├── presets/                 内置 preset 包(每 plugin 一文件:_types/outline/memos/agent_html_drop;__init__ 聚合)
@@ -107,7 +107,8 @@ src/
     │   ├── base.py              McpDriver Protocol + BaseMcpDriver(通用 JSON read/list/add/remove)+ Registry
     │   ├── _atomic.py           atomic JSON write(driver 共享)
     │   ├── claude_code.py       ~/.claude.json mcpServers 适配器(http/stdio)
-    │   └── opencode.py          opencode.json mcp 适配器(remote/local;command 合并数组;environment)
+    │   ├── opencode.py          opencode.json mcp 适配器(remote/local;command 合并数组;environment)
+    │   └── qoder_cli.py         ~/.qoder/settings.json mcpServers 适配器(http 带 type / stdio 无 type)
     └── README.md                详细用户文档
 ```
 
@@ -138,17 +139,22 @@ agent 协议的字段。
 ### `mcp_plugin_mgr` 的形态
 
 CLI(`mcp-plugin-mgr`),与 model-switch 同构:一份规范注册表(`~/.config/mcp-plugin-mgr/servers.toml`)
-+ 每 agent 一个 driver 负责翻译。两个 driver:
++ 每 agent 一个 driver 负责翻译。三个 driver:
 - `claude-code` 写 `~/.claude.json` 的 `mcpServers`(**不是** `~/.claude/settings.json`——后者归
   model-switch;两者是不同文件)。http→`{type:http,url,headers?}`,stdio→`{type:stdio,command,args,env}`。
 - `opencode` 写 `opencode.json` 的 `mcp`。词表不同:http→`{type:remote,url,enabled:true,headers?}`,
   stdio→`{type:local,command:[cmd]+args,enabled:true,environment?}`(`command` 是 cmd+args 合并的数组,
   env 字段叫 `environment`)。
+- `qodercli` 写 `~/.qoder/settings.json` 的 `mcpServers`(**与 Claude Code 同键名、不同文件**;同文件还
+  有 model/ui/permissions/git/security,均不动)。词表接近 Claude Code 但有差异(对齐 `qodercli mcp add`
+  实测产出):http→`{url,type:"http",headers?}`,stdio→`{command,args,env?}`——**stdio 不写 `type` 字段、空 env
+  省略 `env` 键**(Claude Code 则恒写 `type:"stdio"` 与 `env` 对象)。Qoder CLI 的 MCP 功能是纯客户端配置(与
+  [[qodercli-driver-not-feasible]] 记的 model-switch 云转发不可行是两回事——那个针对推理上游,这个针对 MCP 服务注册)。
 
 `BaseMcpDriver` 实现通用 read/list/add/remove(只动 `self._KEY` 那段,保留文件里其它键——Claude Code 的
-userID/onboarding、OpenCode 的 provider/model/$schema);子类只设 `_KEY` + `render(entry)`。V1 命令面
-**增删查 + test 探活**(add/list/remove/test/presets/status),不做 enable/disable:两 agent 的 enable 语义不对称
-(Claude Code 无原生 disable,OpenCode 有 `enabled`),V1 回避。内置 preset:`outline` + `memos` + `agent-html-drop`(均 http,需 --url/--token);
+userID/onboarding、OpenCode 的 provider/model/$schema、Qoder CLI 的 model/ui/permissions);子类只设 `_KEY` + `render(entry)`。V1 命令面
+**增删查 + test 探活**(add/list/remove/test/presets/status),不做 enable/disable:各 agent 的 enable 语义不对称
+(Claude Code 无原生 disable;OpenCode 有 `enabled` 字段;Qoder CLI 有 `qodercli mcp enable/disable` 但落盘形式又不同),V1 回避。内置 preset:`outline` + `memos` + `agent-html-drop`(均 http,需 --url/--token);
 任意 http/stdio MCP 不在 preset 里也能用 flag 配。`test` 命令(`probe.py`)对**每种传输一套流程**:
 http 发 `initialize` 握手按状态分类(ok/auth/404/conn/middlebox-empty),stdio spawn + 握手;专门诊断
 `*.ddnsto.com` 那类反代盒(http 返空 200 → 自动探 https 变体并给修复)。**协议握手共享,根因解读 per-plugin**:

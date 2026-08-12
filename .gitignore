@@ -221,3 +221,5 @@ __marimo__/
 # tool into ./bin/ on every run (idempotent, templated). Don't track generated
 # artifacts — re-run scripts/<tool>.sh install after a fresh clone.
 /bin/
+
+.qoder

@@ -55,3 +55,20 @@ def opencode_config_file() -> Path:
     coexist without conflict as long as each preserves unknown keys.
     """
     return _config_base() / "opencode" / "opencode.json"
+
+
+def qoder_settings_file() -> Path:
+    """Qoder CLI's user-scope settings file (~/.qoder/settings.json).
+
+    Qoder CLI reads MCP servers from the top-level ``mcpServers`` key here —
+    the SAME key name Claude Code uses, but in a DIFFERENT file. The same file
+    also holds ``model``/``ui``/``permissions``/``git``/``security`` (qodercli's
+    own settings); those keys are disjoint from ``mcpServers``, so we touch only
+    ``mcpServers`` and preserve the rest.
+
+    Verified against qodercli 1.0.43: ``qodercli mcp add <name> --scope user``
+    writes here, and ``qodercli mcp get <name>`` reports "User config" scope at
+    this path. (Qoder CLI also reads project/workspace scopes like Claude Code,
+    but user-scope is what mcp-plugin-mgr manages.)
+    """
+    return Path.home() / ".qoder" / "settings.json"

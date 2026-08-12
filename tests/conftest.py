@@ -53,6 +53,8 @@ _REAL_CFG_BASE = Path(
     os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
 )
 REAL_OPENCODE_CONFIG = _REAL_CFG_BASE / "opencode" / "opencode.json"
+# Qoder CLI's real user settings (holds model/ui/permissions + its mcpServers).
+REAL_QODER_SETTINGS = Path(os.path.expanduser("~")) / ".qoder" / "settings.json"
 
 
 def _sha256(path: Path):
@@ -76,7 +78,8 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
                      ("claude_json", REAL_CLAUDE_JSON),
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
                      ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
-                     ("opencode_config", REAL_OPENCODE_CONFIG)):
+                     ("opencode_config", REAL_OPENCODE_CONFIG),
+                     ("qoder_settings", REAL_QODER_SETTINGS)):
         snapshot[label] = {
             "exists": p.exists(),
             "mtime": p.stat().st_mtime if p.exists() else None,
@@ -113,11 +116,13 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     from mcp_plugin_mgr.drivers.base import registry as mcp_registry
     from mcp_plugin_mgr.drivers.claude_code import ClaudeCodeMcpDriver
     from mcp_plugin_mgr.drivers.opencode import OpenCodeMcpDriver
+    from mcp_plugin_mgr.drivers.qoder_cli import QoderCliMcpDriver
 
     mcp_cfg_dir = tmp_path / "mcp-plugin-mgr-cfg"
     mcp_cfg_dir.mkdir()
     mcp_servers_p = mcp_cfg_dir / "servers.toml"
     claude_json_p = tmp_path / ".claude.json"
+    qoder_settings_p = tmp_path / ".qoder" / "settings.json"
     # opencode_p (created above) is shared: model-switch writes provider/model,
     # mcp-plugin-mgr writes mcp — disjoint keys, same tmp file is fine.
     monkeypatch.setattr(mcp_paths, "config_dir", lambda: mcp_cfg_dir)
@@ -125,12 +130,14 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     monkeypatch.setattr(mcp_paths, "claude_json_file", lambda: claude_json_p)
     monkeypatch.setattr(mcp_paths, "claude_settings_file", lambda: settings_p)
     monkeypatch.setattr(mcp_paths, "opencode_config_file", lambda: opencode_p)
+    monkeypatch.setattr(mcp_paths, "qoder_settings_file", lambda: qoder_settings_p)
 
     # Replace any pre-existing mcp-plugin-mgr drivers with tmp-path ones, so
     # lazy registration in cli._ensure_default_registered is a no-op and never
-    # builds a driver pointed at the real ~/.claude.json.
+    # builds a driver pointed at the real ~/.claude.json / ~/.qoder/settings.json.
     mcp_registry._drivers["claude-code"] = ClaudeCodeMcpDriver(config_path=claude_json_p)
     mcp_registry._drivers["opencode"] = OpenCodeMcpDriver(config_path=opencode_p)
+    mcp_registry._drivers["qodercli"] = QoderCliMcpDriver(config_path=qoder_settings_p)
 
     paths_dict = {
         "config_dir": cfg_dir,
@@ -141,6 +148,7 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
         "mcp_cfg_dir": mcp_cfg_dir,
         "mcp_servers": mcp_servers_p,
         "claude_json": claude_json_p,
+        "qoder_settings": qoder_settings_p,
     }
     yield paths_dict
 
@@ -149,7 +157,8 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
                      ("claude_json", REAL_CLAUDE_JSON),
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
                      ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
-                     ("opencode_config", REAL_OPENCODE_CONFIG)):
+                     ("opencode_config", REAL_OPENCODE_CONFIG),
+                     ("qoder_settings", REAL_QODER_SETTINGS)):
         snap = snapshot[label]
         if snap["exists"]:
             assert p.exists(), (

@@ -40,11 +40,14 @@ def _ensure_default_registered() -> None:
     """
     from mcp_plugin_mgr.drivers.claude_code import ClaudeCodeMcpDriver
     from mcp_plugin_mgr.drivers.opencode import OpenCodeMcpDriver
+    from mcp_plugin_mgr.drivers.qoder_cli import QoderCliMcpDriver
 
     if "claude-code" not in registry.list():
         registry.register(ClaudeCodeMcpDriver())
     if "opencode" not in registry.list():
         registry.register(OpenCodeMcpDriver())
+    if "qodercli" not in registry.list():
+        registry.register(QoderCliMcpDriver())
 
 
 def _resolve_driver(name: Optional[str]):
@@ -227,7 +230,7 @@ def _apply_auto_allow(name, add):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mcp-plugin-mgr",
-        description="Manage MCP servers (e.g. Outline wiki) for Claude Code and OpenCode.",
+        description="Manage MCP servers (e.g. Outline wiki) for Claude Code, OpenCode, and Qoder CLI.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
@@ -432,7 +435,8 @@ def _do_add(args: argparse.Namespace) -> None:
         _apply_auto_allow(args.name, add=True)
     print(
         "  Restart your agent to load the new MCP server "
-        "(Claude Code: Ctrl+D then `claude`; OpenCode: restart the CLI)."
+        "(Claude Code: Ctrl+D then `claude`; OpenCode: restart the CLI; "
+        "Qoder CLI: restart `qodercli`)."
     )
 
 

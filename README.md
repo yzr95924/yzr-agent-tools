@@ -1,6 +1,6 @@
 # yzr-agent-tools
 
-`yzr-agent-tools` 是一个围绕 AI coding agent(Claude Code、OpenCode、……)的本地运维 /
+`yzr-agent-tools` 是一个围绕 AI coding agent(Claude Code、OpenCode、Qoder CLI、……)的本地运维 /
 配置工具集合。每个工具独立成 CLI 或常驻服务,共享同一套仓库规约(测试隔离、原子写、
 未知字段透传)。
 
@@ -9,7 +9,7 @@
 | 工具             | 简介                                                                            | 状态     |
 | ---------------- | ------------------------------------------------------------------------------- | -------- |
 | [`model-switch`](src/model_switch/README.md) | CLI;切换 AI coding agent 使用的 Anthropic 兼容模型 | 已发布   |
-| [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI;管理 Claude Code / OpenCode 的自定义 MCP 服务(起点:Outline wiki),一份注册表翻译到各 agent | 已发布 |
+| [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI;管理 Claude Code / OpenCode / Qoder CLI 的自定义 MCP 服务(起点:Outline wiki),一份注册表翻译到各 agent | 已发布 |
 
 > 新工具按需添加;同一份仓库规约对所有工具生效。完整仓库规约、目录结构、跨工具注意事项
 > 见 [`AGENTS.md`](AGENTS.md)。
@@ -20,8 +20,9 @@
   包括 yzr / GLM / 各种代理网关)注册到本地仓库,然后一行 `model use <name>` 写进
   Claude Code / OpenCode 的全局配置,重启 agent 即生效。
 - **`mcp-plugin-mgr`** — 一份 `servers.toml` 注册表管你的自定义 MCP 服务(以 Outline wiki 为
-  起点),`add <name>` 翻译成 Claude Code(`~/.claude.json` 的 `mcpServers`)与 OpenCode
-  (`opencode.json` 的 `mcp`)各自的位置/字段/type 词表,只改自己那一段、其余原样保留,重启即生效。
+  起点),`add <name>` 翻译成 Claude Code(`~/.claude.json` 的 `mcpServers`)、OpenCode
+  (`opencode.json` 的 `mcp`)与 Qoder CLI(`~/.qoder/settings.json` 的 `mcpServers`)各自的
+  位置/字段/type 词表,只改自己那一段、其余原样保留,重启即生效。
 
 ## 仓库共用规约
 
