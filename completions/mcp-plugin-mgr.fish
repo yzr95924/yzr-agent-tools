@@ -32,18 +32,24 @@ function __fish_mcp_plugin_mgr_needs_name
     set -l cmd (commandline -opc)
     __fish_mcp_plugin_mgr_using_command add remove; or return 1
     test "$cmd[-1]" = --driver; and return 1
+    # No negative range bounds ($cmd[3..-1]) here — fish 3.0+ only; on
+    # fish 2.x a negative or descending range is an "Array index out of
+    # bounds" error. Slice with an explicit ascending in-bounds end instead.
+    set -l n (count $cmd)
     set -l skip_next 0
-    for tok in $cmd[3..-1]
-        if test $skip_next -eq 1
-            set skip_next 0
-            continue
-        end
-        switch $tok
-            case --driver
-                set skip_next 1
-            case '--*'
-            case '*'
-                return 1
+    if test $n -ge 3
+        for tok in $cmd[3..$n]
+            if test $skip_next -eq 1
+                set skip_next 0
+                continue
+            end
+            switch $tok
+                case --driver
+                    set skip_next 1
+                case '--*'
+                case '*'
+                    return 1
+            end
         end
     end
     return 0

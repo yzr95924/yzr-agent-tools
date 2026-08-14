@@ -49,19 +49,25 @@ function __fish_model_switch_needs_model_name
     test "$cmd[-1]" = --driver; and return 1
     # Scan words after the action for an already-given positional
     # (skipping --driver's value, which is a driver name, not a positional).
+    # NOTE: no negative range bounds ($cmd[4..-1]) — fish 3.0+ only; on
+    # fish 2.x a negative or descending range is an "Array index out of
+    # bounds" error. Slice with an explicit ascending in-bounds end instead.
+    set -l n (count $cmd)
     set -l skip_next 0
-    for tok in $cmd[4..-1]
-        if test $skip_next -eq 1
-            set skip_next 0
-            continue
-        end
-        switch $tok
-            case --driver
-                set skip_next 1
-            case '--*'
-                # valueless flag (--all-drivers, --help)
-            case '*'
-                return 1
+    if test $n -ge 4
+        for tok in $cmd[4..$n]
+            if test $skip_next -eq 1
+                set skip_next 0
+                continue
+            end
+            switch $tok
+                case --driver
+                    set skip_next 1
+                case '--*'
+                    # valueless flag (--all-drivers, --help)
+                case '*'
+                    return 1
+            end
         end
     end
     return 0
