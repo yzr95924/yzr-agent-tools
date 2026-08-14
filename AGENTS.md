@@ -124,9 +124,11 @@ src/
   "Provider not found" 退回默认模型);`options.baseURL` 由 driver 自动补 `/v1`
   (`@ai-sdk/anthropic` 只在 baseURL 后追加 `/messages`,而 store 里 `base_url` 不带 /v1——那正是
   claude-code driver 要的形式;语义差异封装在各自 driver);`options.apiKey` 直接写明文 key
-  (**不用** `{env:VAR}` 占位符;密钥落盘,注意文件权限)。**故意不写 `limit`**:OpenCode schema
-  要求 `limit` 存在时必须有 `limit.output`,而我们只追踪 `context_window`,写半截
-  `{limit:{context}}` 会让整份配置校验失败、模型不可用。
+  (**不用** `{env:VAR}` 占位符;密钥落盘,注意文件权限)。**`context_window` 已知时写 `limit` 块**:
+  自定义 provider 不在 models.dev,OpenCode 无从得知上下文限额,须显式声明 `limit.context`;但 OpenCode
+  schema 要求 `limit` 存在时 `context` 与 `output` 成对(缺 `output` 拒载整份配置),我们只追踪
+  `context_window`,故 `output` 配习惯级常量(`131_072`,对齐 models.dev MiniMax-M3)。`context_window`
+  未知时整块 `limit` 省略(写半截 `{limit:{context}}` 会让配置校验失败、模型不可用)。
 
 通过 `--driver <name>` 选单个、`--all-drivers` 选全部;省略时——交互式(TTY)默认应用到全部
 已注册 driver(回车即 claude-code 与 opencode 都切,符合「切模型就该到处生效」),非交互

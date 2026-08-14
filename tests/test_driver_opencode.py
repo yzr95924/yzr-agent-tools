@@ -56,11 +56,12 @@ def test_driver_name_is_opencode(driver):
 
 # --- apply: the fields opencode actually needs to resolve the model ---------
 #
-# These encode the three bugs that made `model use --driver opencode` silently
-# fail (opencode fell back to its default model):
+# These encode the bugs that made `model use --driver opencode` silently fail
+# (opencode fell back to its default model):
 #   1. wrong config path              — covered in test_paths.py
 #   2. missing `npm` AI-SDK adapter   — test_apply_emits_anthropic_npm_adapter
-#   3. invalid partial `limit`        — test_apply_does_not_emit_partial_limit
+#   3. limit block mishandled         — test_apply_emits_context_limit_when_known
+#                                       + test_apply_omits_limit_when_context_unknown
 
 
 def test_apply_writes_resolved_api_key_verbatim(driver, glm_ctx):
@@ -89,17 +90,33 @@ def test_apply_emits_anthropic_npm_adapter(driver, glm_ctx):
     assert cfg["provider"][PROVIDER_ID]["npm"] == "@ai-sdk/anthropic"
 
 
-def test_apply_does_not_emit_partial_limit(driver, glm_ctx):
-    """OpenCode's schema requires `limit.output` whenever `limit` is present.
-    A partial `{limit:{context}}` — the only thing we could build from
-    context_window alone — fails validation and makes the whole config (and
-    the model) unavailable. So we must not emit a partial limit."""
+def test_apply_emits_context_limit_when_known(driver, glm_ctx):
+    """A custom provider isn't on models.dev, so OpenCode can't infer the
+    context budget — surface context_window as limit.context. OpenCode's
+    schema requires `context` and `output` together (limit.required ==
+    [context, output]), so context is paired with the default output cap;
+    never a bare {limit:{context}} that would fail validation."""
+    from model_switch.drivers.opencode import _DEFAULT_MAX_OUTPUT
     driver.apply(model=glm_ctx, api_key="k")
     cfg = json.loads(driver.settings_path.read_text())
     entry = cfg["provider"][PROVIDER_ID]["models"][glm_ctx.name]
-    assert "limit" not in entry, (
-        "partial limit (context without output) fails opencode schema validation"
-    )
+    assert entry["limit"] == {
+        "context": glm_ctx.context_window,
+        "output": _DEFAULT_MAX_OUTPUT,
+    }
+
+
+def test_apply_omits_limit_when_context_unknown(driver, glm_main):
+    """context_window unknown → omit `limit` entirely, never a partial block.
+    OpenCode rejects a limit missing output, and without context_window we
+    can't build a valid one, so an empty model entry is the only schema-valid
+    option here."""
+    assert glm_main.context_window is None
+    driver.apply(model=glm_main, api_key="k")
+    cfg = json.loads(driver.settings_path.read_text())
+    entry = cfg["provider"][PROVIDER_ID]["models"][glm_main.name]
+    assert entry == {}
+    assert "limit" not in entry
 
 
 def test_apply_preserves_unrelated_providers_and_keys(driver, glm_ctx):

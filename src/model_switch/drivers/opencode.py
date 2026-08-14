@@ -37,16 +37,18 @@ Without this, opencode requests ``.../anthropic/messages``, the upstream
 answers with a 404 wrapped in HTTP 200, and ai-sdk's SSE parser drops the
 non-event body silently — a zero-token empty reply with no error event.
 
-``Model.context_window`` is intentionally NOT surfaced: OpenCode's
-schema requires ``limit.output`` whenever ``limit`` is present, and we only
-track context — emitting a partial ``{limit:{context}}`` fails validation and
-makes the model unavailable. Omitting matches OpenCode's own handling for
-custom providers.
+``Model.context_window`` is surfaced as ``limit.context``: a custom provider
+isn't on models.dev, so OpenCode can't infer the context budget and would fall
+back to a default. OpenCode's schema requires ``context`` and ``output``
+together (``limit.required == [context, output]``), so context is paired with a
+default ``output`` cap (``_DEFAULT_MAX_OUTPUT``). When ``context_window`` is
+unknown the whole ``limit`` block is omitted — a partial ``{limit:{context}}``
+fails validation and makes the model unavailable.
 """
 import json
 import re
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 from model_switch import paths
 from model_switch.drivers._atomic import atomic_write_json
@@ -69,6 +71,16 @@ NPM_ADAPTER = "@ai-sdk/anthropic"
 # zero-token empty reply with no error event.
 _VERSION_SEGMENT = re.compile(r"/v\d+$")
 
+# Default max-output cap paired with every emitted ``limit.context``. OpenCode's
+# schema forces ``context`` and ``output`` to appear together
+# (``limit.required == [context, output]``); model-switch tracks only context,
+# so output takes a habit-level default rather than a per-model registry field.
+# Value aligns with OpenCode's bundled models.dev MiniMax-M3 (output 131072);
+# real Anthropic-compatible gateways (glm/kimi/qwen/minimax) tolerate it (the
+# same constant is end-to-end verified in llmw's opencode overlay). Upgrade to a
+# per-model field when output needs to vary by model.
+_DEFAULT_MAX_OUTPUT = 131_072
+
 
 def _base_url_for_ai_sdk(base_url):
     """Render ``model.base_url`` into the baseURL ``@ai-sdk/anthropic`` expects.
@@ -81,6 +93,26 @@ def _base_url_for_ai_sdk(base_url):
     if not _VERSION_SEGMENT.search(base):
         base += "/v1"
     return base
+
+
+def _render_model_entry(model: Model) -> Dict[str, Any]:
+    """Render the per-model object stored under ``provider.<id>.models``.
+
+    When ``model.context_window`` is known, emit a ``limit`` block so OpenCode
+    manages the real context budget (a custom provider isn't on models.dev, so
+    OpenCode otherwise can't infer it). OpenCode's schema requires ``context``
+    and ``output`` together, so context is paired with ``_DEFAULT_MAX_OUTPUT``.
+    When context is unknown, omit ``limit`` entirely — a partial block would
+    fail validation and make the model unavailable.
+    """
+    if model.context_window is None:
+        return {}
+    return {
+        "limit": {
+            "context": model.context_window,
+            "output": _DEFAULT_MAX_OUTPUT,
+        }
+    }
 
 
 class OpenCodeDriver:
@@ -125,8 +157,10 @@ class OpenCodeDriver:
         options["apiKey"] = api_key
         provider_block["options"] = options
 
-        # NOTE: no `limit` — see module docstring (partial limit is invalid).
-        provider_block["models"] = {model.name: {}}
+        # Per-model object: a `limit` block when context_window is known (a
+        # custom provider isn't on models.dev, so OpenCode needs it told), else
+        # an empty entry. See _render_model_entry for the schema constraint.
+        provider_block["models"] = {model.name: _render_model_entry(model)}
 
         providers[PROVIDER_ID] = provider_block
         config["provider"] = providers
