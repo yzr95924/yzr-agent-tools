@@ -90,8 +90,9 @@ complete -c model-switch -n __fish_model_switch_needs_action -f -a import -d 'Im
 complete -c model-switch -n __fish_model_switch_needs_model_name -f -a '(__fish_model_switch_models)' -d 'model'
 
 # --- import positional (source TOML path) -------------------------------------
-# -k: __fish_complete_suffix prints suffix-matching files first, keep that order.
-complete -c model-switch -n '__fish_model_switch_using_action import' -k -a '(__fish_complete_suffix .toml)'
+# Note: no -k/--keep-order here — that flag is fish >= 3.6 only, and errors out
+# on older fish ("Unknown option -k"), aborting this completion rule.
+complete -c model-switch -n '__fish_model_switch_using_action import' -a '(__fish_complete_suffix .toml)'
 
 # --- flags: model add ---------------------------------------------------------
 complete -c model-switch -n '__fish_model_switch_using_action add' -l base-url -r -f -d 'Upstream API base URL'
