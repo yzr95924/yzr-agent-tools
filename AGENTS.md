@@ -14,6 +14,10 @@
   一份 `~/.config/mcp-plugin-mgr/servers.toml` 作为规范真源,driver 把它翻译进 Claude Code 的
   `~/.claude.json` 的 `mcpServers` 与 OpenCode 的 `opencode.json` 的 `mcp`(位置/字段/type 词表各异),
   只改自己那一段、其余原样保留。与 model-switch 同构(模型 vs MCP 服务)。详见 `docs/mcp-plugin-mgr-design.md`。
+- **`yzr-agent-style`**：脚本,把仓内模板 `src/yzr_agent_style/templates/AGENTS.md` 以 marker 块
+  形式安装/卸载到各 agent 的全局规则文件(Claude Code `~/.claude/CLAUDE.md`、OpenCode
+  `~/.config/opencode/AGENTS.md`、Qoder CLI `~/.qoder/AGENTS.md`)。块外用户手写内容原样保留,
+  重跑幂等;`scripts/yzr-agent-style.sh` 是薄壳(仅 `python3 -m yzr_agent_style`)。
 
 后续按需添加新工具。每个工具独立成 CLI(或 daemon),共享同一套仓库规约(测试隔离、原子写、
 未知字段透传等)。
@@ -48,6 +52,8 @@
 bash scripts/model-switch.sh install        # mcp-plugin-mgr 同理：scripts/mcp-plugin-mgr.sh install
 # 卸载（删 wrapper + 剥该工具的 PATH marker + 删补全 symlink；不动 ~/.config/<tool>/ 下的数据）
 bash scripts/model-switch.sh uninstall
+# yzr-agent-style 是薄壳（无 wrapper/PATH/补全），直接跑：
+bash scripts/yzr-agent-style.sh install      # 写模板到三个 agent 全局规则文件；uninstall 反向
 
 # 测试 — 需要 pytest + pytest-cov 自装（pip install --user pytest pytest-cov）。
 # pyproject.toml 的 [tool.pytest.ini_options].pythonpath 已含 src/，
@@ -94,7 +100,7 @@ src/
 │   │   └── opencode.py          ~/.config/opencode/opencode.json 适配器
 │   └── README.md                详细用户文档
 │
-└── mcp_plugin_mgr/              # CLI;管理 agent 的自定义 MCP 服务
+├── mcp_plugin_mgr/              # CLI;管理 agent 的自定义 MCP 服务
     ├── cli.py                   argparse (init/add/list/remove/presets/status)
     ├── __main__.py              python -m mcp_plugin_mgr 入口
     ├── paths.py                 XDG 路径(config_dir / servers_file / claude_json_file / opencode_config_file / qoder_settings_file)
@@ -109,6 +115,14 @@ src/
     │   ├── claude_code.py       ~/.claude.json mcpServers 适配器(http/stdio)
     │   ├── opencode.py          opencode.json mcp 适配器(remote/local;command 合并数组;environment)
     │   └── qoder_cli.py         ~/.qoder/settings.json mcpServers 适配器(http 带 type / stdio 无 type)
+    └── README.md                详细用户文档
+
+└── yzr_agent_style/             # 脚本;全局指令模板安装/卸载(install/uninstall)
+    ├── cli.py                   argparse (install/uninstall)
+    ├── __main__.py              python -m yzr_agent_style 入口
+    ├── paths.py                 三个 agent 全局规则文件路径 + 模板路径
+    ├── markers.py               marker 块渲染/追加/替换/剥除 + 原子写
+    ├── templates/AGENTS.md      指令模板真源
     └── README.md                详细用户文档
 ```
 

@@ -10,6 +10,7 @@
 | ---------------- | ------------------------------------------------------------------------------- | -------- |
 | [`model-switch`](src/model_switch/README.md) | CLI;切换 AI coding agent 使用的 Anthropic 兼容模型 | 已发布   |
 | [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI;管理 Claude Code / OpenCode / Qoder CLI 的自定义 MCP 服务(起点:Outline wiki),一份注册表翻译到各 agent | 已发布 |
+| [`yzr-agent-style`](src/yzr_agent_style/README.md) | 脚本;把一份全局指令模板以 marker 块形式安装/卸载到 Claude Code / OpenCode / Qoder CLI 的全局规则文件,不覆盖用户手写内容 | 新增 |
 
 > 新工具按需添加;同一份仓库规约对所有工具生效。完整仓库规约、目录结构、跨工具注意事项
 > 见 [`AGENTS.md`](AGENTS.md)。
@@ -23,6 +24,9 @@
   起点),`add <name>` 翻译成 Claude Code(`~/.claude.json` 的 `mcpServers`)、OpenCode
   (`opencode.json` 的 `mcp`)与 Qoder CLI(`~/.qoder/settings.json` 的 `mcpServers`)各自的
   位置/字段/type 词表,只改自己那一段、其余原样保留,重启即生效。
+- **`yzr-agent-style`** — 把仓内一份指令模板以 marker 块的形式安装/卸载到各 agent 的全局
+  规则文件(Claude Code `~/.claude/CLAUDE.md`、OpenCode `~/.config/opencode/AGENTS.md`、
+  Qoder CLI `~/.qoder/AGENTS.md`),块外手写内容原样保留、重跑幂等同步。
 
 ## 仓库共用规约
 

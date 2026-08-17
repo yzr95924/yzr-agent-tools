@@ -144,3 +144,59 @@ def test_mcp_plugin_mgr_install_writes_its_own_path_block(tmp_path):
     text = (fake_home / ".bashrc").read_text()
     assert "# yzr-agent-tools mcp-plugin-mgr PATH begin" in text
     assert "# yzr-agent-tools mcp-plugin-mgr PATH end" in text
+
+
+# --- yzr-agent-style.sh (thin: no wrapper / PATH / completions) ---------------
+
+def test_yzr_agent_style_script_is_executable():
+    p = ROOT / "scripts" / "yzr-agent-style.sh"
+    assert p.exists(), "scripts/yzr-agent-style.sh missing"
+    assert p.stat().st_mode & stat.S_IXUSR, "scripts/yzr-agent-style.sh must be executable"
+
+
+def test_yzr_agent_style_script_is_thin(tmp_path):
+    """The thin shell must NOT write a bin wrapper / PATH block / completions."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    # Agent config dirs don't exist yet, so install skips everything.
+    r = _run(fake_repo / "scripts" / "yzr-agent-style.sh", "install", env)
+    assert r.returncode == 0, f"install failed:\n{r.stderr}"
+
+    assert not (fake_repo / "bin" / "yzr-agent-style").exists()
+    assert not (fake_home / ".bashrc").exists()
+    assert not (Path(env["XDG_DATA_HOME"]) / "bash-completion").exists()
+    assert not (Path(env["XDG_CONFIG_HOME"]) / "fish").exists()
+
+
+def test_yzr_agent_style_install_writes_three_targets(tmp_path):
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".config" / "opencode").mkdir(parents=True)
+    (fake_home / ".qoder").mkdir()
+
+    r = _run(fake_repo / "scripts" / "yzr-agent-style.sh", "install", env)
+    assert r.returncode == 0, f"install failed:\n{r.stderr}"
+
+    for target in (
+        fake_home / ".claude" / "CLAUDE.md",
+        fake_home / ".config" / "opencode" / "AGENTS.md",
+        fake_home / ".qoder" / "AGENTS.md",
+    ):
+        assert target.exists(), f"missing {target}"
+        assert "<!-- yzr-agent-style begin -->" in target.read_text()
+
+
+def test_yzr_agent_style_uninstall_removes_targets(tmp_path):
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    (fake_home / ".claude").mkdir()
+    sh = fake_repo / "scripts" / "yzr-agent-style.sh"
+    assert _run(sh, "install", env).returncode == 0
+
+    r = _run(sh, "uninstall", env)
+    assert r.returncode == 0, f"uninstall failed:\n{r.stderr}"
+    assert not (fake_home / ".claude" / "CLAUDE.md").exists()
+
+
+def test_yzr_agent_style_unknown_subcommand_exits_nonzero(tmp_path):
+    _, fake_repo, env = _prepare_fake_env(tmp_path)
+    r = _run(fake_repo / "scripts" / "yzr-agent-style.sh", "bogus", env)
+    assert r.returncode != 0

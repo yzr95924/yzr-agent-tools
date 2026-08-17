@@ -55,6 +55,11 @@ _REAL_CFG_BASE = Path(
 REAL_OPENCODE_CONFIG = _REAL_CFG_BASE / "opencode" / "opencode.json"
 # Qoder CLI's real user settings (holds model/ui/permissions + its mcpServers).
 REAL_QODER_SETTINGS = Path(os.path.expanduser("~")) / ".qoder" / "settings.json"
+# yzr-agent-style's three target instruction files (Claude Code / OpenCode /
+# Qoder CLI global rules). Written by the yzr_agent_style CLI.
+REAL_CLAUDE_MD = Path(os.path.expanduser("~")) / ".claude" / "CLAUDE.md"
+REAL_OPENCODE_AGENTS = _REAL_CFG_BASE / "opencode" / "AGENTS.md"
+REAL_QODER_AGENTS = Path(os.path.expanduser("~")) / ".qoder" / "AGENTS.md"
 
 
 def _sha256(path: Path):
@@ -79,7 +84,10 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
                      ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG),
-                     ("qoder_settings", REAL_QODER_SETTINGS)):
+                     ("qoder_settings", REAL_QODER_SETTINGS),
+                     ("claude_md", REAL_CLAUDE_MD),
+                     ("opencode_agents", REAL_OPENCODE_AGENTS),
+                     ("qoder_agents", REAL_QODER_AGENTS)):
         snapshot[label] = {
             "exists": p.exists(),
             "mtime": p.stat().st_mtime if p.exists() else None,
@@ -150,6 +158,32 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
         "claude_json": claude_json_p,
         "qoder_settings": qoder_settings_p,
     }
+
+    # Redirect yzr-agent-style's three target instruction files into tmp.
+    # Import lazily so this conftest doesn't pull in yzr_agent_style when only
+    # other tools are exercised.
+    from yzr_agent_style import paths as style_paths
+    claude_md_p = tmp_path / ".claude" / "CLAUDE.md"
+    opencode_agents_p = tmp_path / ".config" / "opencode" / "AGENTS.md"
+    qoder_agents_p = tmp_path / ".qoder" / "AGENTS.md"
+    monkeypatch.setattr(style_paths, "claude_md_file", lambda: claude_md_p)
+    monkeypatch.setattr(style_paths, "opencode_agents_file", lambda: opencode_agents_p)
+    monkeypatch.setattr(style_paths, "qoder_agents_file", lambda: qoder_agents_p)
+
+    paths_dict = {
+        "config_dir": cfg_dir,
+        "models": models_p,
+        "state": state_p,
+        "settings": settings_p,
+        "opencode": opencode_p,
+        "mcp_cfg_dir": mcp_cfg_dir,
+        "mcp_servers": mcp_servers_p,
+        "claude_json": claude_json_p,
+        "qoder_settings": qoder_settings_p,
+        "claude_md": claude_md_p,
+        "opencode_agents": opencode_agents_p,
+        "qoder_agents": qoder_agents_p,
+    }
     yield paths_dict
 
     # Integrity check: real configs must be byte-identical to the snapshot.
@@ -158,7 +192,10 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
                      ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG),
-                     ("qoder_settings", REAL_QODER_SETTINGS)):
+                     ("qoder_settings", REAL_QODER_SETTINGS),
+                     ("claude_md", REAL_CLAUDE_MD),
+                     ("opencode_agents", REAL_OPENCODE_AGENTS),
+                     ("qoder_agents", REAL_QODER_AGENTS)):
         snap = snapshot[label]
         if snap["exists"]:
             assert p.exists(), (
