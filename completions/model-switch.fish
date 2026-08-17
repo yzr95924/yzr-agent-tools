@@ -91,18 +91,18 @@ complete -c model-switch -n __fish_model_switch_needs_model_name -f -a '(__fish_
 
 # --- import positional (source TOML path) -------------------------------------
 # -k: __fish_complete_suffix prints suffix-matching files first, keep that order.
-complete -c model-switch -n '__fish_model_switch_using_action import' -ka '(__fish_complete_suffix .toml)'
+complete -c model-switch -n '__fish_model_switch_using_action import' -k -a '(__fish_complete_suffix .toml)'
 
 # --- flags: model add ---------------------------------------------------------
-complete -c model-switch -n '__fish_model_switch_using_action add' -l base-url -rf -d 'Upstream API base URL'
-complete -c model-switch -n '__fish_model_switch_using_action add' -l api-key -rf -d 'API key (stored plaintext in models.toml)'
-complete -c model-switch -n '__fish_model_switch_using_action add' -l model-name -rf -d 'Upstream model identifier'
-complete -c model-switch -n '__fish_model_switch_using_action add' -l description -rf -d 'Free-text description'
-complete -c model-switch -n '__fish_model_switch_using_action add' -l context-window -rf -d 'Max input tokens'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l base-url -r -f -d 'Upstream API base URL'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l api-key -r -f -d 'API key (stored plaintext in models.toml)'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l model-name -r -f -d 'Upstream model identifier'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l description -r -f -d 'Free-text description'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l context-window -r -f -d 'Max input tokens'
 complete -c model-switch -n '__fish_model_switch_using_action add' -s h -l help -f -d 'Show help'
 
 # --- flags: model use ---------------------------------------------------------
-complete -c model-switch -n '__fish_model_switch_using_action use' -l driver -rf -a '(__fish_model_switch_drivers)' -d 'Target agent driver'
+complete -c model-switch -n '__fish_model_switch_using_action use' -l driver -r -f -a '(__fish_model_switch_drivers)' -d 'Target agent driver'
 complete -c model-switch -n '__fish_model_switch_using_action use' -l all-drivers -f -d 'Apply to every registered driver'
 complete -c model-switch -n '__fish_model_switch_using_action use' -s h -l help -f -d 'Show help'
 
@@ -114,7 +114,7 @@ complete -c model-switch -n '__fish_model_switch_using_action import' -s h -l he
 complete -c model-switch -n '__fish_model_switch_using_action list show remove' -s h -l help -f -d 'Show help'
 
 # --- flags: status ------------------------------------------------------------
-complete -c model-switch -n '__fish_model_switch_using_command status' -l driver -rf -a '(__fish_model_switch_drivers)' -d 'Target agent driver'
+complete -c model-switch -n '__fish_model_switch_using_command status' -l driver -r -f -a '(__fish_model_switch_drivers)' -d 'Target agent driver'
 complete -c model-switch -n '__fish_model_switch_using_command status' -l all-drivers -f -d 'Apply to every registered driver'
 complete -c model-switch -n '__fish_model_switch_using_command status' -s h -l help -f -d 'Show help'
 

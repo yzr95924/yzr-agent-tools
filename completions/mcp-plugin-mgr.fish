@@ -69,26 +69,26 @@ complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_needs_name; and __fish_mcp_
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_needs_name; and __fish_mcp_plugin_mgr_using_command remove' -f -a '(__fish_mcp_plugin_mgr_servers)' -d 'server'
 
 # --- flags: add ---------------------------------------------------------------
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l url -rf -d 'HTTP server URL'
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l token -rf -d 'Bearer token fed into the preset auth header'
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l header -rf -d 'Extra header KEY=VALUE (repeatable)'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l url -r -f -d 'HTTP server URL'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l token -r -f -d 'Bearer token fed into the preset auth header'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l header -r -f -d 'Extra header KEY=VALUE (repeatable)'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l stdio -f -d 'Declare stdio transport'
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l command -rf -d 'stdio: full command line (shlex-split)'
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l env -rf -d 'stdio: env KEY=VALUE (repeatable)'
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l description -rf -d 'Free-text description'
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l driver -rf -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l command -r -f -d 'stdio: full command line (shlex-split)'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l env -r -f -d 'stdio: env KEY=VALUE (repeatable)'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l description -r -f -d 'Free-text description'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l driver -r -f -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l all-drivers -f -d 'Apply to every registered driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l no-apply -f -d 'Register only; do not write agent configs'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l force -f -d 'Overwrite if the name already exists'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -s h -l help -f -d 'Show help'
 
 # --- flags: remove ------------------------------------------------------------
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l driver -rf -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l driver -r -f -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l all-drivers -f -d 'Apply to every registered driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -s h -l help -f -d 'Show help'
 
 # --- flags: status ------------------------------------------------------------
-complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command status' -l driver -rf -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command status' -l driver -r -f -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command status' -l all-drivers -f -d 'Apply to every registered driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command status' -s h -l help -f -d 'Show help'
 
