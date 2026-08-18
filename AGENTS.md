@@ -149,8 +149,21 @@ src/
 (CI/脚本,无 TTY)回退到默认 `claude-code`,避免脚本意外写多个 agent 配置。
 新 agent = 实现一个 driver 并在 `cli._ensure_default_registered()` 注册。
 
-**单模型槽**:`model use <name>` 写一个模型到所选 agent 配置。driver 负责把 model 渲染成对应
-agent 协议的字段。
+**Per-driver 语义——单槽 vs catalog**:`model use <name>` 把所选 driver 的配置写到
+激活的模型。driver 语义由 `supports_catalog` 区分:
+- `claude-code`(单槽,`supports_catalog=False`):`apply(models, active)` 只渲染 `active`,
+  写 `env` 块 + 顶层 `model`。
+- `opencode`(catalog,`supports_catalog=True`):`apply` = 全量 reconcile——把 `models.toml`
+  全部模型镜像成 `yzr-<model_id>` 的 provider(每模型一个,`baseURL`/`apiKey` 是 provider
+  级字段、不同上游不能共用一个块),`config["model"]` 只作默认指针。`sync_catalog(models)`
+  在 add/remove/import 时触发,同样全量 reconcile 但保留有效默认指针(悬空则落剩余第一个 /
+  无剩余删键);`create=False` 时不凭空创建不存在的 `opencode.json`。
+
+**Catalog 变更即同步**:`model add/remove/import` 也写 agent 配置(不只 `use`),保证
+`models.toml` 变更后任何 agent 配置里都不存在已删除模型的 key——opencode 靠全量 reconcile
+(删 `yzr-*` 命名空间里不在 registry 的 provider,含旧版裸 `yzr`,天然迁移),claude-code 靠
+`remove`/`import replace` 删到 active 时 `clear()`(清四个自有键 + 顶层 `model`,同时清
+`active_main`)。`yzr-*` 命名空间归 model-switch 管,用户别在之前缀自建 provider。
 
 ### `mcp_plugin_mgr` 的形态
 

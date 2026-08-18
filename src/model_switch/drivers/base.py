@@ -24,18 +24,34 @@ class AgentDriver(Protocol):
     """Protocol every agent driver must satisfy."""
     name: str
     settings_path: Path
+    # Whether this agent holds a multi-model catalog that model-switch
+    # mirrors from models.toml (opencode: True). Single-slot agents
+    # (claude-code) keep just the active model: False.
+    supports_catalog: bool = False
 
     def read(self) -> dict:
         """Read the agent's config file as a dict; {} if missing/empty."""
         ...
 
-    def apply(self, model: Model, api_key: str) -> None:
-        """Write the model into the agent's config file."""
+    def apply(self, models: List[Model], active: Model) -> None:
+        """Write the active model into the agent's config file.
+
+        `models` is the full registry list; single-slot drivers only render
+        `active`, catalog drivers mirror the whole list and set `active` as
+        the default pointer.
+        """
         ...
 
     def current(self) -> dict:
         """Return the env-relevant subset of the current config."""
         ...
+
+    # Catalog-capable drivers (supports_catalog=True) additionally implement
+    # `sync_catalog(models)` — reconcile the agent's catalog with `models`
+    # without changing the default pointer unless it vanished. Single-slot
+    # drivers implement `clear()` — drop the managed slot's keys. The CLI
+    # probes `supports_catalog` and calls the matching method; neither is
+    # part of the mandatory protocol.
 
 
 class DriverRegistry:

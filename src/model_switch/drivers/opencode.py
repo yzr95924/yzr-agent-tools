@@ -5,21 +5,38 @@ OpenCode loads its global config from ``$XDG_CONFIG_HOME/opencode/opencode.json`
 Writing the wrong path means the config is silently ignored and OpenCode
 starts on its default model.
 
-Writes a single model under our ``provider.<id>`` block (``PROVIDER_ID =
-"yzr"``). A non-built-in provider must declare ``npm`` so OpenCode knows which
-AI-SDK adapter to load; Anthropic-compatible upstreams use ``@ai-sdk/anthropic``::
+Unlike Claude Code (a single model slot), OpenCode holds a **catalog**: every
+registered provider's models are listed in its model picker, and ``model``
+names the default. So model-switch mirrors *all* models from models.toml into
+the ``yzr-*`` provider namespace and treats ``config["model"]`` as a pointer
+to the active one::
 
   {
     "provider": {
-      "yzr": {
+      "yzr-glm": {
         "npm": "@ai-sdk/anthropic",
-        "name": "yzr",
+        "name": "yzr-glm",
         "options": { "baseURL": "<base_url>/v1", "apiKey": "<resolved-key>" },
         "models": { "<model_id>": {} }
-      }
+      },
+      "yzr-kimi": { ... }
     },
-    "model": "yzr/<model_id>"
+    "model": "yzr-glm/glm-4"
   }
+
+One provider per model: ``baseURL`` and ``apiKey`` are **provider-level**, not
+per-model, so models from different upstreams (different base_url/key) cannot
+share a provider block. Each ``yzr-<model_id>`` provider is self-contained and
+the model picker shows one group per upstream.
+
+Reconciliation is a mirror: ``apply()`` / ``sync_catalog()`` rewrite the whole
+``yzr-*`` namespace from models.toml, deleting any ``yzr-*`` provider (or the
+legacy single-slot ``yzr``) that is no longer registered — so a removed model's
+provider block, including its plaintext key, disappears from disk. Everything
+outside the ``yzr-*`` namespace (other providers, ``$schema``, user blocks) is
+preserved. ``sync_catalog()`` keeps the current default pointer unless it
+vanished (then it falls to the first remaining model, or drops the key when
+none are left).
 
 The resolved API key is written **verbatim** into ``options.apiKey`` — matching
 the claude-code driver and OpenCode's own convention for custom providers
@@ -48,7 +65,7 @@ fails validation and makes the model unavailable.
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from model_switch import paths
 from model_switch.drivers._atomic import atomic_write_json
@@ -56,6 +73,12 @@ from model_switch.store import ModelEntry as Model
 
 
 PROVIDER_ID = "yzr"
+
+# The provider namespace model-switch owns. Each registered model becomes one
+# provider `yzr-<model_id>` (baseURL/apiKey are provider-level, so models from
+# different upstreams can't share a block). The bare `yzr` id is the legacy
+# single-slot form — still reclaimed so an upgrade migrates automatically.
+PROVIDER_PREFIX = "yzr-"
 
 # Anthropic-compatible upstreams (model-switch's only supported protocol) load
 # the @ai-sdk/anthropic adapter. Without `npm`, OpenCode reports
@@ -115,8 +138,44 @@ def _render_model_entry(model: Model) -> Dict[str, Any]:
     }
 
 
+def _provider_id(model_id: str) -> str:
+    """Provider id for a registered model: ``yzr-<model_id>``."""
+    return PROVIDER_PREFIX + model_id
+
+
+def _model_id_from_provider(provider_id: str) -> Optional[str]:
+    """Reverse ``_provider_id``; None for foreign / legacy-``yzr`` ids."""
+    if provider_id.startswith(PROVIDER_PREFIX):
+        return provider_id[len(PROVIDER_PREFIX):]
+    return None
+
+
+def _is_owned_provider(provider_id: str) -> bool:
+    """Whether model-switch owns (and may reclaim) this provider id.
+
+    Covers both the per-model ``yzr-*`` ids and the legacy single-slot ``yzr``,
+    so an upgrade to the catalog form migrates automatically.
+    """
+    return provider_id == PROVIDER_ID or provider_id.startswith(PROVIDER_PREFIX)
+
+
+def _model_id_from_reference(model_ref: str) -> Optional[str]:
+    """Extract the model_id from a ``yzr-<id>/<name>`` default reference."""
+    if not model_ref or "/" not in model_ref:
+        return None
+    return _model_id_from_provider(model_ref.split("/", 1)[0])
+
+
+def _find_model(models: List[Model], model_id: str) -> Optional[Model]:
+    for m in models:
+        if m.model_id == model_id:
+            return m
+    return None
+
+
 class OpenCodeDriver:
     name = "opencode"
+    supports_catalog = True
 
     def __init__(self, settings_path: Path = None) -> None:
         if settings_path is None:
@@ -132,51 +191,115 @@ class OpenCodeDriver:
             return {}
         return json.loads(text)
 
-    def apply(self, model: Model, api_key: str) -> None:
-        """Write the model into the OpenCode config.
+    def apply(self, models: List[Model], active: Model) -> None:
+        """Write the full catalog into the OpenCode config, defaulting to `active`.
 
-        The resolved `api_key` is written verbatim into `options.apiKey`
-        (matching the claude-code driver). model-switch does not use OpenCode's
-        `{env:VAR}` placeholder, so the key is stored in the config file.
+        The resolved `api_key` is written verbatim into each provider's
+        `options.apiKey` (matching the claude-code driver). model-switch does
+        not use OpenCode's `{env:VAR}` placeholder, so keys are stored in the
+        config file.
 
         `baseURL` is /v1-adapted via `_base_url_for_ai_sdk` — see the module
         docstring for why this differs from the claude-code driver.
         """
+        if not active.api_key:
+            raise ValueError(
+                "model {!r} has no api_key in models.toml.".format(active.model_id)
+            )
+        self.sync_catalog(models, active_id=active.model_id, create=True)
+
+    def sync_catalog(self, models: List[Model], active_id: str = None,
+                     create: bool = False) -> None:
+        """Mirror `models` into the ``yzr-*`` provider namespace.
+
+        Reconciles the whole namespace: every registered model gets its own
+        ``yzr-<model_id>`` provider; any ``yzr-*``/legacy ``yzr`` provider not
+        in `models` is deleted (with its plaintext key). Foreign providers and
+        top-level keys are preserved.
+
+        The default pointer (`config["model"]`) is kept when it still names a
+        synced provider; otherwise it falls to `active_id`, then the first
+        remaining model, then the key is dropped. Models without an api_key are
+        skipped (they'd render an unusable provider).
+
+        `create=False` (the catalog-sync path from add/remove/import) leaves a
+        missing config file alone — no file is created out of thin air; only a
+        targeted `apply()` (`create=True`) does.
+        """
+        if not create and not self.settings_path.exists():
+            return
+
         config = self.read()
-        providers = config.get("provider", {})
+        providers = {
+            k: v for k, v in config.get("provider", {}).items()
+            if not _is_owned_provider(k)
+        }
+        for model in models:
+            if not model.api_key:
+                continue
+            provider_block = {
+                "npm": NPM_ADAPTER,
+                "name": _provider_id(model.model_id),
+                "options": {
+                    "baseURL": _base_url_for_ai_sdk(model.base_url),
+                    "apiKey": model.api_key,
+                },
+                # Per-model object: a `limit` block when context_window is known
+                # (a custom provider isn't on models.dev, so OpenCode needs it
+                # told), else an empty entry. See _render_model_entry for the
+                # schema constraint.
+                "models": {model.name: _render_model_entry(model)},
+            }
+            providers[_provider_id(model.model_id)] = provider_block
 
-        provider_block: Dict = providers.get(PROVIDER_ID, {})
-
-        # Tell OpenCode which AI-SDK adapter loads this provider. Without it
-        # the custom provider is unresolvable.
-        provider_block["npm"] = NPM_ADAPTER
-        provider_block.setdefault("name", PROVIDER_ID)
-
-        options = provider_block.get("options", {})
-        options["baseURL"] = _base_url_for_ai_sdk(model.base_url)
-        options["apiKey"] = api_key
-        provider_block["options"] = options
-
-        # Per-model object: a `limit` block when context_window is known (a
-        # custom provider isn't on models.dev, so OpenCode needs it told), else
-        # an empty entry. See _render_model_entry for the schema constraint.
-        provider_block["models"] = {model.name: _render_model_entry(model)}
-
-        providers[PROVIDER_ID] = provider_block
         config["provider"] = providers
-
-        config["model"] = "{}/{}".format(PROVIDER_ID, model.name)
+        default = self._resolve_default(config.get("model"), models, active_id)
+        if default is None:
+            config.pop("model", None)
+        else:
+            config["model"] = default
 
         atomic_write_json(self.settings_path, config)
+
+    def _resolve_default(self, current: Optional[str], models: List[Model],
+                         active_id: Optional[str]) -> Optional[str]:
+        """Pick `config["model"]`: active_id wins, else the current pointer
+        stays if it's ours (`yzr-*`) and still names a synced provider; ours
+        but vanished falls to the first remaining model, then None (drop the
+        key). A foreign pointer (or an absent key) is never touched — moving
+        the default is the `model use` path's job, and sync_catalog must not
+        hijack a default the user set themselves."""
+        if active_id is not None:
+            m = _find_model(models, active_id)
+            if m is not None and m.api_key:
+                return "{}/{}".format(_provider_id(m.model_id), m.name)
+        if current:
+            mid = _model_id_from_reference(current)
+            if mid is not None:
+                m = _find_model(models, mid)
+                if m is not None and m.api_key:
+                    return current
+                # Ours but vanished — fall to the first remaining model.
+                for m in models:
+                    if m.api_key:
+                        return "{}/{}".format(_provider_id(m.model_id), m.name)
+                return None
+            # Foreign reference — not ours to move.
+            return current
+        # No default key — don't conjure one; `model use` sets it.
+        return None
 
     def current(self) -> dict:
         config = self.read()
         if not config:
             return {}
-        return {
-            "provider": PROVIDER_ID,
-            "model": config.get("model", ""),
-        }
+        out = {"model": config.get("model", "")}
+        providers = sorted(
+            k for k in config.get("provider", {}) if _is_owned_provider(k)
+        )
+        if providers:
+            out["catalog"] = ", ".join(providers)
+        return out
 
 
 # NOTE: Do NOT auto-register at import time — see `cli._ensure_default_registered`.

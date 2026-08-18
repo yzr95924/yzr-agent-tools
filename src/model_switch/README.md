@@ -162,10 +162,33 @@ model-switch status --driver opencode
 ```
 
 OpenCode driver 往 OpenCode 的全局配置 `~/.config/opencode/opencode.json`
-(`$XDG_CONFIG_HOME/opencode/opencode.json`)里写一个 `provider.yzr` 块(带 `@ai-sdk/anthropic`
-adapter),并把解析出的 API key 直接写入 `apiKey`——密钥是落盘的,请把文件权限收紧。
-模型定义(`models.toml`)在 Claude Code 和 OpenCode driver 之间共享,所以切换 agent
-不用重新注册模型。
+(`$XDG_CONFIG_HOME/opencode/opencode.json`)里写 `yzr-<模型名>` 的 provider 块(带
+`@ai-sdk/anthropic` adapter),并把解析出的 API key 直接写入 `apiKey`——密钥是落盘的,
+请把文件权限收紧。模型定义(`models.toml`)在 Claude Code 和 OpenCode driver 之间共享,
+所以切换 agent 不用重新注册模型。
+
+**OpenCode 是 catalog 型 agent。** 与 Claude Code 的单槽不同,OpenCode 的模型 picker
+里能看到所有已配置的 provider。所以 model-switch 把 `models.toml` 里的**全部模型**镜像进
+`yzr-*` 命名空间——每个模型一个 provider(`baseURL`/`apiKey` 是 provider 级字段,不同上游的
+模型不能共用一个块),`config["model"]` 只作为默认指针指向激活的模型。你在 OpenCode 里用
+`/models` 随时切,不必回 CLI:
+
+- `model use <name>` — 全量 reconcile + 把默认指针指到该模型;
+- `model add` / `model remove` / `model import` — 同样触发 reconcile:新增的模型立刻进
+  picker;删除的模型其 provider 连同明文 key 一起从文件里消失,不会残留。
+- `config["model"]` 默认指针:指向的模型还在就保持;被删了则落到剩余模型的第一个;一个都不
+  剩就删掉该键。**默认指针只会被 `model use` 改动**——add/remove/import 的 reconcile 从不
+  碰你手动设的外来默认模型。
+- `yzr-*` 命名空间归 model-switch 管:任何 `yzr-*` 前缀(含旧版单槽的裸 `yzr`)都会被
+  reconcile 回收,请别在这个前缀下自建 provider。`yzr-*` 之外的一切原样保留。
+- 镜像只作用于已存在的 `opencode.json`:`model add` 不会凭空创建一个你没用过的全局配置文件,
+  只有 `model use --driver opencode`(或 interactive all)才创建它。
+
+**Claude Code 是单槽 agent。** `model add/remove/import` 不碰它的配置;唯一例外——被删除的
+模型正是当前 active 时,`remove`/`import replace` 会把 model-switch 自己管理的四个键
+(`env.ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL` + 顶层 `model`)清掉,
+避免已删除模型的 key 残留,同时清空 state.toml 的 active_main。非 active 模型的删除对
+Claude Code 无影响(单槽天然无残留)。
 
 ## 跑测试
 

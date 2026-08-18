@@ -18,7 +18,7 @@ Anything else in `env` and the rest of the JSON file is preserved.
 """
 import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from model_switch.drivers._atomic import atomic_write_json
 from model_switch.store import ModelEntry as Model
@@ -54,6 +54,7 @@ def _with_1m_suffix(model_name: str, context_window: Optional[int]) -> str:
 
 class ClaudeCodeDriver:
     name = "claude-code"
+    supports_catalog = False
 
     def __init__(self, settings_path: Path = None) -> None:
         if settings_path is None:
@@ -69,7 +70,7 @@ class ClaudeCodeDriver:
             return {}
         return json.loads(text)
 
-    def apply(self, model: Model, api_key: str) -> None:
+    def apply(self, models: List[Model], active: Model) -> None:
         config = self.read()
         env = config.get("env", {})
 
@@ -77,10 +78,10 @@ class ClaudeCodeDriver:
         for k in _OWNED_KEYS + _TIER_MODEL_KEYS:
             env.pop(k, None)
 
-        model_id = _with_1m_suffix(model.name, model.context_window)
+        model_id = _with_1m_suffix(active.name, active.context_window)
 
-        env["ANTHROPIC_BASE_URL"] = model.base_url
-        env["ANTHROPIC_AUTH_TOKEN"] = api_key
+        env["ANTHROPIC_BASE_URL"] = active.base_url
+        env["ANTHROPIC_AUTH_TOKEN"] = active.api_key
         env["ANTHROPIC_MODEL"] = model_id
         # Pin every Claude Code model tier to our id so auxiliary calls (the
         # Bash safety classifier, title/conversation generation, ...) ride the
@@ -93,6 +94,30 @@ class ClaudeCodeDriver:
         config["model"] = model_id
 
         atomic_write_json(self.settings_path, config)
+
+    def clear(self) -> None:
+        """Drop model-switch's managed keys (env block + top-level `model`).
+
+        Called when the active model is removed from models.toml — nothing of
+        the deleted model (notably its key) may stay on disk. Everything else
+        in the file is preserved.
+        """
+        if not self.settings_path.exists():
+            return
+        config = self.read()
+        if not config:
+            return
+        env = config.get("env", {})
+        removed = False
+        for k in _OWNED_KEYS + _TIER_MODEL_KEYS:
+            if env.pop(k, None) is not None:
+                removed = True
+        if "model" in config:
+            del config["model"]
+            removed = True
+        if removed:
+            config["env"] = env
+            atomic_write_json(self.settings_path, config)
 
     def current(self) -> dict:
         return self.read().get("env", {})

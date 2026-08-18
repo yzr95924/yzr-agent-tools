@@ -49,7 +49,7 @@ def test_apply_is_atomic_no_partial_file_on_failure(driver, glm_main, monkeypatc
     cc_module.json.dump = boom
     try:
         with pytest.raises(IOError):
-            driver.apply(model=glm_main, api_key="k")
+            driver.apply(models=[glm_main], active=glm_main)
     finally:
         cc_module.json.dump = orig_dump
 
@@ -98,7 +98,7 @@ _TIER_KEYS = (
 
 def test_apply_pins_all_tiers_to_model_id(driver, glm_main):
     driver.settings_path.parent.mkdir(parents=True)
-    driver.apply(model=glm_main, api_key="k")
+    driver.apply(models=[glm_main], active=glm_main)
 
     env = json.loads(driver.settings_path.read_text())["env"]
     for k in _TIER_KEYS:
@@ -115,7 +115,7 @@ def test_apply_tier_keys_get_1m_suffix(driver):
         name="glm-4-plus",
         context_window=1_000_000,
     )
-    driver.apply(model=big, api_key="k")
+    driver.apply(models=[big], active=big)
 
     env = json.loads(driver.settings_path.read_text())["env"]
     assert env["ANTHROPIC_MODEL"] == "glm-4-plus[1m]"
@@ -132,12 +132,12 @@ def test_apply_clears_old_tier_refs_on_switch(driver, glm_main):
         api_key="KEY",
         name="other-model",
     )
-    driver.apply(model=other, api_key="k")
+    driver.apply(models=[other], active=other)
     assert json.loads(driver.settings_path.read_text())["env"][
         "ANTHROPIC_DEFAULT_SONNET_MODEL"
     ] == "other-model"
 
-    driver.apply(model=glm_main, api_key="k")
+    driver.apply(models=[glm_main], active=glm_main)
     env = json.loads(driver.settings_path.read_text())["env"]
     for k in _TIER_KEYS:
         assert env[k] == glm_main.name  # no stale "other-model"
@@ -148,9 +148,50 @@ def test_apply_preserves_unrelated_keys_with_tiers(driver, glm_main):
     driver.settings_path.write_text(
         json.dumps({"env": {"FOO": "keep"}, "userID": "u"})
     )
-    driver.apply(model=glm_main, api_key="k")
+    driver.apply(models=[glm_main], active=glm_main)
 
     data = json.loads(driver.settings_path.read_text())
     assert data["env"]["FOO"] == "keep"
     assert data["userID"] == "u"
     assert data["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == glm_main.name
+
+
+def test_apply_ignores_non_active_models(driver, glm_main):
+    """Single-slot: only the active model is rendered; the others are ignored."""
+    driver.settings_path.parent.mkdir(parents=True)
+    other = Model(
+        model_id="other", base_url="https://x", api_key="OTHER", name="other-model"
+    )
+    driver.apply(models=[other, glm_main], active=glm_main)
+    data = json.loads(driver.settings_path.read_text())
+    assert data["env"]["ANTHROPIC_AUTH_TOKEN"] == glm_main.api_key
+    assert data["env"]["ANTHROPIC_MODEL"] == glm_main.name
+
+
+# --- clear --------------------------------------------------------------------
+
+
+def test_clear_removes_only_owned_keys(driver, glm_main):
+    driver.settings_path.parent.mkdir(parents=True)
+    driver.apply(models=[glm_main], active=glm_main)
+    # Add a user-owned key + top-level field to confirm they survive.
+    data = json.loads(driver.settings_path.read_text())
+    data["env"]["FOO"] = "keep"
+    data["userID"] = "u"
+    driver.settings_path.write_text(json.dumps(data))
+
+    driver.clear()
+    data = json.loads(driver.settings_path.read_text())
+    assert "ANTHROPIC_AUTH_TOKEN" not in data["env"]
+    assert "ANTHROPIC_BASE_URL" not in data["env"]
+    assert "ANTHROPIC_MODEL" not in data["env"]
+    for k in _TIER_KEYS:
+        assert k not in data["env"]
+    assert "model" not in data
+    assert data["env"]["FOO"] == "keep"
+    assert data["userID"] == "u"
+
+
+def test_clear_is_noop_when_file_missing(driver):
+    driver.clear()
+    assert not driver.settings_path.exists()

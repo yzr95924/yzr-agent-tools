@@ -47,7 +47,7 @@ def test_model_use_targets_opencode_driver(two_drivers, monkeypatch):
     assert result.exit_code == 0, result.stdout
 
     cfg = json.loads(two_drivers["opencode"].read_text())
-    assert cfg["model"] == "yzr/glm-4"
+    assert cfg["model"] == "yzr-glm/glm-4"
     # Claude Code config must NOT be touched.
     assert not two_drivers["claude"].exists()
 

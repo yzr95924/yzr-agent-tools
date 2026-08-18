@@ -117,6 +117,37 @@ def _resolve_api_key(model) -> str:
     sys.exit(1)
 
 
+def _registered_drivers() -> list:
+    """Return every registered driver instance (defaults registered first)."""
+    _ensure_default_registered()
+    return [registry.get(n) for n in registry.list()]
+
+
+def _sync_catalog(models) -> None:
+    """Mirror `models` (the full models.toml list) into every catalog-capable
+    driver — currently OpenCode. Reconcile keeps each driver's default pointer
+    unless it vanished. Single-slot drivers (claude-code) are skipped; missing
+    agent configs are left alone (a targeted `model use` creates them)."""
+    for d in _registered_drivers():
+        if getattr(d, "supports_catalog", False):
+            d.sync_catalog(models)
+
+
+def _clear_active_if_orphaned(reg: Registry) -> None:
+    """If state.active_main no longer names a model, drop it and clear the
+    single-slot driver's managed keys — nothing of a deleted model (notably its
+    key) may linger in any agent config."""
+    state = load_state(paths.state_file())
+    if state.active_main is None or state.active_main in reg.models:
+        return
+    state.active_main = None
+    state.last_updated = _now_iso()
+    save_state(paths.state_file(), state)
+    for d in _registered_drivers():
+        if not getattr(d, "supports_catalog", False):
+            d.clear()
+
+
 def _now_iso() -> str:
     # Timezone-aware UTC with a "Z" suffix — `datetime.utcnow()` is
     # deprecated on 3.12+, and `datetime.timezone` exists since 3.2, so
@@ -334,6 +365,10 @@ def _do_model_add(args: argparse.Namespace) -> None:
         description=description,
     )
     save_models(paths.models_file(), reg)
+    # Mirror the catalog so the new model is immediately available in agents
+    # that hold one (OpenCode's picker). Single-slot agents (claude-code) are
+    # untouched until the next `model use`.
+    _sync_catalog(list(reg.models.values()))
     print(f"Added model {args.name!r}.")
 
 
@@ -431,6 +466,10 @@ def _do_model_remove(name: str) -> None:
         sys.exit(1)
     del reg.models[name]
     save_models(paths.models_file(), reg)
+    # Reconcile the catalog (removed model's provider + key vanish from
+    # OpenCode) and clear the single-slot agent if the removed model was active.
+    _sync_catalog(list(reg.models.values()))
+    _clear_active_if_orphaned(reg)
     print(f"Removed model {name!r}.")
 
 
@@ -442,11 +481,12 @@ def _do_model_use(args: argparse.Namespace) -> None:
 
     main_model = reg.models[args.name]
 
-    api_key = _resolve_api_key(main_model)
+    # Validate the active model has a key before touching any driver config.
+    _resolve_api_key(main_model)
 
     applied = []
     for driver in _resolve_drivers(args):
-        driver.apply(model=main_model, api_key=api_key)
+        driver.apply(models=list(reg.models.values()), active=main_model)
         applied.append(driver)
 
     state = load_state(paths.state_file())
@@ -495,8 +535,16 @@ def _do_model_import(args: argparse.Namespace) -> None:
         for k, v in incoming.extra_top.items():
             existing.extra_top[k] = v
         save_models(paths.models_file(), existing)
+        result_reg = existing
     else:
         save_models(paths.models_file(), incoming)
+        result_reg = incoming
+
+    # Mirror the catalog (a replace can wipe models, so reconcile also reclaims
+    # providers for models that vanished) and clear single-slot agents if the
+    # active model was dropped.
+    _sync_catalog(list(result_reg.models.values()))
+    _clear_active_if_orphaned(result_reg)
 
     print(f"Imported {len(incoming.models)} model(s) from {src_path}.")
 
