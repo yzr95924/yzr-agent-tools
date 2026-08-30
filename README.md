@@ -11,6 +11,7 @@
 | [`model-switch`](src/model_switch/README.md) | CLI;切换 AI coding agent 使用的 Anthropic 兼容模型 | 已发布   |
 | [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI;管理 Claude Code / OpenCode / Qoder CLI 的自定义 MCP 服务(起点:Outline wiki),一份注册表翻译到各 agent | 已发布 |
 | [`yzr-agent-style`](src/yzr_agent_style/README.md) | 脚本;把一份全局指令模板以 marker 块形式安装/卸载到 Claude Code / OpenCode / Qoder CLI 的全局规则文件,不覆盖用户手写内容 | 新增 |
+| [`cc-connect-mgr`](src/cc_connect_mgr/README.md) | CLI;cc-connect llmw fork daemon 的首装/配置/升级/卸载(npm 制品 + systemd 看门狗,secrets 走 env 文件) | 新增 |
 
 > 新工具按需添加;同一份仓库规约对所有工具生效。完整仓库规约、目录结构、跨工具注意事项
 > 见 [`AGENTS.md`](AGENTS.md)。
@@ -47,11 +48,13 @@
 # 安装 — 每工具一个自包含脚本:写 wrapper + 装补全 + 加 PATH 块。无 venv,无 pip。
 bash scripts/model-switch.sh install
 bash scripts/mcp-plugin-mgr.sh install
+bash scripts/cc-connect-mgr.sh install
 source ~/.bashrc   # 或 ~/.zshrc
 
 # 卸载 — 删 wrapper + 剥该工具的 PATH marker + 删补全 symlink;不动 ~/.config/<tool>/ 下的数据
 bash scripts/model-switch.sh uninstall
 bash scripts/mcp-plugin-mgr.sh uninstall
+bash scripts/cc-connect-mgr.sh uninstall
 
 # 测试 — pyproject.toml 已含 src/ 到 pythonpath,不需要 `pip install -e .`
 pytest
