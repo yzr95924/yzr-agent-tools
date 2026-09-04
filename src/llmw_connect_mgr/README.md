@@ -1,29 +1,33 @@
-# cc-connect-mgr
+# llmw-connect-mgr
 
-首装 / 配置 / 升级 / 卸载 [cc-connect llmw fork](https://github.com/yzr95924/llmw-cc-connect)
-daemon 的本机 CLI。生产模型：daemon 跑 **npm 发布制品**（`@yzr95924/llmw-connect`）
-+ **systemd 看门狗**（`Restart=always`）；rc 开发构建在 systemd 之外手动裸跑，不归本工具管。
+首装 / 配置 / 升级 / 卸载 [llmw-cc-connect](https://github.com/yzr95924/llmw-cc-connect)
+（cc-connect llmw fork）daemon 的本机 CLI。生产模型：daemon 跑 **npm 发布制品**
+（`@yzr95924/llmw-connect`，二进制 `llmw-connect`——v1.5.0-llmw.4 起从 `cc-connect`
+改名，可与上游同机共存）+ **systemd 看门狗**（`Restart=always`）；rc 开发构建在
+systemd 之外手动裸跑，不归本工具管。
 
 ## 安装
 
 ```bash
-bash scripts/cc-connect-mgr.sh install    # bin wrapper + 补全 + PATH 块
+bash scripts/llmw-connect-mgr.sh install    # bin wrapper + 补全 + PATH 块
 ```
 
 ## 命令
 
 ```bash
-cc-connect-mgr install
-# 依赖检查(tmux/opencode/npm/systemctl) → cc-connect 不在 PATH 则自动
+llmw-connect-mgr install
+# 依赖检查(tmux/opencode/npm/systemctl) → llmw-connect 不在 PATH 则自动
 #   npm i -g @yzr95924/llmw-connect@latest → 凭据收集(见下) →
 #   systemd 单元(ExecStart=实测二进制路径, EnvironmentFile=~/.cc-connect/env,
-#   **PATH=systemd 默认 + 探测到的 llmw/opencode/tmux 所在目录**——
-#   否则 daemon 报 `llmw: executable file not found in $PATH`) →
+#   PATH=systemd 默认 + 探测到的 llmw/opencode/tmux 所在目录,
+#   HOME=显式注入——daemon 子进程(opencode/tmux)需要它;
+#   已存在的手写单元会被接管,覆盖前打 diff) →
 #   enable --now → 轮询 journald 验证 "connected"。幂等可重跑;
-#   单元内容有变时自动 restart 让新单元生效。
+#   单元内容有变时自动 restart 让新单元生效;
+#   发现旧 cc-connect.service 单元会顺手迁移(disable + 删除)。
 #   非 root:打印单元内容 + 手动步骤,不静默失败。
 
-cc-connect-mgr config
+llmw-connect-mgr config
 # 凭据管理(可单独重跑,改 token 免重装):
 #   Telegram bot token → ~/.cc-connect/env (0600, 原子写, 保留未知键)
 #   钉钉(可选 --dingtalk): client_id/client_secret → env 文件
@@ -44,14 +48,16 @@ cc-connect-mgr config
 # --telegram-allow-from: 生成 config 时的 allow_from;默认 "*" = 任何人都能
 #   驱动这台机的 opencode——多机分发强烈建议锁自己的 TG user id
 
-cc-connect-mgr upgrade
-# 先 `npm view` 查 registry 最新版:已最新 → 直接退出(不装包、不重启 daemon);
-# 有新版或 registry 不可达(离线兜底) → npm i -g @latest → systemctl restart
-# → 验证 connected。本地二进制缺失/非 llmw fork → 报错并指回 install。
+llmw-connect-mgr upgrade
+# 已装版本以 `npm ls -g` 为准(改名后的二进制 --version 只打上游基线,不带
+#   -llmw.N 后缀)——先 `npm view` 查 registry 最新版:已最新 → 直接退出
+#   (不装包、不重启 daemon);有新版或 registry 不可达(离线兜底) →
+#   npm i -g @latest → systemctl restart → 验证 connected。
+#   本地二进制缺失/非 llmw fork → 报错并指回 install。
 
-cc-connect-mgr uninstall            # 数据默认保留
-cc-connect-mgr uninstall --purge    # 连 ~/.cc-connect 一起删(不可逆)
-cc-connect-mgr uninstall --remove-npm  # 顺带 npm uninstall -g
+llmw-connect-mgr uninstall            # 数据默认保留
+llmw-connect-mgr uninstall --purge    # 连 ~/.cc-connect 一起删(不可逆)
+llmw-connect-mgr uninstall --remove-npm  # 顺带 npm uninstall -g
 ```
 
 ## 凭据与安全
@@ -72,13 +78,14 @@ cc-connect-mgr uninstall --remove-npm  # 顺带 npm uninstall -g
 
 ## 已知边界
 
-- **二进制来源校验**：`install`/`upgrade` 会跑 `cc-connect --version` 确认是 llmw
-  fork（上游 npm 包的 bin 同名 `cc-connect`，装错了会静默跑无 llmw agent 的上游
-  daemon）——校验不过会 npm 强装 fork 包重试，仍不过则报错退出
-- 升级 cc-connect 后菜单可能多出上游新增内建命令——config.toml 模板里的
+- **二进制来源校验**：`llmw-connect` 这个 bin 名只有 fork 的 npm 包装得上——
+  `which llmw-connect` 即证明。旧名 `cc-connect`（fork ≤llmw.3 与上游 npm 包同名）
+  仍走 `--version` 的 `-llmw.N` 标记校验；校验不过会 npm 强装 fork 包重试，
+  仍不过则报错退出（静默跑无 llmw agent 的上游 daemon 是最坏结局）
+- 升级 llmw-connect 后菜单可能多出上游新增内建命令——config.toml 模板里的
   `disabled_commands` 黑名单需对照 fork README 的验收清单复查
 - `install` 需 root 才能写 `/etc/systemd/system`（非 root 自动降级为打印手动步骤）
 - **勿手删 config.toml**：单元显式 `-config` 指向的文件不存在时，上游 cc-connect 会
   自动 bootstrap 一份含 claudecode 默认模板的配置到该路径（agent 类型示例是
-  claudecode，非本 fork 使用的 llmw/opencode）——删错了用 `cc-connect-mgr config`
+  claudecode，非本 fork 使用的 llmw/opencode）——删错了用 `llmw-connect-mgr config`
   重新生成，别让 daemon 自愈

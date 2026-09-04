@@ -10,8 +10,8 @@ import sys
 import time
 from typing import Dict, List, Optional
 
-from cc_connect_mgr import paths
-from cc_connect_mgr.runner import Runner
+from llmw_connect_mgr import paths
+from llmw_connect_mgr.runner import Runner
 
 CONNECTED_MARKERS = ("telegram: connected", "dingtalk: stream connected")
 
@@ -67,7 +67,7 @@ def write_env(path, updates: Dict[str, str]) -> List[str]:
     merged = dict(current)
     merged.update(updates)
     lines = [
-        "# cc-connect daemon secrets (managed by cc-connect-mgr). chmod 600.",
+        "# llmw-connect daemon secrets (managed by llmw-connect-mgr). chmod 600.",
         "# One bot per host — two daemons sharing a Telegram token steal updates.",
     ]
     for k in sorted(merged):
@@ -85,7 +85,7 @@ def check_deps(runner: Runner) -> List[str]:
     for binary, why in (
         ("tmux", "pane driver sends keys through tmux"),
         ("opencode", "the llmw agent backend"),
-        ("npm", "installs the cc-connect binary"),
+        ("npm", "installs the llmw-connect binary"),
         ("systemctl", "daemon supervision (skip with --no-systemd)"),
     ):
         if not runner.which(binary):
@@ -100,8 +100,28 @@ def _binary_version(runner: Runner, path: str) -> str:
 
 
 def _version_token(version_line: str) -> str:
-    """'cc-connect v1.5.0-llmw.2' → '1.5.0-llmw.2' (for registry compare)."""
+    """'cc-connect v1.5.0-llmw.2' → '1.5.0-llmw.2' (for registry compare).
+
+    Note: since the llmw-connect rename the binary's --version line prints
+    only the upstream baseline ('cc-connect v1.5.0', no -llmw.N suffix) —
+    use _installed_pkg_version() for new-world version comparison."""
     return version_line.split()[-1].lstrip("v") if version_line else ""
+
+
+def _installed_pkg_version(runner: Runner) -> str:
+    """Version of the installed fork npm package, '' when not installed.
+
+    This is the reliable version source for renamed binaries: the npm
+    package version always carries the full vX.Y.Z-llmw.N tag even when
+    the binary's --version line does not."""
+    r = runner.run(["npm", "ls", "-g", paths.NPM_PACKAGE, "--depth=0"])
+    if not r.ok:
+        return ""
+    marker = paths.NPM_PACKAGE + "@"
+    for line in (r.out or "").splitlines():
+        if marker in line:
+            return line.split(marker)[-1].strip().split()[0]
+    return ""
 
 
 def _registry_latest(runner: Runner) -> str:
@@ -113,39 +133,65 @@ def _registry_latest(runner: Runner) -> str:
     return lines[-1] if lines else ""
 
 
-def ensure_binary(runner: Runner) -> str:
-    """Return the path of the llmw-fork cc-connect, npm-installing if absent.
+def _is_legacy_fork(runner: Runner, path: str) -> bool:
+    """Provenance for the ambiguous legacy `cc-connect` bin name: only the
+    old fork builds printed an -llmw.N-suffixed --version line; upstream
+    prints a plain version."""
+    return "llmw" in _binary_version(runner, path)
 
-    Provenance is verified via --version: the upstream npm package also
-    installs a `cc-connect` binary, and silently supervising the wrong
-    daemon (no llmw agent) is worse than failing here.
+
+def _binary_display_version(runner: Runner, path: str) -> str:
+    """Best display version: npm package version, else --version line."""
+    return (_installed_pkg_version(runner)
+            or _binary_version(runner, path)
+            or "unknown")
+
+
+def ensure_binary(runner: Runner) -> str:
+    """Return the path of the llmw-fork binary, npm-installing if absent.
+
+    Provenance: `llmw-connect` (v1.5.0-llmw.4+) is a bin name only the
+    fork npm package installs — which() alone proves it. The legacy
+    `cc-connect` name (fork <=llmw.3, but also the upstream npm package)
+    stays ambiguous and keeps the --version llmw-marker check; silently
+    supervising the wrong daemon (no llmw agent) is worse than failing.
     """
-    found = runner.which("cc-connect")
+    found = runner.which(paths.BINARY_NAME)
     if found:
-        ver = _binary_version(runner, found)
-        if "llmw" in ver:
-            print("binary: {0} ({1})".format(found, ver))
-            return found
-        print("found cc-connect at {0} but it is NOT the llmw fork ({1})"
-              .format(found, ver or "no version output"))
+        print("binary: {0} ({1})".format(found,
+                                         _binary_display_version(runner, found)))
+        return found
+    legacy = runner.which(paths.LEGACY_BINARY_NAME)
+    if legacy:
+        if _is_legacy_fork(runner, legacy):
+            print("binary: {0} ({1}) — legacy bin name; `upgrade` moves to "
+                  "the renamed llmw-connect binary".format(
+                      legacy, _binary_version(runner, legacy)))
+            return legacy
+        print("found {0} at {1} but it is NOT the llmw fork ({2})"
+              .format(paths.LEGACY_BINARY_NAME, legacy,
+                      _binary_version(runner, legacy) or "no version output"))
     print("installing the llmw fork via npm ({0}@latest) ...".format(paths.NPM_PACKAGE))
     r = runner.run(["npm", "install", "-g", paths.NPM_PACKAGE + "@latest"])
     if not r.ok:
         sys.stderr.write("npm install failed:\n{0}{1}\n".format(r.out, r.err))
         raise SystemExit(1)
-    found = runner.which("cc-connect")
+    found = runner.which(paths.BINARY_NAME) or runner.which(paths.LEGACY_BINARY_NAME)
     if not found:
-        sys.stderr.write("npm install finished but cc-connect still not on PATH "
-                         "(check your npm global prefix / PATH)\n")
+        sys.stderr.write("npm install finished but {0} still not on PATH "
+                         "(check your npm global prefix / PATH)\n"
+                         .format(paths.BINARY_NAME))
         raise SystemExit(1)
-    ver = _binary_version(runner, found)
-    if "llmw" not in ver:
+    if os.path.basename(found) == paths.LEGACY_BINARY_NAME \
+            and not _is_legacy_fork(runner, found):
         sys.stderr.write(
-            "npm install finished but the cc-connect on PATH is still not the "
-            "llmw fork ({0} at {1}) — another cc-connect shadows it in PATH\n"
-            .format(ver or "?", found))
+            "npm install finished but the {0} on PATH is still not the "
+            "llmw fork ({1} at {2}) — another {0} shadows it in PATH\n"
+            .format(paths.LEGACY_BINARY_NAME,
+                    _binary_version(runner, found) or "?", found))
         raise SystemExit(1)
-    print("binary: {0} ({1})".format(found, ver))
+    print("binary: {0} ({1})".format(found,
+                                     _binary_display_version(runner, found)))
     return found
 
 
@@ -229,7 +275,7 @@ def _daemon_env_drifted(runner: Runner, env_path) -> bool:
     a rotated bot token keeps 401-looping). Detect via /proc/<pid>/environ."""
     if not runner.is_root():
         return False
-    r = runner.run(["systemctl", "show", "cc-connect", "-p", "MainPID", "--value"])
+    r = runner.run(["systemctl", "show", paths.UNIT_NAME, "-p", "MainPID", "--value"])
     pid = (r.out or "").strip()
     if not pid.isdigit() or pid == "0":
         return False
@@ -382,16 +428,16 @@ def do_config(
 
     # Apply: restart the daemon when anything changed and it is running.
     if restart and mutated:
-        active = runner.run(["systemctl", "is-active", "cc-connect"])
+        active = runner.run(["systemctl", "is-active", paths.UNIT_NAME])
         if runner.is_root() and active.ok:
-            r = runner.run(["systemctl", "restart", "cc-connect"])
+            r = runner.run(["systemctl", "restart", paths.UNIT_NAME])
             if not r.ok:
                 sys.stderr.write("systemctl restart failed: {0}\n".format(r.err))
                 return 1
             print("service: 配置已变化 → restarted")
             return 0 if verify_daemon(runner, timeout_s=verify_timeout) else 1
         print("提示: 配置已更新;daemon 未运行或无权限 — 手动 "
-              "`systemctl restart cc-connect` 生效")
+              "`systemctl restart {0}` 生效".format(paths.UNIT_NAME))
     return 0
 
 
@@ -418,25 +464,32 @@ def service_path(runner: Runner) -> str:
 
 def render_unit(exec_start: str, work_dir: str, env_file: str,
                 config_path: Optional[str] = None,
-                path_env: Optional[str] = None) -> str:
+                path_env: Optional[str] = None,
+                home: Optional[str] = None) -> str:
     # -config is passed explicitly: under systemd $HOME may be unset, and
-    # cc-connect's discovery (flag → ./config.toml → ~/.cc-connect/…)
+    # llmw-connect's discovery (flag → ./config.toml → ~/.cc-connect/…)
     # would otherwise fall back to a default template in WorkingDirectory.
-    body = paths.template("cc-connect.service").read_text(encoding="utf-8")
+    # HOME is set explicitly too: daemon subprocesses (opencode, tmux)
+    # need it to find their configs.
+    body = paths.template(paths.UNIT_NAME + ".service").read_text(encoding="utf-8")
     if config_path is None:
         config_path = str(paths.config_file())
     if path_env is None:
         path_env = SERVICE_PATH_DEFAULT
+    if home is None:
+        home = work_dir
     return (body
             .replace("{EXEC_START}", exec_start)
             .replace("{CONFIG_PATH}", config_path)
             .replace("{SERVICE_PATH}", path_env)
             .replace("{WORK_DIR}", work_dir)
-            .replace("{ENV_FILE}", env_file))
+            .replace("{ENV_FILE}", env_file)
+            .replace("{HOME}", home))
 
 
 def install_unit(runner: Runner, exec_start: str) -> str:
     """Write the unit if content changed; daemon-reload. Returns status."""
+    import difflib
     unit = paths.unit_path()
     content = render_unit(exec_start, str(paths.data_dir().parent),
                           str(paths.env_file()), str(paths.config_file()),
@@ -445,6 +498,14 @@ def install_unit(runner: Runner, exec_start: str) -> str:
     # parent (= home in the default layout).
     if unit.exists() and unit.read_text(encoding="utf-8") == content:
         return "unchanged"
+    if unit.exists():
+        # Taking over a pre-existing (e.g. hand-written) unit — show what
+        # changes so the overwrite is never silent.
+        print("unit: {0} already exists — overwriting, diff:".format(unit))
+        old = unit.read_text(encoding="utf-8").splitlines(keepends=True)
+        for line in difflib.unified_diff(old, content.splitlines(keepends=True),
+                                         fromfile="installed", tofile="managed"):
+            print("  " + line.rstrip("\n"))
     _atomic_write(unit, content)
     r = runner.run(["systemctl", "daemon-reload"])
     if not r.ok:
@@ -453,11 +514,22 @@ def install_unit(runner: Runner, exec_start: str) -> str:
     return "written"
 
 
+def migrate_legacy_unit(runner: Runner) -> bool:
+    """Best-effort removal of the pre-rename cc-connect.service unit."""
+    legacy = paths.legacy_unit_path()
+    if not legacy.exists():
+        return False
+    runner.run(["systemctl", "disable", "--now", paths.LEGACY_UNIT_NAME])
+    legacy.unlink()
+    print("migrated: removed legacy unit {0}".format(legacy))
+    return True
+
+
 def verify_daemon(runner: Runner, timeout_s: int = 20) -> bool:
     """Poll journald until a platform reports connected. systemd mode only."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        r = runner.run(["journalctl", "-u", "cc-connect", "-n", "80",
+        r = runner.run(["journalctl", "-u", paths.UNIT_NAME, "-n", "80",
                         "--no-pager", "--output", "cat"])
         text = (r.out or "") + (r.err or "")
         if any(m in text for m in CONNECTED_MARKERS):
@@ -467,7 +539,8 @@ def verify_daemon(runner: Runner, timeout_s: int = 20) -> bool:
             return True
         time.sleep(1)
     sys.stderr.write("daemon did not reach 'connected' within {0}s — check: "
-                     "journalctl -u cc-connect -n 100\n".format(timeout_s))
+                     "journalctl -u {1} -n 100\n".format(timeout_s,
+                                                         paths.UNIT_NAME))
     return False
 
 
@@ -507,20 +580,22 @@ def do_install(runner: Runner, args) -> int:
         print("\n--- {0} ---\n{1}\n".format(paths.unit_path(), unit))
         print("manual steps:")
         print("  sudo cp <unit> {0}".format(paths.unit_path()))
-        print("  sudo systemctl daemon-reload && sudo systemctl enable --now cc-connect")
+        print("  sudo systemctl daemon-reload && sudo systemctl enable --now {0}"
+              .format(paths.UNIT_NAME))
         return 0
 
-    was_active = runner.run(["systemctl", "is-active", "cc-connect"]).ok
+    was_active = runner.run(["systemctl", "is-active", paths.UNIT_NAME]).ok
     status = install_unit(runner, exec_path)
     print("unit: {0} ({1})".format(status, paths.unit_path()))
-    r = runner.run(["systemctl", "enable", "--now", "cc-connect"])
+    migrate_legacy_unit(runner)
+    r = runner.run(["systemctl", "enable", "--now", paths.UNIT_NAME])
     if not r.ok:
         sys.stderr.write("systemctl enable failed: {0}{1}\n".format(r.out, r.err))
         return 1
     if status == "written" and was_active:
         # A rewritten unit is not picked up by the already-running service —
         # converge it so re-running install actually applies changes.
-        r = runner.run(["systemctl", "restart", "cc-connect"])
+        r = runner.run(["systemctl", "restart", paths.UNIT_NAME])
         if r.ok:
             print("service: unit rewritten → restarted to apply")
     print("service: enabled + started")
@@ -528,36 +603,48 @@ def do_install(runner: Runner, args) -> int:
 
 
 def do_upgrade(runner: Runner, args) -> int:
-    current = runner.which("cc-connect")
+    current = runner.which(paths.BINARY_NAME) or runner.which(paths.LEGACY_BINARY_NAME)
     if not current:
-        sys.stderr.write("cc-connect is not installed — run `cc-connect-mgr install` first\n")
+        sys.stderr.write("{0} is not installed — run `{1} install` first\n"
+                         .format(paths.BINARY_NAME, "llmw-connect-mgr"))
         return 1
-    before = _binary_version(runner, current)
-    if "llmw" not in before:
-        sys.stderr.write("cc-connect on PATH is not the llmw fork ({0} at {1}) — "
-                         "run `cc-connect-mgr install` to fix\n"
-                         .format(before or "?", current))
-        return 1
+    if os.path.basename(current) == paths.BINARY_NAME:
+        # Renamed bin — only the fork package installs it; version truth is
+        # the npm package version (the --version line lacks the -llmw.N).
+        installed = (_installed_pkg_version(runner)
+                     or _version_token(_binary_version(runner, current)))
+    else:
+        before_line = _binary_version(runner, current)
+        if "llmw" not in before_line:
+            sys.stderr.write("{0} on PATH is not the llmw fork ({1} at {2}) — "
+                             "run `llmw-connect-mgr install` to fix\n"
+                             .format(paths.LEGACY_BINARY_NAME,
+                                     before_line or "?", current))
+            return 1
+        installed = _version_token(before_line)
 
     # Check-first: skip the npm round trip AND the daemon restart when the
     # installed version already matches the registry latest.
     latest = _registry_latest(runner)
-    if latest and _version_token(before) == latest:
-        print("already at latest: {0} (no restart)".format(before))
+    if latest and installed == latest:
+        print("already at latest: {0} (no restart)".format(installed))
         return 0
 
     r = runner.run(["npm", "install", "-g", paths.NPM_PACKAGE + "@latest"])
     if not r.ok:
         sys.stderr.write("npm install failed:\n{0}{1}\n".format(r.out, r.err))
         return 1
-    found = runner.which("cc-connect") or current
-    after = _binary_version(runner, found)
-    if "llmw" not in after:
-        sys.stderr.write("cc-connect on PATH is not the llmw fork ({0} at {1})\n"
-                         .format(after or "?", found))
+    found = (runner.which(paths.BINARY_NAME)
+             or runner.which(paths.LEGACY_BINARY_NAME) or current)
+    after = (_installed_pkg_version(runner)
+             or _binary_version(runner, found))
+    if os.path.basename(found) == paths.LEGACY_BINARY_NAME \
+            and "llmw" not in _binary_version(runner, found):
+        sys.stderr.write("{0} on PATH is not the llmw fork ({1} at {2})\n"
+                         .format(paths.LEGACY_BINARY_NAME, after or "?", found))
         return 1
-    print("upgraded: {0} → {1}".format(before, after))
-    r = runner.run(["systemctl", "restart", "cc-connect"])
+    print("upgraded: {0} → {1}".format(installed or "?", after))
+    r = runner.run(["systemctl", "restart", paths.UNIT_NAME])
     if not r.ok:
         sys.stderr.write("systemctl restart failed (is the unit installed?): {0}\n".format(r.err))
         return 1
@@ -565,13 +652,14 @@ def do_upgrade(runner: Runner, args) -> int:
 
 
 def do_uninstall(runner: Runner, args) -> int:
-    r = runner.run(["systemctl", "disable", "--now", "cc-connect"])
+    r = runner.run(["systemctl", "disable", "--now", paths.UNIT_NAME])
     print("service: {0}".format("stopped+disabled" if r.ok
                                 else "not active/installed ({0})".format(r.err.strip())))
     unit = paths.unit_path()
     if unit.exists():
         unit.unlink()
         print("unit: removed {0}".format(unit))
+    migrate_legacy_unit(runner)
     runner.run(["systemctl", "daemon-reload"])
     if args.remove_npm:
         r = runner.run(["npm", "uninstall", "-g", paths.NPM_PACKAGE])

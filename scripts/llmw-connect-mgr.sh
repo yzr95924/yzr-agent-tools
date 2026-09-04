@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Manage cc-connect-mgr: install | uninstall
+# Manage llmw-connect-mgr: install | uninstall
 #
-# Self-contained: writes the bin/cc-connect-mgr wrapper, links bash/fish
+# Self-contained: writes the bin/llmw-connect-mgr wrapper, links bash/fish
 # completions, and manages a per-tool PATH block in your shell rc. One script
 # per tool — there is no shared helper to (mis)invoke directly.
 #
 # Usage:
-#     scripts/cc-connect-mgr.sh install      # wrapper + completions + PATH block
-#     scripts/cc-connect-mgr.sh uninstall    # remove all of the above
+#     scripts/llmw-connect-mgr.sh install      # wrapper + completions + PATH block
+#     scripts/llmw-connect-mgr.sh uninstall    # remove all of the above
 set -euo pipefail
 
-TOOL="cc-connect-mgr"
+TOOL="llmw-connect-mgr"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$PROJECT_ROOT/bin"
 COMPLETION_SRC_DIR="$PROJECT_ROOT/completions"

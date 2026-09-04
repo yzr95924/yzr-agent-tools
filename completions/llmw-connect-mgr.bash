@@ -1,11 +1,11 @@
-# bash completion for cc-connect-mgr
+# bash completion for llmw-connect-mgr
 #
 # Static command surface: install / config / upgrade / uninstall plus their
-# flags. scripts/cc-connect-mgr.sh install symlinks this file into
+# flags. scripts/llmw-connect-mgr.sh install symlinks this file into
 # ~/.local/share/bash-completion/completions/ and sources it from the PATH
 # marker block in ~/.bashrc (both harmless if repeated).
 
-_cc_connect_mgr() {
+_llmw_connect_mgr() {
     local cur prev cmd
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -32,4 +32,4 @@ _cc_connect_mgr() {
     COMPREPLY=()
     return 0
 }
-complete -F _cc_connect_mgr cc-connect-mgr
+complete -F _llmw_connect_mgr llmw-connect-mgr

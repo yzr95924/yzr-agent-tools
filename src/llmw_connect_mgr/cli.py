@@ -1,4 +1,4 @@
-"""argparse-based CLI for cc-connect-mgr.
+"""argparse-based CLI for llmw-connect-mgr.
 
 Four commands, all idempotent:
 
@@ -10,25 +10,25 @@ Four commands, all idempotent:
 
 Exit codes: 0 = success; 1 = user/env error; 2 = argparse error.
 
-The production daemon runs the npm-published artifact (@yzr95924/llmw-connect)
-under systemd; rc-dev builds are run manually outside the unit and are
-deliberately NOT managed here.
+The production daemon runs the npm-published artifact (@yzr95924/llmw-connect,
+bin `llmw-connect` since v1.5.0-llmw.4) under systemd; rc-dev builds are run
+manually outside the unit and are deliberately NOT managed here.
 """
 import argparse
 import sys
 from typing import List, Optional
 
-from cc_connect_mgr import ops
-from cc_connect_mgr.runner import Runner
+from llmw_connect_mgr import ops
+from llmw_connect_mgr.runner import Runner
 
 
 def build_parser() -> argparse.ArgumentParser:
-    from cc_connect_mgr import __version__
+    from llmw_connect_mgr import __version__
     parser = argparse.ArgumentParser(
-        prog="cc-connect-mgr",
+        prog="llmw-connect-mgr",
         description=(
-            "Install / configure / upgrade / uninstall the cc-connect "
-            "daemon (llmw fork) on this host."
+            "Install / configure / upgrade / uninstall the llmw-connect "
+            "daemon (cc-connect llmw fork) on this host."
         ),
     )
     parser.add_argument("--version", action="version",

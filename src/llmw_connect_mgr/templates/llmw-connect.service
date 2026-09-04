@@ -1,10 +1,11 @@
 [Unit]
-Description=cc-connect daemon (llmw pane driver fork)
+Description=llmw-connect daemon (cc-connect llmw pane driver fork)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Environment="PATH={SERVICE_PATH}"
+Environment="HOME={HOME}"
 ExecStart={EXEC_START} -config {CONFIG_PATH}
 WorkingDirectory={WORK_DIR}
 EnvironmentFile={ENV_FILE}

@@ -1,6 +1,6 @@
-"""Tests for cc_connect_mgr.
+"""Tests for llmw_connect_mgr.
 
-Every test redirects all paths via the CC_CONNECT_MGR_* env overrides
+Every test redirects all paths via the LLMW_CONNECT_MGR_* env overrides
 (paths.py seams) and injects a FakeRunner, so nothing here touches the
 real ~/.cc-connect, /etc/systemd, npm, or systemctl.
 """
@@ -9,8 +9,14 @@ import stat
 
 import pytest
 
-from cc_connect_mgr import cli, ops, paths
-from cc_connect_mgr.runner import Result
+from llmw_connect_mgr import cli, ops, paths
+from llmw_connect_mgr.runner import Result
+
+NPM_LS_LATEST = (0, "/usr/lib\n└── @yzr95924/llmw-connect@1.5.0-llmw.4\n\n", "")
+NPM_LS_OLD = (0, "/usr/lib\n└── @yzr95924/llmw-connect@1.5.0-llmw.3\n\n", "")
+# Renamed binary's --version prints only the upstream baseline — no llmw
+# marker, no -llmw.N suffix. Provenance is the bin NAME; version is npm ls.
+NEW_BIN_VERSION = (0, "cc-connect v1.5.0\ncommit:  eb05484\n", "")
 
 
 class FakeRunner(object):
@@ -48,7 +54,8 @@ def isolate(monkeypatch, tmp_path):
     data = home / ".cc-connect"
     monkeypatch.setenv(paths.HOME_OVERRIDE, str(data))
     monkeypatch.setenv(paths.SYSTEMD_DIR_OVERRIDE, str(tmp_path / "systemd"))
-    monkeypatch.setenv(paths.UNIT_OVERRIDE, str(tmp_path / "systemd" / "cc-connect.service"))
+    monkeypatch.setenv(paths.UNIT_OVERRIDE,
+                       str(tmp_path / "systemd" / "llmw-connect.service"))
     monkeypatch.setenv(paths.LOG_OVERRIDE, str(tmp_path / "daemon.log"))
     return tmp_path
 
@@ -84,7 +91,6 @@ class TestEnvFile:
 
 # ---- config generation --------------------------------------------------------
 
-
 class TestConfig:
     def test_generate_telegram_only(self, isolate):
         ops.generate_config(paths.config_file(), with_dingtalk=False)
@@ -113,20 +119,29 @@ class TestConfig:
 
 class TestUnit:
     def test_render_replaces_placeholders(self, isolate):
-        content = ops.render_unit("/usr/local/bin/cc-connect", "/root",
+        content = ops.render_unit("/usr/bin/llmw-connect", "/root",
                                   "/root/.cc-connect/env", "/root/.cc-connect/config.toml")
-        assert "ExecStart=/usr/local/bin/cc-connect -config /root/.cc-connect/config.toml" in content
+        assert "ExecStart=/usr/bin/llmw-connect -config /root/.cc-connect/config.toml" in content
         assert "EnvironmentFile=/root/.cc-connect/env" in content
         assert "{" not in content.replace("{{", "")
 
     def test_render_defaults_config_path_from_paths(self, isolate):
-        content = ops.render_unit("/x/cc-connect", "/root", "/root/.cc-connect/env")
+        content = ops.render_unit("/usr/bin/llmw-connect", "/root", "/root/.cc-connect/env")
         assert "-config" in content
 
     def test_render_includes_path_env(self, isolate):
-        content = ops.render_unit("/x/cc-connect", "/root", "/e", "/c",
-                                   path_env="/a:/root/.local/bin")
+        content = ops.render_unit("/usr/bin/llmw-connect", "/root", "/e", "/c",
+                                  path_env="/a:/root/.local/bin")
         assert 'Environment="PATH=/a:/root/.local/bin"' in content
+
+    def test_render_sets_home_env(self, isolate):
+        content = ops.render_unit("/usr/bin/llmw-connect", "/root", "/e", "/c")
+        assert 'Environment="HOME=/root"' in content
+
+    def test_render_explicit_home(self, isolate):
+        content = ops.render_unit("/usr/bin/llmw-connect", "/root", "/e", "/c",
+                                  home="/home/llmw")
+        assert 'Environment="HOME=/home/llmw"' in content
 
     def test_service_path_merges_detected_dep_dirs(self, isolate):
         runner = FakeRunner(which_map={
@@ -146,9 +161,9 @@ class TestUnit:
         monkeypatch.setattr("time.sleep", lambda s: None)
         runner = FakeRunner(
             which_map={"tmux": "/x", "opencode": "/x", "npm": "/x",
-                       "systemctl": "/x", "cc-connect": "/usr/local/bin/cc-connect"},
+                       "systemctl": "/x", "llmw-connect": "/usr/bin/llmw-connect"},
             results={
-                ("/usr/local/bin/cc-connect", "--version"): (0, "cc-connect v1.5.0-llmw.2\n", ""),
+                ("npm", "ls"): NPM_LS_LATEST,
                 ("systemctl", "is-active"): (0, "active\n", ""),
                 ("systemctl", "enable"): (0, "", ""),
                 ("systemctl", "restart"): (0, "", ""),
@@ -162,18 +177,68 @@ class TestUnit:
             no_systemd=False, verify_timeout=1)
         assert ops.do_install(runner, args) == 0
         assert runner.called("systemctl", "restart")
-        out_calls = [c for c in runner.calls if c[:2] == ["systemctl", "restart"]]
-        assert out_calls  # and it happened after enable
-        assert runner.calls.index(["systemctl", "enable", "--now", "cc-connect"]) < \
-            runner.calls.index(["systemctl", "restart", "cc-connect"])
+        assert runner.calls.index(["systemctl", "enable", "--now", "llmw-connect"]) < \
+            runner.calls.index(["systemctl", "restart", "llmw-connect"])
 
     def test_install_unit_idempotent_no_reload(self, isolate, capsys):
         runner = FakeRunner()
-        assert ops.install_unit(runner, "/usr/local/bin/cc-connect") == "written"
+        assert ops.install_unit(runner, "/usr/bin/llmw-connect") == "written"
         assert runner.called("systemctl", "daemon-reload")
         runner.calls.clear()
-        assert ops.install_unit(runner, "/usr/local/bin/cc-connect") == "unchanged"
+        assert ops.install_unit(runner, "/usr/bin/llmw-connect") == "unchanged"
         assert not runner.called("systemctl", "daemon-reload")
+
+    def test_install_unit_overwrite_existing_prints_diff(self, isolate, capsys):
+        unit = paths.unit_path()
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        unit.write_text("[Unit]\nDescription=hand-written\n", encoding="utf-8")
+        assert ops.install_unit(FakeRunner(), "/usr/bin/llmw-connect") == "written"
+        out = capsys.readouterr().out
+        assert "overwriting" in out
+        assert "-Description=hand-written" in out
+        assert "Description=llmw-connect daemon" in unit.read_text(encoding="utf-8")
+
+
+# ---- legacy unit migration ----------------------------------------------------
+
+
+class TestLegacyMigration:
+    def test_migrate_removes_legacy_unit(self, isolate):
+        legacy = paths.legacy_unit_path()
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("[Unit]\nDescription=old\n", encoding="utf-8")
+        runner = FakeRunner()
+        assert ops.migrate_legacy_unit(runner) is True
+        assert not legacy.exists()
+        assert runner.called("systemctl", "disable")
+
+    def test_migrate_noop_when_absent(self, isolate):
+        runner = FakeRunner()
+        assert ops.migrate_legacy_unit(runner) is False
+        assert not runner.calls
+
+    def test_install_migrates_legacy_unit(self, isolate, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        legacy = paths.legacy_unit_path()
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("[Unit]\nDescription=old\n", encoding="utf-8")
+        runner = FakeRunner(
+            which_map={"tmux": "/x", "opencode": "/x", "npm": "/x",
+                       "systemctl": "/x", "llmw-connect": "/usr/bin/llmw-connect"},
+            results={
+                ("npm", "ls"): NPM_LS_LATEST,
+                ("systemctl", "enable"): (0, "", ""),
+                ("journalctl", "-u"): (0, 'msg="telegram: connected"\n', ""),
+            },
+        )
+        import argparse
+        args = argparse.Namespace(
+            cmd="install", telegram_token="t", telegram_allow_from=None,
+            dingtalk=False, dingtalk_id=None, dingtalk_secret=None, yes=True,
+            no_systemd=False, verify_timeout=1)
+        assert ops.do_install(runner, args) == 0
+        assert not legacy.exists()
+        assert runner.called("systemctl", "disable")
 
 
 # ---- verify -----------------------------------------------------------------
@@ -205,7 +270,7 @@ class TestFlows:
         return {
             "tmux": "/usr/bin/tmux", "opencode": "/usr/local/bin/opencode",
             "npm": "/usr/bin/npm", "systemctl": "/usr/bin/systemctl",
-            "cc-connect": "/usr/local/bin/cc-connect",
+            "llmw-connect": "/usr/bin/llmw-connect",
         }
 
     def _install_args(self, **kw):
@@ -223,7 +288,8 @@ class TestFlows:
         runner = FakeRunner(
             which_map=self._full_which(),
             results={
-                ("/usr/local/bin/cc-connect", "--version"): (0, "cc-connect v1.5.0-llmw.2\n", ""),
+                ("npm", "ls"): NPM_LS_LATEST,
+                ("/usr/bin/llmw-connect", "--version"): NEW_BIN_VERSION,
                 ("systemctl", "enable"): (0, "", ""),
                 ("journalctl", "-u"): (0, 'msg="telegram: connected"\n', ""),
             },
@@ -243,7 +309,7 @@ class TestFlows:
 
     def test_install_not_root_prints_manual(self, isolate, capsys):
         runner = FakeRunner(which_map=self._full_which(), root=False,
-                            results={("/usr/local/bin/cc-connect", "--version"): (0, "cc-connect v1.5.0-llmw.2\n", "")})
+                            results={("npm", "ls"): NPM_LS_LATEST})
         rc = ops.do_install(runner, self._install_args())
         assert rc == 0
         assert not runner.called("systemctl", "enable")
@@ -252,12 +318,12 @@ class TestFlows:
     def test_install_npm_installs_when_absent(self, isolate, monkeypatch):
         monkeypatch.setattr("time.sleep", lambda s: None)
         which = self._full_which()
-        del which["cc-connect"]
+        del which["llmw-connect"]
         runner = FakeRunner(
             which_map=which,
             results={
                 ("npm", "install"): (0, "added 1 package\n", ""),
-                ("/usr/local/bin/cc-connect", "--version"): (0, "cc-connect v1.5.0-llmw.2\n", ""),
+                ("npm", "ls"): NPM_LS_LATEST,
                 ("systemctl", "enable"): (0, "", ""),
                 ("journalctl", "-u"): (0, 'msg="telegram: connected"\n', ""),
             },
@@ -269,7 +335,7 @@ class TestFlows:
         def run(argv):
             r = orig_run(argv)
             if argv[:2] == ["npm", "install"]:
-                runner.which_map["cc-connect"] = "/usr/local/bin/cc-connect"
+                runner.which_map["llmw-connect"] = "/usr/bin/llmw-connect"
             return r
 
         runner.run = run
@@ -279,9 +345,10 @@ class TestFlows:
     def test_upgrade_flow(self, isolate, monkeypatch):
         monkeypatch.setattr("time.sleep", lambda s: None)
         runner = FakeRunner(
-            which_map={"cc-connect": "/usr/local/bin/cc-connect", "systemctl": "/x", "npm": "/x"},
+            which_map={"llmw-connect": "/usr/bin/llmw-connect",
+                       "systemctl": "/x", "npm": "/x"},
             results={
-                ("/usr/local/bin/cc-connect", "--version"): (0, "cc-connect v1.5.0-llmw.3\n", ""),
+                ("npm", "ls"): NPM_LS_OLD,
                 ("npm", "view"): (1, "", "offline — fall through"),
                 ("npm", "install"): (0, "", ""),
                 ("systemctl", "restart"): (0, "", ""),
@@ -291,19 +358,19 @@ class TestFlows:
         import argparse
         args = argparse.Namespace(cmd="upgrade", verify_timeout=1)
         assert ops.do_upgrade(runner, args) == 0
-        assert runner.called("systemctl", "restart")
+        assert runner.called("systemctl", "restart", "llmw-connect")
 
     def test_uninstall_keeps_data_by_default(self, isolate):
         paths.data_dir().mkdir(parents=True, exist_ok=True)
         paths.config_file().write_text("x=1", encoding="utf-8")
-        ops.install_unit(FakeRunner(), "/usr/local/bin/cc-connect")
+        ops.install_unit(FakeRunner(), "/usr/bin/llmw-connect")
         import argparse
         args = argparse.Namespace(cmd="uninstall", remove_npm=False, purge=False)
         runner = FakeRunner()
         assert ops.do_uninstall(runner, args) == 0
         assert paths.config_file().exists()
         assert not paths.unit_path().exists()
-        assert runner.called("systemctl", "disable")
+        assert runner.called("systemctl", "disable", "--now", "llmw-connect")
         assert not runner.called("npm", "uninstall")
 
     def test_uninstall_purge(self, isolate):
@@ -459,7 +526,7 @@ class TestConfigRestart:
         assert not runner.called("systemctl", "restart")
         assert "手动" in capsys.readouterr().out
 
-    def test_change_as_non_root_only_hints(self, isolate, monkeypatch, capsys):
+    def test_change_as_non_root_only_hints(self, isolate, monkeypatch):
         monkeypatch.setattr("sys.stdin", open("/dev/null"))
         self._prepared_env()
         runner = FakeRunner(
@@ -486,7 +553,6 @@ class TestConfigRestart:
 
 
 # ---- daemon env drift ----------------------------------------------------------
-
 
 class TestEnvDrift:
     def _prepared(self):
@@ -557,30 +623,68 @@ class TestEnvDrift:
         assert ops._daemon_env_drifted(runner, paths.env_file()) is False
 
 
-# ---- provenance / non-interactive guards --------------------------------------
+# ---- provenance / version parsing / non-interactive guards ----------------------
 
 
 class TestGuards:
     def _runner(self, which_map, results):
         return FakeRunner(which_map=which_map, results=results)
 
+    def test_installed_pkg_version_parses_npm_ls(self):
+        runner = FakeRunner(results={("npm", "ls"): NPM_LS_LATEST})
+        assert ops._installed_pkg_version(runner) == "1.5.0-llmw.4"
+
+    def test_installed_pkg_version_empty_when_missing(self):
+        runner = FakeRunner(results={("npm", "ls"): (1, "", "empty")})
+        assert ops._installed_pkg_version(runner) == ""
+
+    def test_ensure_binary_accepts_llmw_connect_by_name(self, capsys):
+        # Renamed bin: the NAME is provenance — no npm install, no marker
+        # sniffing (the --version line has no llmw marker anymore).
+        runner = FakeRunner(
+            which_map={"llmw-connect": "/usr/bin/llmw-connect", "npm": "/x"},
+            results={
+                ("npm", "ls"): NPM_LS_LATEST,
+                ("/usr/bin/llmw-connect", "--version"): NEW_BIN_VERSION,
+            },
+        )
+        assert ops.ensure_binary(runner) == "/usr/bin/llmw-connect"
+        assert not runner.called("npm", "install")
+        assert "1.5.0-llmw.4" in capsys.readouterr().out
+
+    def test_ensure_binary_accepts_legacy_fork(self, capsys):
+        runner = FakeRunner(
+            which_map={"cc-connect": "/usr/local/bin/cc-connect", "npm": "/x"},
+            results={
+                ("/usr/local/bin/cc-connect", "--version"):
+                    (0, "cc-connect v1.5.0-llmw.2\n", ""),
+            },
+        )
+        assert ops.ensure_binary(runner) == "/usr/local/bin/cc-connect"
+        assert not runner.called("npm", "install")
+        assert "legacy" in capsys.readouterr().out
+
     def test_ensure_binary_rejects_upstream_and_reinstalls(self, monkeypatch):
+        # Legacy world: cc-connect on PATH is upstream (no llmw marker) →
+        # npm install the fork → renamed llmw-connect binary appears.
         runner = FakeRunner(
             which_map={"cc-connect": "/usr/local/bin/cc-connect", "npm": "/x"},
             results={
                 ("/usr/local/bin/cc-connect", "--version"): (0, "cc-connect v1.5.0\n", ""),
                 ("npm", "install"): (0, "", ""),
+                ("npm", "ls"): NPM_LS_LATEST,
             },
         )
-        # after npm install the fork binary shadows it
         orig_run = runner.run
+
         def run(argv):
             r = orig_run(argv)
             if argv[:2] == ["npm", "install"]:
-                runner.results[("/usr/local/bin/cc-connect", "--version")] = (0, "cc-connect v1.5.0-llmw.2\n", "")
+                runner.which_map["llmw-connect"] = "/usr/bin/llmw-connect"
             return r
+
         runner.run = run
-        assert ops.ensure_binary(runner) == "/usr/local/bin/cc-connect"
+        assert ops.ensure_binary(runner) == "/usr/bin/llmw-connect"
         assert runner.called("npm", "install")
 
     def test_ensure_binary_fails_when_still_wrong(self):
@@ -618,10 +722,11 @@ class TestGuards:
 
     def test_upgrade_already_latest_skips_install_and_restart(self, isolate, capsys):
         runner = FakeRunner(
-            which_map={"cc-connect": "/x/cc-connect", "systemctl": "/x", "npm": "/x"},
+            which_map={"llmw-connect": "/usr/bin/llmw-connect",
+                       "systemctl": "/x", "npm": "/x"},
             results={
-                ("/x/cc-connect", "--version"): (0, "cc-connect v1.5.0-llmw.2\n", ""),
-                ("npm", "view"): (0, "1.5.0-llmw.2\n", ""),
+                ("npm", "ls"): NPM_LS_LATEST,
+                ("npm", "view"): (0, "1.5.0-llmw.4\n", ""),
             },
         )
         import argparse
@@ -634,9 +739,10 @@ class TestGuards:
     def test_upgrade_registry_unreachable_falls_through(self, isolate, monkeypatch):
         monkeypatch.setattr("time.sleep", lambda s: None)
         runner = FakeRunner(
-            which_map={"cc-connect": "/x/cc-connect", "systemctl": "/x", "npm": "/x"},
+            which_map={"llmw-connect": "/usr/bin/llmw-connect",
+                       "systemctl": "/x", "npm": "/x"},
             results={
-                ("/x/cc-connect", "--version"): (0, "cc-connect v1.5.0-llmw.2\n", ""),
+                ("npm", "ls"): NPM_LS_OLD,
                 ("npm", "view"): (1, "", "ENOTFOUND"),
                 ("npm", "install"): (0, "", ""),
                 ("systemctl", "restart"): (0, "", ""),
@@ -654,6 +760,19 @@ class TestGuards:
         args = argparse.Namespace(cmd="upgrade", verify_timeout=1)
         assert ops.do_upgrade(runner, args) == 1
         assert not runner.calls  # nothing executed
+
+    def test_upgrade_rejects_legacy_upstream(self, isolate, capsys):
+        runner = FakeRunner(
+            which_map={"cc-connect": "/usr/local/bin/cc-connect",
+                       "systemctl": "/x", "npm": "/x"},
+            results={
+                ("/usr/local/bin/cc-connect", "--version"): (0, "cc-connect v1.5.0\n", ""),
+            },
+        )
+        import argparse
+        args = argparse.Namespace(cmd="upgrade", verify_timeout=1)
+        assert ops.do_upgrade(runner, args) == 1
+        assert "not the llmw fork" in capsys.readouterr().err
 
 
 # ---- CLI parsing --------------------------------------------------------------
