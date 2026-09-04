@@ -10,10 +10,13 @@ max_attachment_size_mb = 0
 [[projects]]
   name = "llmw"
   # Fork-tuned hide list: only commands meaningful for the llmw pane agent
-  # stay in the IM menu (the /llmw_* set + /model /mode /compress /help).
+  # stay in the IM menu (the /llmw_* set — compact included — + /model
+  # /mode /help). Builtin /compress is disabled since v1.5.0-llmw.5: its
+  # "no active session" precondition breaks after /model recycles the
+  # engine state; compaction goes through the /llmw_compact custom command.
   # Upstream may add built-ins that reappear in the menu — re-check this
   # list after upgrading llmw-connect.
-  disabled_commands = ["switch", "list", "name", "current", "status", "usage", "history", "allow", "reasoning", "lang", "quiet", "provider", "memory", "cron", "timer", "heartbeat", "stop", "cancel", "version", "commands", "skills", "config", "doctor", "upgrade", "restart", "alias", "delete", "bind", "search", "shell", "show", "dir", "tts", "workspace", "whoami", "web", "diff", "ps", "new"]
+  disabled_commands = ["switch", "list", "name", "current", "status", "usage", "history", "allow", "reasoning", "lang", "quiet", "provider", "memory", "cron", "timer", "heartbeat", "stop", "cancel", "compress", "version", "commands", "skills", "config", "doctor", "upgrade", "restart", "alias", "delete", "bind", "search", "shell", "show", "dir", "tts", "workspace", "whoami", "web", "diff", "ps", "new"]
 
   [projects.agent]
     type = "llmw"
