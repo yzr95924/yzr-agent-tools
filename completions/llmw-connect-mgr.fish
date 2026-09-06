@@ -17,6 +17,7 @@ complete -c llmw-connect-mgr -n '__fish_seen_subcommand_from install config' -l 
 complete -c llmw-connect-mgr -n '__fish_seen_subcommand_from install config' -l dingtalk-id -d 'DingTalk client_id (AppKey)'
 complete -c llmw-connect-mgr -n '__fish_seen_subcommand_from install config' -l telegram-allow-from -d 'telegram allow_from when generating config.toml (default * = anyone)'
 complete -c llmw-connect-mgr -n '__fish_seen_subcommand_from install config' -l dingtalk-secret -d 'DingTalk client_secret (AppSecret)'
+complete -c llmw-connect-mgr -n '__fish_seen_subcommand_from install config' -l dingtalk-card-template -d 'DingTalk streaming AI-card template_id (card_template_id in config.toml; not a secret)'
 complete -c llmw-connect-mgr -n '__fish_seen_subcommand_from install config' -l yes -s y -d 'non-interactive'
 complete -c llmw-connect-mgr -n '__fish_seen_subcommand_from install' -l no-systemd -d 'skip systemctl; print unit + manual steps'
 complete -c llmw-connect-mgr -n '__fish_seen_subcommand_from install upgrade config' -l verify-timeout -d 'seconds to wait for connected log'

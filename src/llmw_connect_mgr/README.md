@@ -31,6 +31,17 @@ llmw-connect-mgr config
 # 凭据管理(可单独重跑,改 token 免重装):
 #   Telegram bot token → ~/.cc-connect/env (0600, 原子写, 保留未知键)
 #   钉钉(可选 --dingtalk): client_id/client_secret → env 文件
+#   钉钉流式卡片(可选 --dingtalk-card-template <id>): card_template_id 写进
+#     config.toml 钉钉块(非密钥,不走 env);已有块→插入/更新该行(备份 .bak,
+#     同值幂等不改),新生成 config→直接带上;无钉钉块时打 warning 不写
+#     (先配 --dingtalk-id/--dingtalk-secret)。模板在开放平台「卡片平台」建
+#     AI 卡片(markdown 变量名默认 content),应用需开 Card.Instance.Write 权限
+#   钉钉权限提醒:检测到钉钉配置(env 凭据或 config 平台块)时,收尾打印平台侧
+#     前置清单——启用机器人 / 事件订阅选 Stream 模式 / (配了卡片时)开通
+#     Card.Instance.Write(附一键申请链接,含 client_id)。清单为 2026-09-07
+#     生产实证:基础 Stream 收发无需申请任何 API 权限(上游 docs 的 4 个
+#     qyapi_* 是旧 REST 体系,勿被误导);卡片权限缺失 = 403 + daemon 30 分钟
+#     内存降级,开通后必须 restart 才能恢复卡片
 #   config.toml 不存在 → 从模板生成(secrets 全走 ${ENV} 占位符,
 #     config.toml 零密钥);已存在且缺 dingtalk 块 → **自动插入**
 #     (锚定在 [[projects]] 内首个顶级 [表] 之前,原文件备份 .bak;
@@ -43,7 +54,8 @@ llmw-connect-mgr config
 # 漂移对齐:即使本次无变更,也会比对运行中 daemon 的环境(/proc/<pid>/
 #   environ)与 env 文件——手动编辑过 env(如换 token)后忘了重启,
 #   下次跑 config 自动发现并对齐(systemd 不热加载 EnvironmentFile)
-# 非交互: --telegram-token / --dingtalk-id / --dingtalk-secret / --yes
+# 非交互: --telegram-token / --dingtalk-id / --dingtalk-secret /
+#   --dingtalk-card-template / --yes
 #   (非交互且缺凭据 → 干净报错退出,不会卡在提示符;env 已有凭据则免传)
 # --telegram-allow-from: 生成 config 时的 allow_from;默认 "*" = 任何人都能
 #   驱动这台机的 opencode——多机分发强烈建议锁自己的 TG user id

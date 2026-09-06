@@ -113,6 +113,19 @@ class TestConfig:
         # dingtalk block must stay inside [[projects]] (before [log])
         assert text.index("[[projects.platforms]]") < text.index("dingtalk") < text.index("[log]")
 
+    def test_generate_with_dingtalk_card_template(self, isolate):
+        ops.generate_config(paths.config_file(), with_dingtalk=True,
+                            dingtalk_card_template="abc.schema")
+        text = paths.config_file().read_text(encoding="utf-8")
+        assert 'card_template_id = "abc.schema"' in text
+        # inside the options block, after client_secret
+        assert text.index("client_secret") < text.index("card_template_id") < \
+            text.index("reaction_emoji")
+
+    def test_generate_without_card_template_omits_line(self, isolate):
+        ops.generate_config(paths.config_file(), with_dingtalk=True)
+        assert "card_template_id" not in paths.config_file().read_text(encoding="utf-8")
+
 
 # ---- unit ------------------------------------------------------------------
 
@@ -173,7 +186,8 @@ class TestUnit:
         import argparse
         args = argparse.Namespace(
             cmd="install", telegram_token="t", telegram_allow_from=None,
-            dingtalk=False, dingtalk_id=None, dingtalk_secret=None, yes=True,
+            dingtalk=False, dingtalk_id=None, dingtalk_secret=None,
+            dingtalk_card_template=None, yes=True,
             no_systemd=False, verify_timeout=1)
         assert ops.do_install(runner, args) == 0
         assert runner.called("systemctl", "restart")
@@ -234,7 +248,8 @@ class TestLegacyMigration:
         import argparse
         args = argparse.Namespace(
             cmd="install", telegram_token="t", telegram_allow_from=None,
-            dingtalk=False, dingtalk_id=None, dingtalk_secret=None, yes=True,
+            dingtalk=False, dingtalk_id=None, dingtalk_secret=None,
+            dingtalk_card_template=None, yes=True,
             no_systemd=False, verify_timeout=1)
         assert ops.do_install(runner, args) == 0
         assert not legacy.exists()
@@ -277,8 +292,8 @@ class TestFlows:
         import argparse
         base = dict(
             telegram_token="123:ABC", telegram_allow_from=None, dingtalk=False,
-            dingtalk_id=None, dingtalk_secret=None, yes=True,
-            no_systemd=False, verify_timeout=1,
+            dingtalk_id=None, dingtalk_secret=None, dingtalk_card_template=None,
+            yes=True, no_systemd=False, verify_timeout=1,
         )
         base.update(kw)
         return argparse.Namespace(cmd="install", **base)
@@ -439,6 +454,157 @@ class TestConfigInsert:
         assert rc == 0
         assert "dingtalk" in paths.config_file().read_text(encoding="utf-8")
         assert "已插入" in capsys.readouterr().out
+
+
+class TestCardTemplate:
+    """--dingtalk-card-template: card_template_id lives in config.toml (not a
+    secret, unlike client_id/client_secret which stay env-bound)."""
+
+    def _existing_dingtalk_cfg(self):
+        cfg = paths.config_file()
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(
+            "[[projects]]\n"
+            "  [[projects.platforms]]\n"
+            "    type = \"dingtalk\"\n"
+            "\n"
+            "    [projects.platforms.options]\n"
+            "      client_id = \"x\"\n"
+            "      client_secret = \"y\"\n"
+            "[log]\n  level = \"info\"\n",
+            encoding="utf-8")
+        return cfg
+
+    def test_set_inserts_after_client_secret(self, isolate):
+        cfg = self._existing_dingtalk_cfg()
+        assert ops._set_dingtalk_card_template(cfg, "t.schema") is True
+        lines = cfg.read_text(encoding="utf-8").splitlines()
+        i_cs = next(i for i, l in enumerate(lines)
+                    if l.strip().startswith("client_secret"))
+        i_ct = next(i for i, l in enumerate(lines) if "card_template_id" in l)
+        assert i_ct == i_cs + 1
+        assert 'card_template_id = "t.schema"' in lines[i_ct]
+
+    def test_set_replaces_value_and_backs_up(self, isolate):
+        cfg = self._existing_dingtalk_cfg()
+        ops._set_dingtalk_card_template(cfg, "old.schema")
+        before = cfg.read_text(encoding="utf-8")
+        assert ops._set_dingtalk_card_template(cfg, "new.schema") is True
+        text = cfg.read_text(encoding="utf-8")
+        assert 'card_template_id = "new.schema"' in text
+        assert "old.schema" not in text
+        assert cfg.with_name(cfg.name + ".bak").read_text(encoding="utf-8") == before
+
+    def test_set_same_value_is_noop(self, isolate):
+        cfg = self._existing_dingtalk_cfg()
+        ops._set_dingtalk_card_template(cfg, "t.schema")
+        snapshot = cfg.read_text(encoding="utf-8")
+        assert ops._set_dingtalk_card_template(cfg, "t.schema") is False
+        assert cfg.read_text(encoding="utf-8") == snapshot
+
+    def test_set_without_dingtalk_block_returns_none(self, isolate):
+        cfg = paths.config_file()
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text("[[projects]]\n[[projects.platforms]]\ntype=\"telegram\"\n",
+                       encoding="utf-8")
+        assert ops._set_dingtalk_card_template(cfg, "t.schema") is None
+
+    def test_do_config_sets_card_template(self, isolate, capsys, monkeypatch):
+        monkeypatch.setattr("sys.stdin", open("/dev/null"))
+        paths.data_dir().mkdir(parents=True, exist_ok=True)
+        ops.write_env(paths.env_file(), {
+            "TELEGRAM_BOT_TOKEN": "t",
+            "DINGTALK_CLIENT_ID": "i", "DINGTALK_CLIENT_SECRET": "s"})
+        self._existing_dingtalk_cfg()
+        rc = ops.do_config(FakeRunner(), dingtalk_card_template="t.schema",
+                           yes=True, restart=False)
+        assert rc == 0
+        text = paths.config_file().read_text(encoding="utf-8")
+        assert 'card_template_id = "t.schema"' in text
+        assert "card_template_id 已写入" in capsys.readouterr().out
+
+    def test_do_config_same_card_template_no_rewrite(self, isolate, capsys, monkeypatch):
+        monkeypatch.setattr("sys.stdin", open("/dev/null"))
+        paths.data_dir().mkdir(parents=True, exist_ok=True)
+        ops.write_env(paths.env_file(), {
+            "TELEGRAM_BOT_TOKEN": "t",
+            "DINGTALK_CLIENT_ID": "i", "DINGTALK_CLIENT_SECRET": "s"})
+        self._existing_dingtalk_cfg()
+        ops._set_dingtalk_card_template(paths.config_file(), "t.schema")
+        rc = ops.do_config(FakeRunner(), dingtalk_card_template="t.schema",
+                           yes=True, restart=False)
+        assert rc == 0
+        assert "已是当前值" in capsys.readouterr().out
+
+    def test_do_config_card_template_without_block_warns(self, isolate, capsys, monkeypatch):
+        monkeypatch.setattr("sys.stdin", open("/dev/null"))
+        paths.data_dir().mkdir(parents=True, exist_ok=True)
+        ops.write_env(paths.env_file(), {"TELEGRAM_BOT_TOKEN": "t"})
+        cfg = paths.config_file()
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text('[[projects]]\n[[projects.platforms]]\ntype="telegram"\n[log]\n',
+                       encoding="utf-8")
+        rc = ops.do_config(FakeRunner(), dingtalk_card_template="t.schema",
+                           yes=True, restart=False)
+        assert rc == 0
+        assert "需要 dingtalk 平台块" in capsys.readouterr().out
+        assert "card_template_id" not in cfg.read_text(encoding="utf-8")
+
+
+class TestDingtalkPermissionHints:
+    def test_basic_hints_without_card(self):
+        hints = ops.dingtalk_permission_hints("dingxxx", card_configured=False)
+        assert any("启用机器人" in h for h in hints)
+        assert any("Stream 模式" in h for h in hints)
+        assert not any("Card.Instance.Write" in h for h in hints)
+
+    def test_card_hint_with_client_id_link(self):
+        hints = ops.dingtalk_permission_hints("dingxxx", card_configured=True)
+        card = [h for h in hints if "Card.Instance.Write" in h]
+        assert len(card) == 1
+        assert "appscope/apply?content=dingxxx%23Card.Instance.Write" in card[0]
+        assert "restart" in card[0]  # the 30-min degrade trap needs a restart
+
+    def test_card_hint_without_client_id_has_no_link(self):
+        hints = ops.dingtalk_permission_hints(None, card_configured=True)
+        assert any("Card.Instance.Write" in h for h in hints)
+        assert not any("appscope/apply" in h for h in hints)
+
+    def test_do_config_prints_hints_when_dingtalk_configured(self, isolate, capsys, monkeypatch):
+        monkeypatch.setattr("sys.stdin", open("/dev/null"))
+        paths.data_dir().mkdir(parents=True, exist_ok=True)
+        ops.write_env(paths.env_file(), {
+            "TELEGRAM_BOT_TOKEN": "t",
+            "DINGTALK_CLIENT_ID": "dingzzz", "DINGTALK_CLIENT_SECRET": "s"})
+        cfg = paths.config_file()
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(
+            '[[projects]]\n[[projects.platforms]]\ntype="dingtalk"\n'
+            '  [projects.platforms.options]\n'
+            '    client_id = "${DINGTALK_CLIENT_ID}"\n'
+            '    client_secret = "${DINGTALK_CLIENT_SECRET}"\n'
+            '    card_template_id = "t.schema"\n[log]\n',
+            encoding="utf-8")
+        rc = ops.do_config(FakeRunner(), yes=True, restart=False)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "启用机器人" in out
+        assert "Card.Instance.Write" in out
+        assert "content=dingzzz%23Card.Instance.Write" in out
+
+    def test_do_config_no_hints_without_dingtalk(self, isolate, capsys, monkeypatch):
+        monkeypatch.setattr("sys.stdin", open("/dev/null"))
+        paths.data_dir().mkdir(parents=True, exist_ok=True)
+        ops.write_env(paths.env_file(), {"TELEGRAM_BOT_TOKEN": "t"})
+        paths.config_file().parent.mkdir(parents=True, exist_ok=True)
+        paths.config_file().write_text(
+            '[[projects]]\n[[projects.platforms]]\ntype="telegram"\n[log]\n',
+            encoding="utf-8")
+        rc = ops.do_config(FakeRunner(), yes=True, restart=False)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "启用机器人" not in out
+        assert "Card.Instance.Write" not in out
 
 
 class TestConsistency:
@@ -786,6 +952,7 @@ class TestCli:
             ["install", "--no-systemd", "--telegram-token", "t"],
             ["config", "--telegram-token", "t"],
             ["config", "--dingtalk", "--dingtalk-id", "i", "--dingtalk-secret", "s"],
+            ["config", "--dingtalk-card-template", "x.schema"],
             ["upgrade"],
             ["uninstall"],
             ["uninstall", "--remove-npm", "--purge"],

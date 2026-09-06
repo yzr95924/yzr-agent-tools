@@ -45,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="configure DingTalk credentials as well")
         p.add_argument("--dingtalk-id", default=None, help="DingTalk client_id (AppKey)")
         p.add_argument("--dingtalk-secret", default=None, help="DingTalk client_secret (AppSecret)")
+        p.add_argument("--dingtalk-card-template", default=None, metavar="ID",
+                       help="DingTalk streaming AI-card template_id "
+                            "(card_template_id in config.toml — not a secret; "
+                            "needs the dingtalk platform configured)")
         if with_yes:
             p.add_argument("--yes", "-y", action="store_true",
                            help="non-interactive: take defaults, never prompt")
@@ -93,6 +97,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             dingtalk=args.dingtalk,
             dingtalk_id=args.dingtalk_id,
             dingtalk_secret=args.dingtalk_secret,
+            dingtalk_card_template=args.dingtalk_card_template,
             yes=args.yes,
             allow_from=args.telegram_allow_from,
             restart=not args.no_restart,

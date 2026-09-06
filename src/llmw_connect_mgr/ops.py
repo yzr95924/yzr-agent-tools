@@ -15,17 +15,28 @@ from llmw_connect_mgr.runner import Runner
 
 CONNECTED_MARKERS = ("telegram: connected", "dingtalk: stream connected")
 
-DINGTALK_BLOCK = """\
-  [[projects.platforms]]
-    type = "dingtalk"
 
-    [projects.platforms.options]
-      client_id = "${DINGTALK_CLIENT_ID}"
-      client_secret = "${DINGTALK_CLIENT_SECRET}"
-      # reaction_emoji = "🤔Thinking"
-      # done_emoji = "none"
+def _dingtalk_block(card_template: Optional[str] = None) -> str:
+    """The [[projects.platforms]] dingtalk block. card_template adds the
+    streaming AI-card line — card_template_id is NOT a secret, it lives in
+    config.toml (unlike client_id/client_secret which stay env-bound)."""
+    card_line = ('      card_template_id = "{0}"\n'.format(card_template)
+                 if card_template else "")
+    return (
+        "  [[projects.platforms]]\n"
+        "    type = \"dingtalk\"\n"
+        "\n"
+        "    [projects.platforms.options]\n"
+        "      client_id = \"${DINGTALK_CLIENT_ID}\"\n"
+        "      client_secret = \"${DINGTALK_CLIENT_SECRET}\"\n"
+        + card_line +
+        "      # reaction_emoji = \"🤔Thinking\"\n"
+        "      # done_emoji = \"none\"\n"
+        "\n"
+    )
 
-"""
+
+DINGTALK_BLOCK = _dingtalk_block()
 
 
 def _atomic_write(path, content: str, mode: Optional[int] = None) -> None:
@@ -210,14 +221,18 @@ def _can_prompt() -> bool:
     return sys.stdin.isatty()
 
 
-def render_config(with_dingtalk: bool, allow_from: str = "*") -> str:
+def render_config(with_dingtalk: bool, allow_from: str = "*",
+                  dingtalk_card_template: Optional[str] = None) -> str:
     body = paths.template("config.toml.tmpl").read_text(encoding="utf-8")
-    body = body.replace("{DINGTALK_BLOCK}", DINGTALK_BLOCK if with_dingtalk else "")
+    block = _dingtalk_block(dingtalk_card_template) if with_dingtalk else ""
+    body = body.replace("{DINGTALK_BLOCK}", block)
     return body.replace('allow_from = "*"', 'allow_from = "{0}"'.format(allow_from))
 
 
-def generate_config(path, with_dingtalk: bool, allow_from: str = "*") -> None:
-    _atomic_write(path, render_config(with_dingtalk, allow_from))
+def generate_config(path, with_dingtalk: bool, allow_from: str = "*",
+                    dingtalk_card_template: Optional[str] = None) -> None:
+    _atomic_write(path, render_config(with_dingtalk, allow_from,
+                                      dingtalk_card_template))
 
 
 def _insert_platform_block(cfg_path, block: str) -> bool:
@@ -244,6 +259,76 @@ def _insert_platform_block(cfg_path, block: str) -> bool:
     _atomic_write(cfg_path, "".join(lines[:insert_at] + block.splitlines(keepends=True)
                                     + lines[insert_at:]))
     return True
+
+
+def _set_dingtalk_card_template(cfg_path, template_id: str) -> Optional[bool]:
+    """Set/replace card_template_id inside the dingtalk platform options of
+    an existing config.toml (the streaming AI-card template — 2026-09-07).
+    Returns True when rewritten (.bak backup kept first), False when the
+    value is already current (no write, no backup churn), None when no
+    dingtalk platform block exists (caller warns)."""
+    lines = cfg_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    dt = next((i for i, l in enumerate(lines)
+               if l.strip() == 'type = "dingtalk"'), None)
+    if dt is None:
+        return None
+    opts = next((i for i in range(dt + 1, len(lines))
+                 if lines[i].strip() == "[projects.platforms.options]"), None)
+    if opts is None:
+        return None
+    end = next((i for i in range(opts + 1, len(lines))
+                if lines[i].lstrip().startswith("[")), len(lines))
+    target = 'card_template_id = "{0}"'.format(template_id)
+    for i in range(opts + 1, end):
+        s = lines[i].strip()
+        if s.startswith("card_template_id") and "=" in s:
+            if s == target:
+                return False
+            cfg_path.with_name(cfg_path.name + ".bak").write_text(
+                "".join(lines), encoding="utf-8")
+            lines[i] = "      {0}\n".format(target)
+            _atomic_write(cfg_path, "".join(lines))
+            return True
+    # Absent: insert after the client_secret line (or the options header).
+    anchor = next((i for i in range(opts + 1, end)
+                   if lines[i].strip().startswith("client_secret")), opts)
+    cfg_path.with_name(cfg_path.name + ".bak").write_text(
+        "".join(lines), encoding="utf-8")
+    lines.insert(anchor + 1, "      {0}\n".format(target))
+    _atomic_write(cfg_path, "".join(lines))
+    return True
+
+
+def dingtalk_permission_hints(client_id: Optional[str],
+                              card_configured: bool) -> List[str]:
+    """Platform-side prerequisites the mgr cannot do for the user.
+
+    Evidence-based list (2026-09-07, verified on a live personal app):
+    - basic Stream-mode robot messaging needs NO explicit API-scope
+      application — create app, enable the robot, pick Stream in event
+      subscription, done. (Upstream docs/dingtalk.md still lists four
+      legacy qyapi_* scopes; those belong to the old REST workflow and
+      were NOT needed in production.)
+    - the streaming AI card (card_template_id) DOES 403 without
+      Card.Instance.Write — the only scope the platform demanded, and a
+      miss triggers the daemon's in-memory 30-minute card degrade, so a
+      restart is required after granting it.
+    """
+    hints = [
+        "钉钉平台侧前置（open-dev.dingtalk.com → 你的应用，mgr 无法代做）：",
+        "  1. 应用与机器人 → 机器人配置：启用机器人（Stream 收发基础，"
+        "无需申请 API 权限）",
+        "  2. 事件与回调 → 事件订阅：接收方式选「Stream 模式」",
+    ]
+    if card_configured:
+        link = ""
+        if client_id:
+            link = "，一键申请: https://open-dev.dingtalk.com/appscope/apply?content={0}%23Card.Instance.Write".format(client_id)
+        hints.append(
+            "  3. 权限管理 → 开通 Card.Instance.Write（卡片实例创建/投放——"
+            "流式 AI 卡片必需；缺失会 403 并触发 daemon 30 分钟卡片降级，"
+            "开通后需 systemctl restart llmw-connect 清降级态{0}）".format(link))
+    return hints
 
 
 def _consistency_warnings(env_path, cfg_path) -> List[str]:
@@ -301,6 +386,7 @@ def do_config(
     dingtalk: bool = False,
     dingtalk_id: Optional[str] = None,
     dingtalk_secret: Optional[str] = None,
+    dingtalk_card_template: Optional[str] = None,
     yes: bool = False,
     allow_from: Optional[str] = None,
     restart: bool = True,
@@ -393,6 +479,17 @@ def do_config(
                     print("config: 未找到 [[projects]] 表，无法自动插入 — 手动粘贴以下块"
                           "到 [[projects]] 内（任何顶级 [表] 之前）：\n")
                     print(DINGTALK_BLOCK.rstrip("\n"))
+        if dingtalk_card_template:
+            if "dingtalk" in cfg_path.read_text(encoding="utf-8"):
+                r = _set_dingtalk_card_template(cfg_path, dingtalk_card_template)
+                if r:  # True = rewritten
+                    mutated = True
+                    print("config: card_template_id 已写入 {0}（原文件备份为 .bak）".format(cfg_path))
+                elif r is False:
+                    print("config: card_template_id 已是当前值（无需改动）")
+            else:
+                print("warning: card_template_id 需要 dingtalk 平台块 — 先用 "
+                      "--dingtalk-id/--dingtalk-secret 配置钉钉凭据再加卡片模板")
     else:
         effective_allow = allow_from or "*"
         if interactive:
@@ -410,14 +507,30 @@ def do_config(
             if ans.strip().lower() == "n":
                 print("skipped config generation")
                 return 0
+        if dingtalk_card_template and not want_dingtalk:
+            print("warning: card_template_id 需要 dingtalk 平台块 — 加 "
+                  "--dingtalk-id/--dingtalk-secret（或 --dingtalk）再生成")
         generate_config(cfg_path, with_dingtalk=want_dingtalk,
-                        allow_from=effective_allow)
+                        allow_from=effective_allow,
+                        dingtalk_card_template=(
+                            dingtalk_card_template if want_dingtalk else None))
         mutated = True
         print("config: generated {0} (secrets stay in env file)".format(cfg_path))
 
     # Half-configured state check (credentials vs platform blocks).
     for w in _consistency_warnings(env_path, cfg_path):
         print("warning: {0}".format(w))
+
+    # Platform-side prerequisites the tool cannot apply on the user's
+    # behalf (robot enablement, Stream subscription, card API scope).
+    _have = read_env(env_path)
+    _cfg_text = (cfg_path.read_text(encoding="utf-8")
+                 if cfg_path.exists() else "")
+    if "DINGTALK_CLIENT_ID" in _have or "dingtalk" in _cfg_text:
+        for h in dingtalk_permission_hints(
+                _have.get("DINGTALK_CLIENT_ID"),
+                card_configured=("card_template_id" in _cfg_text)):
+            print(h)
 
     # Drift check: the env file changed outside the tool (manual edit) while
     # the daemon kept the old values — restart to converge even when this
@@ -563,6 +676,7 @@ def do_install(runner: Runner, args) -> int:
                    dingtalk=args.dingtalk,
                    dingtalk_id=args.dingtalk_id,
                    dingtalk_secret=args.dingtalk_secret,
+                   dingtalk_card_template=args.dingtalk_card_template,
                    yes=args.yes,
                    allow_from=args.telegram_allow_from,
                    restart=False)

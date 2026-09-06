@@ -12,7 +12,7 @@ _llmw_connect_mgr() {
     cmd="${COMP_WORDS[1]:-}"
 
     local commands="install config upgrade uninstall"
-    local common="--telegram-token --telegram-allow-from --dingtalk --dingtalk-id --dingtalk-secret --yes -y"
+    local common="--telegram-token --telegram-allow-from --dingtalk --dingtalk-id --dingtalk-secret --dingtalk-card-template --yes -y"
     local flags_for=""
     case "$cmd" in
         install) flags_for="$common --no-systemd --verify-timeout" ;;
