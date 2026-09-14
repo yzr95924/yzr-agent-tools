@@ -47,14 +47,12 @@ jobs:
           bash scripts/mcp-plugin-mgr.sh install
       - name: Run tests (debug output as annotations)
         run: |
-          python3 -m pytest -x -q > /tmp/pytest.out 2>&1; rc=$?
-          python3 - <<'PYEOF'
-          import re
-          out = open('/tmp/pytest.out').read()
-          m = re.search(r'=+ FAILURES =+(.*?)(=+ short test summary|=+ [0-9]+ failed)', out, re.S)
-          block = (m.group(1) if m else out)[-1500:]
-          envline = 'env follows\n'
-          print('::error title=pytest-failure::' + envline.replace('\n', '%0A'))
-          print('::error title=pytest-failure-block::' + block.replace('\n', '%0A').replace('\r', ''))
-          PYEOF
+          rc=0
+          python3 -m pytest -x -q > /tmp/pytest.out 2>&1 || rc=$?
+          {
+            echo "TERM=$TERM SHELL=$SHELL"
+            zsh --version
+            tail -c 1200 /tmp/pytest.out
+          } > /tmp/dbg.out
+          python3 -c "print('::error title=pytest-failure-block::' + open('/tmp/dbg.out').read().replace(chr(13),'').replace(chr(10),'%0A'))"
           exit $rc
