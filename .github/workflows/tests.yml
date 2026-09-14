@@ -45,18 +45,16 @@ jobs:
         run: |
           bash scripts/model-switch.sh install
           bash scripts/mcp-plugin-mgr.sh install
-      - name: Run tests (debug output to summary)
+      - name: Run tests (debug output as annotations)
         run: |
-          {
-            echo '## env'
-            echo '```'
-            echo "TERM=$TERM SHELL=$SHELL"
-            zsh --version
-            echo '```'
-            echo '## pytest tail'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
           python3 -m pytest -x -q > /tmp/pytest.out 2>&1; rc=$?
-          tail -120 /tmp/pytest.out >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY" || true
+          python3 - <<'PYEOF'
+          import re
+          out = open('/tmp/pytest.out').read()
+          m = re.search(r'=+ FAILURES =+(.*?)(=+ short test summary|=+ [0-9]+ failed)', out, re.S)
+          block = (m.group(1) if m else out)[-1500:]
+          envline = 'env follows\n'
+          print('::error title=pytest-failure::' + envline.replace('\n', '%0A'))
+          print('::error title=pytest-failure-block::' + block.replace('\n', '%0A').replace('\r', ''))
+          PYEOF
           exit $rc
