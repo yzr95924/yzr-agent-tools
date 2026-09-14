@@ -33,6 +33,16 @@ tmpdir=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
 mkdir -p "$tmpdir/zdot"
+# Guard against GLOBAL interactive config running an unattended-hostile
+# compinit: Ubuntu's /etc/zsh/zshrc runs a BARE `compinit` whose compaudit
+# prompts "[y/n]" on insecure fpath dirs (e.g. GitHub runners ship
+# group-writable /usr/local/share/zsh/site-functions). Under this harness's
+# pty nobody answers the prompt, the child blocks before our .zshrc ever
+# loads, and the driver wedges in a SIGTERM-immune zpty read. Ubuntu's
+# documented escape hatch is skip_global_compinit=1 in $ZDOTDIR/.zshenv; we
+# additionally drop all global rc files for a fully deterministic child.
+print -r -- 'skip_global_compinit=1' > "$tmpdir/zdot/.zshenv"
+print -r -- 'unsetopt globalrcs' >> "$tmpdir/zdot/.zshenv"
 cat > "$tmpdir/zdot/.zshrc" <<'RC'
 PROMPT=''
 RPROMPT=''
