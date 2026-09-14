@@ -132,7 +132,7 @@ local data="" chunk tries=0
 while :; do
   zpty -r zcap chunk 2>/dev/null && data+=$chunk
   sleep 0.01
-  (( ++tries > 600 )) && { print -u2 "timeout waiting for shell startup"; exit 1; }
+  (( ++tries > 600 )) && { print -u2 "timeout waiting for shell startup; saw: ${(q)data}"; exit 1; }
   [[ $data == *__READY__* ]] && break
 done
 
@@ -143,7 +143,22 @@ tries=0
 while :; do
   zpty -r zcap chunk 2>/dev/null && data+=$chunk
   sleep 0.01
-  (( ++tries > 600 )) && { print -u2 "timeout waiting for completion output"; exit 1; }
+  (( ++tries > 600 )) && {
+    # Diagnostics: figure out whether the child is alive and where it is.
+    # - ZLE disabled (e.g. TERM=dumb) swallows the TAB silently.
+    # - a hung completion function also produces silence.
+    print -u2 "timeout waiting for completion output; partial: ${(q)data}"
+    zpty -w -n zcap $'\n'"print -r -- CHILD_ALIVE TERM=$TERM"\$'\n'
+    local probe="" ptries=0
+    while :; do
+      zpty -r zcap chunk 2>/dev/null && probe+=$chunk
+      sleep 0.01
+      (( ++ptries > 200 )) && break
+      [[ $probe == *CHILD_ALIVE* ]] && break
+    done
+    print -u2 "probe: ${(q)probe}"
+    exit 1
+  }
   [[ $data == *__ZCAP_END__* ]] && break
 done
 

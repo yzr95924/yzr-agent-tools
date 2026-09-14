@@ -136,8 +136,19 @@ def zsh_complete(env, line, cwd=None):
             ["zsh", "-f", str(ZSH_CAPTURE), str(COMPLETIONS), line],
             env=env, cwd=cwd, capture_output=True, text=True, timeout=90,
         )
-    except subprocess.TimeoutExpired:
-        pytest.fail("zsh completion harness timed out on: {!r}".format(line))
+    except subprocess.TimeoutExpired as e:
+        partial_out = (e.stdout or b"")
+        partial_err = (e.stderr or b"")
+        if isinstance(partial_out, bytes):
+            partial_out = partial_out.decode("utf-8", "replace")
+        if isinstance(partial_err, bytes):
+            partial_err = partial_err.decode("utf-8", "replace")
+        pytest.fail(
+            "zsh completion harness timed out on: {!r}\n"
+            "harness stderr: {}\nharness stdout: {}".format(
+                line, partial_err[-2000:], partial_out[-2000:],
+            )
+        )
     assert r.returncode == 0, "zsh completion failed: {}{}".format(
         r.stderr, "(stdout: {!r})".format(r.stdout) if r.stdout else "",
     )
