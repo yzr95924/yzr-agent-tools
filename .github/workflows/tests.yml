@@ -48,11 +48,22 @@ jobs:
       - name: Run tests (debug output as annotations)
         run: |
           rc=0
+          {
+            echo "== probe =="
+            echo "command -v zsh: $(command -v zsh)"
+            echo "zpty load: $(zsh -f -c 'zmodload zsh/zpty && echo zpty-ok' 2>&1)"
+            echo "interactive rc: $(timeout 10 env ZDOTDIR=$PWD/empty-zdot zsh -i -c 'print child-ok' 2>&1; echo rc=$?)"
+            hout=$(timeout 30 zsh -f tests/zsh_capture.zsh "$PWD/completions" "model-switch " 2>&1); hrc=$?
+            echo "direct harness rc=$hrc"
+            echo "direct harness out (first 400c): ${hout:0:400}"
+          } > /tmp/probe.out 2>&1 || true
+          mkdir -p empty-zdot || true
           python3 -m pytest -x -q > /tmp/pytest.out 2>&1 || rc=$?
           {
             echo "TERM=$TERM SHELL=$SHELL"
             zsh --version
-            tail -c 1200 /tmp/pytest.out
-          } > /tmp/dbg.out
-          python3 -c "print('::error title=pytest-failure-block::' + open('/tmp/dbg.out').read().replace(chr(13),'').replace(chr(10),'%0A'))"
+            cat /tmp/probe.out
+            tail -c 800 /tmp/pytest.out
+          } > /tmp/dbg.out || true
+          python3 -c "print('::error title=pytest-failure-block::' + open('/tmp/dbg.out').read().replace(chr(13),'').replace(chr(10),'%0A'))" || true
           exit $rc
