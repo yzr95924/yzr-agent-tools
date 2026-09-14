@@ -45,7 +45,7 @@
 ## 常用命令
 
 ```bash
-# 安装 — 每工具一个自包含脚本:写 wrapper + 装补全 + 加 PATH 块。无 venv,无 pip。
+# 安装 — 每工具一个自包含脚本:写 wrapper + 装补全(bash/zsh/fish) + 加 PATH 块。无 venv,无 pip。
 bash scripts/model-switch.sh install
 bash scripts/mcp-plugin-mgr.sh install
 bash scripts/llmw-connect-mgr.sh install

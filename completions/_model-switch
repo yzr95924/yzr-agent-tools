@@ -1,0 +1,101 @@
+#compdef model-switch
+# zsh completion for model-switch(1)
+#
+# Dynamic candidates (model names, driver names) come from the hidden
+# `model-switch _complete <what>` plumbing command, so completion always
+# reflects the real models.toml / driver registry.
+#
+# scripts/model-switch.sh install symlinks this file into ~/.zfunc/ (added to
+# fpath by the ~/.zshrc marker block). Structure: top-level command, then for
+# `model` a second-level action, then per-action flags/positionals — each
+# level uses `_arguments -C '->state'` so words/CURRENT are re-based per
+# level (words[1] = the word just consumed by the previous level).
+
+local curcontext="$curcontext" state line context
+typeset -A opt_args
+
+local -a commands actions
+commands=(
+  'init:Initialize the config directory'
+  'model:Manage model definitions'
+  'status:Show current state + effective agent config'
+)
+actions=(
+  'add:Add a new model definition'
+  'list:List all configured models'
+  'show:Show details of one model'
+  'remove:Remove a model definition'
+  'use:Activate a model'
+  'import:Import models from a TOML file'
+)
+
+local -a _ms_models _ms_drivers
+_ms_models=(${(f)"$(model-switch _complete models 2>/dev/null)"})
+_ms_drivers=(${(f)"$(model-switch _complete drivers 2>/dev/null)"})
+
+_arguments -C \
+  '1:command:->command' \
+  '*::arg:->args'
+
+case $state in
+  command)
+    _describe -t commands 'model-switch command' commands
+    ;;
+  args)
+    case $words[1] in
+      init)
+        _message 'no more arguments'
+        ;;
+      status)
+        _arguments \
+          '--driver[Target agent driver]:driver:($_ms_drivers)' \
+          '--all-drivers[Apply to every registered driver]' \
+          '(-h --help)'{-h,--help}'[Show help]'
+        ;;
+      model)
+        _arguments -C \
+          '1:action:->action' \
+          '*::arg:->model-args'
+        case $state in
+          action)
+            _describe -t actions 'model action' actions
+            ;;
+          model-args)
+            case $words[1] in
+              add)
+                _arguments \
+                  '--base-url[Upstream API base URL]:url:_message -r "url"' \
+                  '--api-key[API key (stored plaintext in models.toml)]:key:_message -r "key"' \
+                  '--model-name[Upstream model identifier]:name:_message -r "name"' \
+                  '--description[Free-text description]:desc:_message -r "description"' \
+                  '--context-window[Max input tokens]:tokens:_message -r "tokens"' \
+                  '(-h --help)'{-h,--help}'[Show help]'
+                ;;
+              list)
+                _arguments '(-h --help)'{-h,--help}'[Show help]'
+                ;;
+              show|remove)
+                _arguments \
+                  '(-h --help)'{-h,--help}'[Show help]' \
+                  ':model:($_ms_models)'
+                ;;
+              use)
+                _arguments \
+                  '--driver[Target agent driver]:driver:($_ms_drivers)' \
+                  '--all-drivers[Apply to every registered driver]' \
+                  '(-h --help)'{-h,--help}'[Show help]' \
+                  ':model:($_ms_models)'
+                ;;
+              import)
+                _arguments \
+                  '--merge[Merge into existing models.toml]' \
+                  '(-h --help)'{-h,--help}'[Show help]' \
+                  '*:TOML file:_files -g "*.toml"'
+                ;;
+            esac
+            ;;
+        esac
+        ;;
+    esac
+    ;;
+esac

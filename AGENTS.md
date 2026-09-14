@@ -48,7 +48,10 @@
 ```bash
 # 安装 — 每工具一个自包含脚本（wrapper + 补全 + PATH 块），不创建 venv，不调用 pip。
 # 需要 Python 3.7+；Python < 3.11 时请自备 tomli（pip install --user 'tomli>=1.1'）。
-# bash/fish 补全：symlink 到 XDG 补全目录 + ~/.bashrc marker block 内 source 行。
+# bash/zsh/fish 补全：bash 软链到补全目录（macOS+Homebrew 时为 brew prefix 下的
+# bash-completion 目录,否则 XDG）+ ~/.bashrc marker block 内 source 行;zsh 软链到
+# ~/.zfunc/_<tool> + ~/.zshrc marker 块内 fpath 行 + compinit（重跑 compinit 是有意的:
+# oh-my-zsh 等框架的 compinit 在我们 fpath 行之前跑过）;fish 软链到 ~/.config/fish/completions/。
 bash scripts/model-switch.sh install        # mcp-plugin-mgr 同理：scripts/mcp-plugin-mgr.sh install
 # 卸载（删 wrapper + 剥该工具的 PATH marker + 删补全 symlink；不动 ~/.config/<tool>/ 下的数据）
 bash scripts/model-switch.sh uninstall

@@ -1,0 +1,65 @@
+#compdef llmw-connect-mgr
+# zsh completion for llmw-connect-mgr(1)
+#
+# Static command surface: install / config / upgrade / uninstall plus their
+# flags. scripts/llmw-connect-mgr.sh install symlinks this file into ~/.zfunc/
+# (added to fpath by the ~/.zshrc marker block).
+
+local curcontext="$curcontext" state line context
+typeset -A opt_args
+
+local -a commands
+commands=(
+  'install:First-time install: binary + credentials + systemd'
+  'config:Manage credentials (env) + generate config.toml if absent'
+  'upgrade:npm install @latest + systemctl restart + verify'
+  'uninstall:Stop + remove unit; data kept unless --purge'
+)
+
+local common
+common=(
+  '--telegram-token[Telegram bot token (omit to prompt)]'
+  '--telegram-allow-from[telegram allow_from when generating config.toml (default * = anyone)]'
+  '--dingtalk[Configure DingTalk credentials as well]'
+  '--dingtalk-id[DingTalk client_id (AppKey)]'
+  '--dingtalk-secret[DingTalk client_secret (AppSecret)]'
+  '--dingtalk-card-template[DingTalk streaming AI-card template_id (not a secret)]'
+  '(-y --yes)'{-y,--yes}'[non-interactive]'
+)
+
+_arguments -C \
+  '1:command:->command' \
+  '*::arg:->args'
+
+case $state in
+  command)
+    _describe -t commands 'llmw-connect-mgr command' commands
+    ;;
+  args)
+    case $words[1] in
+      install)
+        _arguments $common \
+          '--no-systemd[Skip systemctl; print unit + manual steps]' \
+          '--verify-timeout[Seconds to wait for connected log]:seconds:_message -r "seconds"' \
+          '(-h --help)'{-h,--help}'[Show help]'
+        ;;
+      config)
+        _arguments $common \
+          '--no-restart[Do not restart daemon after changes]' \
+          '--verify-timeout[Seconds to wait for connected log]:seconds:_message -r "seconds"' \
+          '(-h --help)'{-h,--help}'[Show help]'
+        ;;
+      upgrade)
+        _arguments \
+          '--verify-timeout[Seconds to wait for connected log]:seconds:_message -r "seconds"' \
+          '(-h --help)'{-h,--help}'[Show help]'
+        ;;
+      uninstall)
+        _arguments \
+          '--remove-npm[Also npm uninstall -g]' \
+          '--purge[Delete ~/.cc-connect (irreversible)]' \
+          '(-h --help)'{-h,--help}'[Show help]'
+        ;;
+    esac
+    ;;
+esac

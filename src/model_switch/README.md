@@ -36,18 +36,21 @@ PATH 块。不创建虚拟环境,不调 `pip install`。
 如果在 Python < 3.11 上缺 `tomli`,第一次跑 `model-switch` 会在 `import tomli` 处
 抛 `ImportError`——装上再重试。
 
-### Shell 补全(bash + fish)
+### Shell 补全(bash + zsh + fish)
 
 `model-switch.sh install` 还会装好 tab 补全:
 
-- **bash** — 软链到 `~/.local/share/bash-completion/completions/`,**并且** 在 `~/.bashrc`
+- **bash** — 软链到 `~/.local/share/bash-completion/completions/`(macOS + Homebrew
+  时为 brew prefix 下的 bash-completion 目录),**并且** 在 `~/.bashrc`
   的 PATH 块里 source 一份,所以即使没装 bash-completion 包也能用。
+- **zsh** — 软链到 `~/.zfunc/_model-switch`,`~/.zshrc` 的 PATH 块里把 `~/.zfunc`
+  加进 `fpath` 并跑 `compinit`(macOS 默认 shell 即 zsh,开箱即用)。
 - **fish** — 软链到 `~/.config/fish/completions/`(自动加载)。
 
 补全覆盖子命令、flag、`--driver` 取值,以及 `model use/show/remove` 的模型名。
 动态候选项直接由 CLI 自身产出(隐藏的 `model-switch _complete models|drivers` 管道
 命令),所以始终和你 `models.toml` 里的内容一致。`model-switch.sh uninstall` 会清理这些软链和
-source 行。脚本本体在 `completions/`,想自己接也可以。
+rc 块。脚本本体在 `completions/`,想自己接也可以。
 
 ## 快速上手
 

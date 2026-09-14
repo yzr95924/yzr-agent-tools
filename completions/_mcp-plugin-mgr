@@ -1,0 +1,90 @@
+#compdef mcp-plugin-mgr
+# zsh completion for mcp-plugin-mgr(1)
+#
+# Dynamic candidates (server / driver / preset names) come from the hidden
+# `mcp-plugin-mgr _complete <what>` plumbing command, so completion always
+# reflects the real servers.toml / driver registry / built-in presets.
+#
+# scripts/mcp-plugin-mgr.sh install symlinks this file into ~/.zfunc/ (added
+# to fpath by the ~/.zshrc marker block). Structure: top-level command, then
+# per-command flags/positionals — `_arguments -C '->state'` re-bases
+# words/CURRENT per level (words[1] = the command word).
+
+local curcontext="$curcontext" state line context
+typeset -A opt_args
+
+local -a commands
+commands=(
+  'init:Initialize the config directory'
+  'add:Add an MCP server'
+  'list:List servers (with per-agent presence)'
+  'remove:Remove a server'
+  'presets:List built-in presets'
+  'status:Show config paths and counts'
+  'test:Test whether an MCP server responds (connectivity diagnosis)'
+)
+
+local -a _mpm_servers _mpm_drivers _mpm_presets
+_mpm_servers=(${(f)"$(mcp-plugin-mgr _complete servers 2>/dev/null)"})
+_mpm_drivers=(${(f)"$(mcp-plugin-mgr _complete drivers 2>/dev/null)"})
+_mpm_presets=(${(f)"$(mcp-plugin-mgr _complete presets 2>/dev/null)"})
+
+local -a _mpm_names
+_mpm_names=($_mpm_presets $_mpm_servers)
+
+_arguments -C \
+  '1:command:->command' \
+  '*::arg:->args'
+
+case $state in
+  command)
+    _describe -t commands 'mcp-plugin-mgr command' commands
+    ;;
+  args)
+    case $words[1] in
+      init|list|presets)
+        _arguments '(-h --help)'{-h,--help}'[Show help]'
+        ;;
+      status)
+        _arguments \
+          '--driver[Target a single agent driver]:driver:($_mpm_drivers)' \
+          '--all-drivers[Apply to every registered driver]' \
+          '(-h --help)'{-h,--help}'[Show help]'
+        ;;
+      add)
+        _arguments \
+          '--url[HTTP server URL]:url:_message -r "url"' \
+          '--token[Bearer token fed into the preset auth header]:token:_message -r "token"' \
+          '--header[Extra header KEY=VALUE (repeatable)]:header:_message -r "KEY=VALUE"' \
+          '--stdio[Declare stdio transport]' \
+          '--command[stdio: full command line (shlex-split)]:command:_message -r "command line"' \
+          '--env[stdio: env KEY=VALUE (repeatable)]:env:_message -r "KEY=VALUE"' \
+          '--description[Free-text description]:desc:_message -r "description"' \
+          '--driver[Target a single agent driver]:driver:($_mpm_drivers)' \
+          '--all-drivers[Apply to every registered driver]' \
+          '--no-apply[Register only; do not write agent configs]' \
+          '--auto-allow[Also pre-approve the server'"'"'s tools in Claude Code permissions.allow]' \
+          '--force[Overwrite if the name already exists]' \
+          '(-h --help)'{-h,--help}'[Show help]' \
+          ':name:($_mpm_names)'
+        ;;
+      remove)
+        _arguments \
+          '--driver[Target a single agent driver]:driver:($_mpm_drivers)' \
+          '--all-drivers[Apply to every registered driver]' \
+          '--auto-allow[Also remove the server'"'"'s pre-approved tools from permissions.allow]' \
+          '(-h --help)'{-h,--help}'[Show help]' \
+          ':name:($_mpm_servers)'
+        ;;
+      test)
+        _arguments \
+          '--url[Ad-hoc: test this HTTP URL instead of a registered server]:url:_message -r "url"' \
+          '--token[Ad-hoc http: bearer token]:token:_message -r "token"' \
+          '--header[Ad-hoc http: extra header (repeatable)]:header:_message -r "KEY=VALUE"' \
+          '--timeout[Per-request timeout seconds (default 10)]:seconds:_message -r "seconds"' \
+          '(-h --help)'{-h,--help}'[Show help]' \
+          ':name:($_mpm_servers)'
+        ;;
+    esac
+    ;;
+esac

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Manage mcp-plugin-mgr: install | uninstall
 #
-# Self-contained: writes the bin/mcp-plugin-mgr wrapper, links bash/fish
+# Self-contained: writes the bin/mcp-plugin-mgr wrapper, links bash/zsh/fish
 # completions, and manages a per-tool PATH block in your shell rc. One script
 # per tool — there is no shared helper to (mis)invoke directly.
 #
@@ -14,7 +14,27 @@ TOOL="mcp-plugin-mgr"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$PROJECT_ROOT/bin"
 COMPLETION_SRC_DIR="$PROJECT_ROOT/completions"
-BASH_COMPLETION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+# bash-completion lookup dir. On macOS with Homebrew's bash-completion@2,
+# the XDG dir is not scanned — link into the brew prefix instead (Intel:
+# /usr/local, Apple Silicon: /opt/homebrew). Everything else (Linux, macOS
+# without brew) keeps the XDG path.
+bash_completion_dir() {
+    if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+        local prefix
+        prefix="$(brew --prefix 2>/dev/null || true)"
+        if [ -n "$prefix" ] && [ -d "$prefix" ]; then
+            printf '%s\n' "$prefix/share/bash-completion/completions"
+            return 0
+        fi
+    fi
+    printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+}
+
+BASH_COMPLETION_DIR="$(bash_completion_dir)"
+# zsh loads completions from $fpath; ~/.zfunc is a per-user dir that works for
+# system zsh, Homebrew zsh, and Linux zsh alike (no sudo needed). The rc block
+# below prepends it to fpath.
+ZSH_COMPLETION_DIR="$HOME/.zfunc"
 FISH_COMPLETION_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
 
 PATH_BEGIN="# yzr-agent-tools ${TOOL} PATH begin"
@@ -67,11 +87,14 @@ install_completions() {
         link_completion "$COMPLETION_SRC_DIR/$TOOL.bash" "$BASH_COMPLETION_DIR/$TOOL"
     [ -f "$COMPLETION_SRC_DIR/$TOOL.fish" ] && \
         link_completion "$COMPLETION_SRC_DIR/$TOOL.fish" "$FISH_COMPLETION_DIR/$TOOL.fish"
+    [ -f "$COMPLETION_SRC_DIR/_$TOOL" ] && \
+        link_completion "$COMPLETION_SRC_DIR/_$TOOL" "$ZSH_COMPLETION_DIR/_$TOOL"
 }
 
 uninstall_completions() {
     remove_completion_link "$BASH_COMPLETION_DIR/$TOOL"
     remove_completion_link "$FISH_COMPLETION_DIR/$TOOL.fish"
+    remove_completion_link "$ZSH_COMPLETION_DIR/_$TOOL"
 }
 
 # --- shell-rc PATH block ------------------------------------------------------
@@ -83,17 +106,30 @@ rc_path() {
     esac
 }
 
-# Strip the inclusive [begin, end] marker block from $1 (exact full-line match).
+# Strip the inclusive [begin, end] marker block from $1 (exact full-line
+# match), plus the single blank line the writer prepends before the block —
+# without that, re-installs would accumulate one orphan blank line each.
 strip_block() {
     local rc="$1" begin="$2" end="$3"
     [ -f "$rc" ] || return 0
     grep -qxF "$begin" "$rc" || return 0
     local tmp; tmp="$(mktemp)"
     awk -v begin="$begin" -v end="$end" '
-        $0 == begin { in_block = 1; next }
-        $0 == end   { in_block = 0; next }
-        in_block    { next }
-                    { print }
+        { lines[++n] = $0 }
+        END {
+            m = 0; i = 1
+            while (i <= n) {
+                if (lines[i] == begin) {
+                    if (m > 0 && out[m] == "") m--   # drop preceding blank
+                    while (i <= n && lines[i] != end) i++
+                    i++
+                    continue
+                }
+                out[++m] = lines[i]
+                i++
+            }
+            for (j = 1; j <= m; j++) print out[j]
+        }
     ' "$rc" > "$tmp"
     mv "$tmp" "$rc"
     log "Stripped marker block ($begin) from $rc"
@@ -109,18 +145,33 @@ ensure_path_block() {
     strip_block "$rc" "# yzr-agent-tools PATH begin" "# yzr-agent-tools PATH end"
     strip_block "$rc" "# model-switch PATH begin" "# model-switch PATH end"
 
-    if grep -qxF "$PATH_BEGIN" "$rc"; then
-        log "PATH entry already present in $rc"
-        return 0
-    fi
+    # Idempotent rewrite: always strip our own block first, then append the
+    # current form. This also migrates legacy blocks (e.g. ones that sourced
+    # the bash completion into ~/.zshrc, which errors under zsh).
+    strip_block "$rc" "$PATH_BEGIN" "$PATH_END"
+
     local comp_src="$COMPLETION_SRC_DIR/$TOOL.bash"
     {
         printf '\n%s\n' "$PATH_BEGIN"
         printf 'export PATH="%s:$PATH"\n' "$BIN_DIR"
-        printf '[ -f "%s" ] && . "%s"\n' "$comp_src" "$comp_src"
+        case "$rc" in
+            *.zshrc)
+                # zsh: put ~/.zfunc on fpath and make sure the completion
+                # system is up. compinit is re-run deliberately: if a framework
+                # (oh-my-zsh & co) already ran it earlier in .zshrc, it did so
+                # BEFORE our fpath line, so our completion files would not be
+                # picked up without a rescan.
+                printf 'fpath=("%s" $fpath)\n' "$ZSH_COMPLETION_DIR"
+                printf 'autoload -Uz compinit && compinit\n'
+                ;;
+            *)
+                # bash: source the bash completion directly.
+                printf '[ -f "%s" ] && . "%s"\n' "$comp_src" "$comp_src"
+                ;;
+        esac
         printf '%s\n' "$PATH_END"
     } >> "$rc"
-    log "Appended PATH entry to $rc"
+    log "Wrote PATH block to $rc"
 }
 
 remove_path_block() { strip_block "$(rc_path)" "$PATH_BEGIN" "$PATH_END"; }
@@ -143,7 +194,7 @@ usage() {
     cat >&2 <<EOF
 Usage: $(basename "$0") {install|uninstall}
 
-  install    Write the $TOOL wrapper ($BIN_DIR/$TOOL), link bash/fish
+  install    Write the $TOOL wrapper ($BIN_DIR/$TOOL), link bash/zsh/fish
              completions, and add a $TOOL PATH block to your shell rc.
   uninstall  Remove the wrapper, completion links, and PATH block.
 

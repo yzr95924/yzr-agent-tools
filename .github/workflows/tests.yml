@@ -28,6 +28,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install test shells
+        # zsh + fish drive the completion-script tests (tests/zsh_capture.zsh
+        # needs a real zsh; fish tests skip if absent, but run them here).
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
       - name: Install test deps
         # tomli is the TOML reader for Python <3.11 (harmless on 3.11+ where
         # tomllib is stdlib). pip's resolver honors Requires-Python, so on 3.7

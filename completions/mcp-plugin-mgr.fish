@@ -27,10 +27,10 @@ function __fish_mcp_plugin_mgr_using_command
     test (count $cmd) -ge 2; and contains -- $cmd[2] $argv
 end
 
-# True while the server-name positional after `add`/`remove` is unfilled.
+# True while the server-name positional after `add`/`remove`/`test` is unfilled.
 function __fish_mcp_plugin_mgr_needs_name
     set -l cmd (commandline -opc)
-    __fish_mcp_plugin_mgr_using_command add remove; or return 1
+    __fish_mcp_plugin_mgr_using_command add remove test; or return 1
     test "$cmd[-1]" = --driver; and return 1
     # No negative range bounds ($cmd[3..-1]) here — fish 3.0+ only; on
     # fish 2.x a negative or descending range is an "Array index out of
@@ -62,6 +62,7 @@ complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a list -d 
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a remove -d 'Remove a server'
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a presets -d 'List built-in presets'
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a status -d 'Show config paths and counts'
+complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a test -d 'Test whether an MCP server responds (connectivity diagnosis)'
 
 # --- name positional ----------------------------------------------------------
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_needs_name; and __fish_mcp_plugin_mgr_using_command add' -f -a '(__fish_mcp_plugin_mgr_presets)' -d 'preset'
@@ -79,13 +80,25 @@ complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l descr
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l driver -r -f -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l all-drivers -f -d 'Apply to every registered driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l no-apply -f -d 'Register only; do not write agent configs'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l auto-allow -f -d "Also pre-approve the server's tools in Claude Code permissions.allow"
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l force -f -d 'Overwrite if the name already exists'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -s h -l help -f -d 'Show help'
 
 # --- flags: remove ------------------------------------------------------------
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l driver -r -f -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l all-drivers -f -d 'Apply to every registered driver'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l auto-allow -f -d "Also remove the server's pre-approved tools from Claude Code permissions.allow"
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -s h -l help -f -d 'Show help'
+
+# --- flags: test --------------------------------------------------------------
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command test' -l url -r -f -d 'Ad-hoc: test this HTTP URL instead of a registered server'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command test' -l token -r -f -d 'Ad-hoc http: bearer token'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command test' -l header -r -f -d 'Ad-hoc http: extra header KEY=VALUE (repeatable)'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command test' -l timeout -r -f -d 'Per-request timeout seconds (default 10)'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command test' -s h -l help -f -d 'Show help'
+
+# --- name positional for test -------------------------------------------------
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_needs_name; and __fish_mcp_plugin_mgr_using_command test' -f -a '(__fish_mcp_plugin_mgr_servers)' -d 'server'
 
 # --- flags: status ------------------------------------------------------------
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command status' -l driver -r -f -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'

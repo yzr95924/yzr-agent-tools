@@ -421,3 +421,86 @@ def test_uninstall_removes_completion_links(tmp_path):
     assert not fish_link.exists() and not fish_link.is_symlink(), (
         "uninstall should remove the fish completion symlink"
     )
+
+
+# --- zsh support ------------------------------------------------------------------
+
+
+def test_install_zsh_shell_writes_zshrc_block_not_bash_source(tmp_path):
+    """Under SHELL=zsh the rc block must set up fpath+compinit and must NOT
+    source the bash completion (zsh has no `complete -F` / compgen — sourcing
+    it errors, which is exactly the macOS default-shell scenario)."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    env["SHELL"] = "/bin/zsh"
+
+    r = _run(fake_repo / "scripts" / "model-switch.sh", env, "install")
+    assert r.returncode == 0, r.stderr
+
+    zshrc = (fake_home / ".zshrc").read_text()
+    assert "# yzr-agent-tools model-switch PATH begin" in zshrc
+    assert 'fpath=("' in zshrc and ".zfunc" in zshrc, (
+        f"zshrc block must prepend ~/.zfunc to fpath; got: {zshrc!r}"
+    )
+    assert "compinit" in zshrc
+    assert ".bash" not in zshrc, (
+        f"zshrc block must not source the bash completion; got: {zshrc!r}"
+    )
+    # And the .bashrc was not touched in this scenario.
+    assert not (fake_home / ".bashrc").exists()
+
+
+def test_install_zsh_links_into_zfunc_and_uninstall_removes(tmp_path):
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    env["SHELL"] = "/bin/zsh"
+    sh = fake_repo / "scripts" / "model-switch.sh"
+
+    assert _run(sh, env, "install").returncode == 0
+    zsh_link = fake_home / ".zfunc" / "_model-switch"
+    assert zsh_link.is_symlink(), f"zsh completion symlink missing: {zsh_link}"
+    assert zsh_link.resolve() == (fake_repo / "completions" / "_model-switch").resolve()
+
+    assert _run(sh, env, "uninstall").returncode == 0
+    assert not zsh_link.exists() and not zsh_link.is_symlink(), (
+        "uninstall should remove the zsh completion symlink"
+    )
+
+
+def test_install_zsh_migrates_legacy_block_sourcing_bash_completion(tmp_path):
+    """A legacy install on a zsh machine wrote a block that sources the bash
+    completion into .zshrc (errors at shell startup). Reinstalling must
+    replace it with the fpath+compinit form."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    env["SHELL"] = "/bin/zsh"
+    (fake_home / ".zshrc").write_text(
+        "my own line\n"
+        "\n# yzr-agent-tools model-switch PATH begin\n"
+        f'export PATH="{fake_repo}/bin:$PATH"\n'
+        f'[ -f "{fake_repo}/completions/model-switch.bash" ] && . "{fake_repo}/completions/model-switch.bash"\n'
+        "# yzr-agent-tools model-switch PATH end\n"
+    )
+
+    r = _run(fake_repo / "scripts" / "model-switch.sh", env, "install")
+    assert r.returncode == 0, r.stderr
+
+    zshrc = (fake_home / ".zshrc").read_text()
+    assert "model-switch.bash" not in zshrc, (
+        f"legacy bash-source line must be gone; zshrc now: {zshrc!r}"
+    )
+    assert zshrc.count("# yzr-agent-tools model-switch PATH begin") == 1
+    assert "compinit" in zshrc
+    assert "my own line" in zshrc, "unrelated user content must survive"
+
+
+def test_install_zsh_is_idempotent(tmp_path):
+    """Re-running install under zsh rewrites the block byte-identically."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    env["SHELL"] = "/bin/zsh"
+    sh = fake_repo / "scripts" / "model-switch.sh"
+
+    assert _run(sh, env, "install").returncode == 0
+    first = (fake_home / ".zshrc").read_text()
+    assert _run(sh, env, "install").returncode == 0
+    assert _run(sh, env, "install").returncode == 0
+    assert (fake_home / ".zshrc").read_text() == first, (
+        "repeated installs must not accumulate blank lines or blocks"
+    )

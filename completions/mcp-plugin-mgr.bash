@@ -20,7 +20,7 @@ _mcp_plugin_mgr() {
             COMPREPLY=( $(compgen -W "$(mcp-plugin-mgr _complete drivers 2>/dev/null)" -- "$cur") )
             return 0
             ;;
-        --url|--token|--header|--command|--env|--description)
+        --url|--token|--header|--command|--env|--description|--timeout)
             # Free-form values: nothing sensible to offer.
             COMPREPLY=()
             return 0
@@ -28,19 +28,19 @@ _mcp_plugin_mgr() {
     esac
 
     # Walk the completed words to establish context:
-    #   cmd = init | add | list | remove | presets | status   (COMP_WORDS[1])
+    #   cmd = init | add | list | remove | presets | status | test   (COMP_WORDS[1])
     local i w
     for (( i = 1; i < COMP_CWORD; i++ )); do
         w="${COMP_WORDS[i]}"
         case "$w" in
-            init|add|list|remove|presets|status)
+            init|add|list|remove|presets|status|test)
                 [ -z "$cmd" ] && cmd="$w"
                 ;;
         esac
     done
 
     if [ -z "$cmd" ]; then
-        COMPREPLY=( $(compgen -W "init add list remove presets status --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "init add list remove presets status test --help" -- "$cur") )
         return 0
     fi
 
@@ -53,7 +53,7 @@ _mcp_plugin_mgr() {
             ;;
         add)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "--url --token --header --stdio --command --env --description --driver --all-drivers --no-apply --force --help" -- "$cur") )
+                COMPREPLY=( $(compgen -W "--url --token --header --stdio --command --env --description --driver --all-drivers --no-apply --auto-allow --force --help" -- "$cur") )
             else
                 # First positional: a preset name, or an already-configured server.
                 COMPREPLY=( $(compgen -W "$(mcp-plugin-mgr _complete presets 2>/dev/null) $(mcp-plugin-mgr _complete servers 2>/dev/null)" -- "$cur") )
@@ -61,7 +61,14 @@ _mcp_plugin_mgr() {
             ;;
         remove)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "--driver --all-drivers --help" -- "$cur") )
+                COMPREPLY=( $(compgen -W "--driver --all-drivers --auto-allow --help" -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W "$(mcp-plugin-mgr _complete servers 2>/dev/null)" -- "$cur") )
+            fi
+            ;;
+        test)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "--url --token --header --timeout --help" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(mcp-plugin-mgr _complete servers 2>/dev/null)" -- "$cur") )
             fi
