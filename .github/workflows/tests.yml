@@ -45,5 +45,18 @@ jobs:
         run: |
           bash scripts/model-switch.sh install
           bash scripts/mcp-plugin-mgr.sh install
-      - name: Run tests
-        run: pytest
+      - name: Run tests (debug output to summary)
+        run: |
+          {
+            echo '## env'
+            echo '```'
+            echo "TERM=$TERM SHELL=$SHELL"
+            zsh --version
+            echo '```'
+            echo '## pytest tail'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -m pytest -x -q > /tmp/pytest.out 2>&1; rc=$?
+          tail -120 /tmp/pytest.out >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY" || true
+          exit $rc
