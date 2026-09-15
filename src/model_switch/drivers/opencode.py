@@ -61,6 +61,16 @@ together (``limit.required == [context, output]``), so context is paired with a
 default ``output`` cap (``_DEFAULT_MAX_OUTPUT``). When ``context_window`` is
 unknown the whole ``limit`` block is omitted — a partial ``{limit:{context}}``
 fails validation and makes the model unavailable.
+
+``reasoning`` and ``variants`` from a model entry are passed through into the
+model block as-is. ``reasoning = true`` marks the model as reasoning-capable
+(OpenCode gates some of its behaviour on that flag), and ``variants`` declares
+the effort tiers OpenCode's variant cycle (ctrl+t, ``variant_cycle``) offers —
+each tier is an opaque payload OpenCode merges into the request options. What
+the tiers are and which shapes an upstream accepts is user data in models.toml
+(optionally via ``[variants_presets]``, expanded by
+`model_switch.variants.expand`); this driver holds no per-model or per-gateway
+knowledge, so adding a model or an upstream never touches it.
 """
 import json
 import re
@@ -121,21 +131,37 @@ def _base_url_for_ai_sdk(base_url):
 def _render_model_entry(model: Model) -> Dict[str, Any]:
     """Render the per-model object stored under ``provider.<id>.models``.
 
+    ``reasoning`` and ``variants`` are passed through verbatim from
+    ``models.toml`` when present: ``reasoning = true`` marks the model as
+    reasoning-capable, and ``variants`` declares the effort tiers OpenCode's
+    variant cycle (ctrl+t) offers. Tier payloads are opaque — OpenCode merges
+    them into the request options, so model-switch never inspects, rewrites
+    or varies them by model. ``variants`` may arrive materialized from a
+    preset (see `model_switch.variants.expand`); this driver only ever sees
+    the plain dict.
+
     When ``model.context_window`` is known, emit a ``limit`` block so OpenCode
     manages the real context budget (a custom provider isn't on models.dev, so
     OpenCode otherwise can't infer it). OpenCode's schema requires ``context``
     and ``output`` together, so context is paired with ``_DEFAULT_MAX_OUTPUT``.
     When context is unknown, omit ``limit`` entirely — a partial block would
     fail validation and make the model unavailable.
+
+    With neither optional field set and no context_window this returns ``{}``
+    — the same output as before those fields existed.
     """
-    if model.context_window is None:
-        return {}
-    return {
-        "limit": {
+    entry: Dict[str, Any] = {}
+    if model.extra.get("reasoning") is True:
+        entry["reasoning"] = True
+    variants = model.extra.get("variants")
+    if isinstance(variants, dict) and variants:
+        entry["variants"] = variants
+    if model.context_window is not None:
+        entry["limit"] = {
             "context": model.context_window,
             "output": _DEFAULT_MAX_OUTPUT,
         }
-    }
+    return entry
 
 
 def _provider_id(model_id: str) -> str:
@@ -244,10 +270,11 @@ class OpenCodeDriver:
                     "baseURL": _base_url_for_ai_sdk(model.base_url),
                     "apiKey": model.api_key,
                 },
-                # Per-model object: a `limit` block when context_window is known
-                # (a custom provider isn't on models.dev, so OpenCode needs it
-                # told), else an empty entry. See _render_model_entry for the
-                # schema constraint.
+                # Per-model object: `reasoning`/`variants` passed through from
+                # models.toml (tier declarations for the variant cycle), plus a
+                # `limit` block when context_window is known (a custom provider
+                # isn't on models.dev, so OpenCode needs it told). See
+                # _render_model_entry for the schema constraint.
                 "models": {model.name: _render_model_entry(model)},
             }
             providers[_provider_id(model.model_id)] = provider_block

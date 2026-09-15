@@ -31,6 +31,13 @@ from model_switch.store import (
     save_models,
     save_state,
 )
+from model_switch.variants import (
+    PRESET_REF_KEY,
+    VARIANTS_KEY,
+    VariantsError,
+    expand,
+    expand_model,
+)
 
 
 # ---- shared helpers ---------------------------------------------------------
@@ -123,11 +130,35 @@ def _registered_drivers() -> list:
     return [registry.get(n) for n in registry.list()]
 
 
-def _sync_catalog(models) -> None:
-    """Mirror `models` (the full models.toml list) into every catalog-capable
-    driver — currently OpenCode. Reconcile keeps each driver's default pointer
-    unless it vanished. Single-slot drivers (claude-code) are skipped; missing
-    agent configs are left alone (a targeted `model use` creates them)."""
+def _expand_or_die(reg: Registry,
+                   only: Optional[ModelEntry] = None) -> List[ModelEntry]:
+    """Materialize variant-preset references, or exit with a clear error.
+
+    `only` narrows expansion to one model (`model show` shouldn't trip over
+    a different model's broken preset); the default expands the whole
+    registry, which is what every write path wants.
+
+    Expansion is in-memory only (see `model_switch.variants`) — `save_models`
+    must always be handed the original Registry.
+    """
+    try:
+        return [expand_model(reg, only)] if only is not None else expand(reg)
+    except VariantsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _sync_catalog(reg: Registry) -> None:
+    """Mirror `reg` (the full models.toml registry) into every
+    catalog-capable driver — currently OpenCode. Reconcile keeps each
+    driver's default pointer unless it vanished. Single-slot drivers
+    (claude-code) are skipped; missing agent configs are left alone (a
+    targeted `model use` creates them).
+
+    Takes the Registry (not just the model list) so variant presets declared
+    at the top level can be expanded before rendering.
+    """
+    models = _expand_or_die(reg)
     for d in _registered_drivers():
         if getattr(d, "supports_catalog", False):
             d.sync_catalog(models)
@@ -368,7 +399,7 @@ def _do_model_add(args: argparse.Namespace) -> None:
     # Mirror the catalog so the new model is immediately available in agents
     # that hold one (OpenCode's picker). Single-slot agents (claude-code) are
     # untouched until the next `model use`.
-    _sync_catalog(list(reg.models.values()))
+    _sync_catalog(reg)
     print(f"Added model {args.name!r}.")
 
 
@@ -449,6 +480,11 @@ def _do_model_show(name: str) -> None:
         print(f"Error: model {name!r} not found.", file=sys.stderr)
         sys.exit(1)
     m = reg.models[name]
+    # Resolve the variant declaration up front: a broken one should fail
+    # before any of the model's fields are printed.
+    ref = m.extra.get(PRESET_REF_KEY)
+    variants = _expand_or_die(reg, only=m)[0].extra.get(VARIANTS_KEY)
+
     print(f"name:           {name}")
     print(f"base_url:       {m.base_url}")
     print(f"api_key:        {'<set>' if m.api_key else '<missing>'}")
@@ -457,6 +493,24 @@ def _do_model_show(name: str) -> None:
         print(f"context_window: {m.context_window}")
     if m.description:
         print(f"description:    {m.description}")
+    # What OpenCode will render for the variant cycle: the reasoning flag,
+    # the declared preset (if any) and the tier names it expands to.
+    if m.extra.get("reasoning") is True:
+        print("reasoning:      true")
+    if isinstance(variants, dict) and variants:
+        # OpenCode drops tiers marked `disabled` (that's how a model mutes a
+        # preset tier or a built-in one), so report what the cycle will
+        # actually offer and name the muted tiers separately.
+        enabled = [
+            t for t, body in variants.items()
+            if not (isinstance(body, dict) and body.get("disabled"))
+        ]
+        muted = [t for t in variants if t not in enabled]
+        source = "preset {!r}".format(ref) if ref is not None else "(inline)"
+        line = "variants:       {} -> {}".format(source, ", ".join(enabled) or "<none>")
+        if muted:
+            line += " (disabled: {})".format(", ".join(muted))
+        print(line)
 
 
 def _do_model_remove(name: str) -> None:
@@ -468,7 +522,7 @@ def _do_model_remove(name: str) -> None:
     save_models(paths.models_file(), reg)
     # Reconcile the catalog (removed model's provider + key vanish from
     # OpenCode) and clear the single-slot agent if the removed model was active.
-    _sync_catalog(list(reg.models.values()))
+    _sync_catalog(reg)
     _clear_active_if_orphaned(reg)
     print(f"Removed model {name!r}.")
 
@@ -479,14 +533,17 @@ def _do_model_use(args: argparse.Namespace) -> None:
         print(f"Error: model {args.name!r} not found.", file=sys.stderr)
         sys.exit(1)
 
-    main_model = reg.models[args.name]
+    # Variant presets are materialized here (in memory) so every driver sees
+    # plain `variants` dicts; models.toml keeps the preset + reference form.
+    expanded = {m.model_id: m for m in _expand_or_die(reg)}
+    main_model = expanded[args.name]
 
     # Validate the active model has a key before touching any driver config.
     _resolve_api_key(main_model)
 
     applied = []
     for driver in _resolve_drivers(args):
-        driver.apply(models=list(reg.models.values()), active=main_model)
+        driver.apply(models=list(expanded.values()), active=main_model)
         applied.append(driver)
 
     state = load_state(paths.state_file())
@@ -543,7 +600,7 @@ def _do_model_import(args: argparse.Namespace) -> None:
     # Mirror the catalog (a replace can wipe models, so reconcile also reclaims
     # providers for models that vanished) and clear single-slot agents if the
     # active model was dropped.
-    _sync_catalog(list(result_reg.models.values()))
+    _sync_catalog(result_reg)
     _clear_active_if_orphaned(result_reg)
 
     print(f"Imported {len(incoming.models)} model(s) from {src_path}.")

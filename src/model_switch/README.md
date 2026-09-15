@@ -187,6 +187,77 @@ OpenCode driver 往 OpenCode 的全局配置 `~/.config/opencode/opencode.json`
 - 镜像只作用于已存在的 `opencode.json`:`model add` 不会凭空创建一个你没用过的全局配置文件,
   只有 `model use --driver opencode`(或 interactive all)才创建它。
 
+### Effort 档位(variants)
+
+OpenCode 的模型可以带若干「档位」(variant),用 `ctrl+t`(`variant_cycle`)循环切换——
+比如 high/max。model-switch 不认识任何具体模型或上游:它把 `models.toml` 里声明的东西
+**原样透传**进 `opencode.json` 的 model 块,所以档位是纯数据,加模型/换上游都只改 toml。
+
+两个字段(都写在 `[[models]]` 条目里,都可选):
+
+| 字段 | 作用 |
+| --- | --- |
+| `reasoning = true` | 声明该模型支持推理(OpenCode 的一些行为以此为闸门,如内置档位规则与 picker 上的标注) |
+| `variants_preset = "<名字>"` | 引用顶层 `[variants_presets.<名字>]` 定义的档位表(推荐) |
+| `variants = { ... }` | 直接内联档位表(逃生舱;与 preset 同时存在时,逐字段覆盖 preset) |
+
+档位形状写一次、所有模型引用:
+
+```toml
+[variants_presets.z-effort]
+high = { effort = "high" }
+max  = { effort = "max" }
+
+[[models]]
+model_id = "glm-5_3-1m"
+name = "glm-5.3"
+# ...
+reasoning = true
+variants_preset = "z-effort"
+```
+
+`model use` 时 preset 在内存里展开成 `variants` 字典(模型自己内联的字段级覆盖 preset),
+渲染进 model 块:
+
+```json
+"glm-5.3": {
+  "reasoning": true,
+  "variants": { "high": { "effort": "high" }, "max": { "effort": "max" } },
+  "limit": { "context": 1000000, "output": 131072 }
+}
+```
+
+**报错早于写配置**:`variants_preset` 引用了不存在的名字、preset 是空的、或某个档位的值不是
+表(table;preset 与内联 `variants` 一视同仁)时,`model use`/`model add` 等直接报错退出,不写
+任何 agent 配置——实测 OpenCode 遇到这类配置会整份拒载(`Expected object, got "high"
+provider.<id>.models.<name>.variants.<tier>`)。档位**内容**不校验(原样透传,OpenCode 加载时
+自己校验)。`model show <名字>` 只检查被查看的那个模型,所以别的模型写错也能单独查一个;
+写入类命令则会检查整个 registry。
+
+三条要知道的语义:
+
+- **与 OpenCode 内置规则是叠加,不是接管。** OpenCode 自己也会给某些模型家族生成档位
+  (按模型名匹配,随版本变化),你的声明与它 deep merge——同名档位你胜,你没声明的档位名
+  仍可能出现。要静音某个档位,在它下面写 `disabled = true`。
+- **匹配内置规则的永远是 `name`,不是 `model_id`**(`name` 是渲进 model 块的 key)。比如
+  `name = "glm-5.2"` 才会命中 glm-5.2 的内置规则,`glm-5_2` 不行。
+- **`[variants_presets.*]` 是顶层表**,模型条目里引用它;对 `models.toml` 的任何重写
+  (`model add/remove/import`)会保留它,但 dumper 会把它排到文件末尾(合法,只是位置变化)。
+
+排查「`ctrl+t` 没反应」:
+
+1. 你选的模型可能来自 **project 级 `opencode.json`** 或其它 provider——model-switch 只写
+   全局 `~/.config/opencode/opencode.json` 的 `yzr-*` 命名空间,请在 picker 里选
+   `yzr-*` 的模型;
+2. 该模型的档位表是空的(没写 preset/variants,或内置规则也没给它);
+3. 想看当前模型有哪些档位,不必盲按 `ctrl+t`:OpenCode 的 `variant_list` 键位默认**没绑**,
+   在 `opencode.json` 里给它绑一个键即可列出,例如
+   `"keybinds": { "variant_list": "ctrl+v" }`。
+
+`model show <name>` 会打印 `reasoning:` 与 `variants: preset '...' -> high, max`,便于
+改完 toml 后确认最终会渲染什么;被 `disabled = true` 静音的档位不会混进列表,而是标注在
+括号里(`-> high, max (disabled: low)`),与 OpenCode 实际给出的档位一致。
+
 **Claude Code 是单槽 agent。** `model add/remove/import` 不碰它的配置;唯一例外——被删除的
 模型正是当前 active 时,`remove`/`import replace` 会把 model-switch 自己管理的四个键
 (`env.ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL` + 顶层 `model`)清掉,

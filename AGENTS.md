@@ -158,9 +158,17 @@ src/
   写 `env` 块 + 顶层 `model`。
 - `opencode`(catalog,`supports_catalog=True`):`apply` = 全量 reconcile——把 `models.toml`
   全部模型镜像成 `yzr-<model_id>` 的 provider(每模型一个,`baseURL`/`apiKey` 是 provider
-  级字段、不同上游不能共用一个块),`config["model"]` 只作默认指针。`sync_catalog(models)`
+  级字段、不同上游不能共用一个块),`config["model"]` 只作默认指针。`sync_catalog(registry)`
   在 add/remove/import 时触发,同样全量 reconcile 但保留有效默认指针(悬空则落剩余第一个 /
-  无剩余删键);`create=False` 时不凭空创建不存在的 `opencode.json`。
+  无剩余删键);`create=False` 时不凭空创建不存在的 `opencode.json`。model 块除 `limit` 外
+  还透传 `models.toml` 的 `reasoning` 与 `variants`(OpenCode 的 ctrl+t 档位,形状由用户
+  在 `[variants_presets.<名>]` 定义、模型用 `variants_preset` 引用)。
+
+**variant preset 的分层**:展开在 CLI 层(`model_switch.variants.expand`/`expand_model`,仅内存、
+不落盘,`save_models` 永远拿原始 Registry),driver 与 store 都不认识 preset——driver 只看到
+`reasoning`/`variants` 两个透传键。展开时顺带检查容器形状(preset 与内联的档位值必须是表;
+OpenCode 遇到标量会拒载整份配置),payload 内容不校验。`variants.py` 与 `drivers/opencode.py`
+的代码里不得出现模型/网关名(档位是数据不是特判;`test_variants.py` 有 AST 守卫)。
 
 **Catalog 变更即同步**:`model add/remove/import` 也写 agent 配置(不只 `use`),保证
 `models.toml` 变更后任何 agent 配置里都不存在已删除模型的 key——opencode 靠全量 reconcile

@@ -37,6 +37,10 @@ def _format_scalar(v: Any) -> str:
         return str(v).lower()
     if isinstance(v, int):
         return str(v)
+    if isinstance(v, float):
+        # repr keeps the decimal point (`1.0`, not `1`) so the value stays a
+        # TOML float on reload; inf/nan reprs are valid TOML literals too.
+        return repr(v)
     if isinstance(v, str):
         return '"{}"'.format(_toml_escape_str(v))
     raise TypeError("Unsupported TOML scalar type: {}".format(type(v)))
@@ -73,7 +77,10 @@ def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
         for item in items:
             header = "{}{}".format(prefix, k)
             buf.write("\n[[{}]]\n".format(header))
-            _dump_section(buf, item, prefix="")
+            # Carry the array header into the item's nested dicts so they
+            # render as `[<array>.<key>]` (a sub-table of the current array
+            # element) rather than a bogus top-level `[<key>]`.
+            _dump_section(buf, item, prefix=header + ".")
 
     for k, v in tables.items():
         table_name = "{}{}".format(prefix, k)

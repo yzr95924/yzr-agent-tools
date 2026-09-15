@@ -326,3 +326,70 @@ def test_current_reports_default_and_catalog(driver):
     assert "catalog" in cur
     assert _provider_id("glm") in cur["catalog"]
     assert _provider_id("kimi") in cur["catalog"]
+
+
+# --- reasoning / variants passthrough ----------------------------------------
+#
+# models.toml may carry `reasoning = true` (mark the model reasoning-capable)
+# and a `variants` table (effort tiers for OpenCode's ctrl+t variant cycle).
+# Both are rendered verbatim into the model block; the driver neither
+# interprets nor varies them by model — tier shapes are user data.
+
+def test_apply_passes_reasoning_and_variants_through(driver):
+    from model_switch.drivers.opencode import _DEFAULT_MAX_OUTPUT
+    m = Model(
+        model_id="m", name="m", base_url="https://api.example.com",
+        api_key="K", context_window=1000000,
+        extra={
+            "reasoning": True,
+            "variants": {"high": {"effort": "high"}, "max": {"effort": "max"}},
+        },
+    )
+    driver.apply(models=[m], active=m)
+    cfg = json.loads(driver.settings_path.read_text())
+    entry = cfg["provider"][_provider_id("m")]["models"]["m"]
+    assert entry["reasoning"] is True
+    assert entry["variants"] == {"high": {"effort": "high"}, "max": {"effort": "max"}}
+    assert entry["limit"] == {"context": 1000000, "output": _DEFAULT_MAX_OUTPUT}
+
+
+def test_apply_renders_optional_fields_without_context_window(driver):
+    """The optional fields must not be swallowed when context_window is
+    unknown: only `limit` is conditional, never the whole entry."""
+    m = Model(
+        model_id="m", name="m", base_url="https://api.example.com",
+        api_key="K", extra={"reasoning": True, "variants": {"high": {"effort": "high"}}},
+    )
+    driver.apply(models=[m], active=m)
+    cfg = json.loads(driver.settings_path.read_text())
+    entry = cfg["provider"][_provider_id("m")]["models"]["m"]
+    assert "limit" not in entry
+    assert entry["reasoning"] is True
+    assert entry["variants"] == {"high": {"effort": "high"}}
+
+
+def test_apply_ignores_non_true_reasoning_and_empty_variants(driver, glm_ctx):
+    """A string '"true"' or an empty variants table renders nothing, keeping
+    entries without usable declarations byte-identical to the old output."""
+    glm_ctx.extra = {"reasoning": "true", "variants": {}}
+    driver.apply(models=[glm_ctx], active=glm_ctx)
+    cfg = json.loads(driver.settings_path.read_text())
+    entry = cfg["provider"][_provider_id("glm")]["models"][glm_ctx.name]
+    assert entry == {"limit": {"context": 1000000, "output": 131072}}
+
+
+def test_sync_catalog_keeps_reasoning_and_variants_on_reconcile(driver):
+    """Reconcile is a mirror: a second run must reproduce the same model
+    block (no drift, no loss)."""
+    m = Model(
+        model_id="m", name="m", base_url="https://api.example.com",
+        api_key="K", context_window=1000,
+        extra={"reasoning": True, "variants": {"high": {"effort": "high"}}},
+    )
+    driver.settings_path.write_text("{}", encoding="utf-8")  # sync never creates
+    driver.sync_catalog([m])
+    first = json.loads(driver.settings_path.read_text())["provider"][_provider_id("m")]
+    driver.sync_catalog([m])
+    second = json.loads(driver.settings_path.read_text())["provider"][_provider_id("m")]
+    assert first == second
+    assert second["models"]["m"]["variants"] == {"high": {"effort": "high"}}

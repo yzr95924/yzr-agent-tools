@@ -128,6 +128,97 @@ def test_save_models_creates_parent_directory(tmp_path):
     assert p.exists()
 
 
+# --- nested tables inside [[models]] entries ---------------------------------
+#
+# Regression guards for the dumper's array-of-tables prefix handling: a nested
+# dict inside an array item must render as `[models.<key>]`, not a top-level
+# `[<key>]`. The old behavior silently dropped `variants` from the entry (one
+# entry) or made the file unparseable ("Cannot declare ('variants',) twice",
+# two or more entries).
+
+def test_variants_round_trip_single_entry(tmp_path):
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'model_id = "glm-5_3-1m"\n'
+                 'name = "glm-5.3"\n'
+                 'base_url = "u"\n'
+                 'api_key = "K"\n'
+                 'reasoning = true\n'
+                 '\n[models.variants]\n'
+                 'high = { effort = "high" }\n'
+                 'max = { effort = "max" }\n')
+
+    reg = load_models(p)
+    assert reg.models["glm-5_3-1m"].extra["variants"] == {
+        "high": {"effort": "high"},
+        "max": {"effort": "max"},
+    }
+    assert reg.extra_top.get("variants") is None
+
+    save_models(p, reg)
+    text = p.read_text()
+    assert "[models.variants.max]" in text
+    assert "\n[variants]" not in text
+
+    reloaded = load_models(p)
+    assert reloaded.models["glm-5_3-1m"].extra["variants"] == {
+        "high": {"effort": "high"},
+        "max": {"effort": "max"},
+    }
+    assert reloaded.extra_top.get("variants") is None
+
+
+def test_variants_round_trip_two_entries(tmp_path):
+    """Two entries carrying variants: the old dumper emitted a duplicate
+    top-level `[variants]` table and tomllib refused the whole file."""
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'model_id = "a"\nname = "a"\nbase_url = "u"\napi_key = "K"\n'
+                 'variants = { high = { effort = "high" } }\n'
+                 '[[models]]\n'
+                 'model_id = "b"\nname = "b"\nbase_url = "u"\napi_key = "K"\n'
+                 'variants = { max = { effort = "max" } }\n')
+
+    save_models(p, load_models(p))
+    reloaded = load_models(p)
+
+    assert reloaded.models["a"].extra["variants"] == {"high": {"effort": "high"}}
+    assert reloaded.models["b"].extra["variants"] == {"max": {"effort": "max"}}
+
+
+def test_variants_float_values_round_trip(tmp_path):
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n'
+                 'variants = { high = { temperature = 0.7 } }\n')
+
+    save_models(p, load_models(p))
+    assert "temperature = 0.7" in p.read_text()
+    reloaded = load_models(p)
+    # Still a float, not truncated to an int.
+    assert reloaded.models["m"].extra["variants"]["high"]["temperature"] == 0.7
+
+
+def test_variants_presets_table_round_trip(tmp_path):
+    """The top-level [variants_presets.<name>] table survives a save/load."""
+    p = tmp_path / "models.toml"
+    p.write_text('[variants_presets.z-effort]\n'
+                 'high = { effort = "high" }\n'
+                 'max = { effort = "max" }\n\n'
+                 '[[models]]\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n'
+                 'variants_preset = "z-effort"\n')
+
+    save_models(p, load_models(p))
+    reloaded = load_models(p)
+
+    assert reloaded.extra_top["variants_presets"]["z-effort"] == {
+        "high": {"effort": "high"},
+        "max": {"effort": "max"},
+    }
+    assert reloaded.models["m"].extra["variants_preset"] == "z-effort"
+
+
 # --- state --------------------------------------------------------------------
 
 def test_load_state_returns_empty_when_missing(tmp_path):
