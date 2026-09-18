@@ -15,16 +15,27 @@ derived fields must agree, otherwise the caller has to pin one with
 silently mis-configures reasoning tiers.
 
 Fields derived (see `derive`): ``context_window`` (from ``limit.context``),
-``reasoning``, ``variants`` (``toggle`` → ``off`` plus one tier per declared
-effort value) and ``modalities``. Budget ladders are never invented: a model
-declaring only ``budget_tokens`` gets no tiers.
+``reasoning``, ``variants`` (one tier per declared effort value, plus
+``none`` translated to a thinking-off tier when declared) and ``modalities``.
+A ``toggle`` option adds no tier of its own, mirroring OpenCode's own
+derivation; budget ladders are never invented, so a model declaring only
+``budget_tokens`` gets no tiers.
 
 Known limits, by design:
 
 - Catalog entries describe each provider's *declared* endpoint (its ``npm``
   SDK, usually the OpenAI-compatible API), while model-switch connects over
-  the Anthropic-compatible path. Tier *names* are family-wide; the wire
-  shape is the driver's translation, not the catalog's.
+  the Anthropic-compatible path. Tier *names* follow OpenCode; bodies are the
+  driver's translation of them: an effort tier becomes
+  ``{effort = <name>, thinking = {type = "adaptive"}}``, and ``none`` —
+  which the Anthropic effort enum has no room for — becomes
+  ``{thinking = {type = "disabled"}}``, the same shape OpenCode gives
+  ``none`` on Anthropic-style adapters and the one Kimi's docs define for it.
+- A ``toggle`` option is ignored when effort values exist, matching
+  OpenCode's own derivation (it emits effort tiers only, dropping ``toggle``;
+  its toggle translation covers alibaba/cohere alone). A model declaring
+  *only* a toggle therefore derives no tiers — declare one by hand if the
+  upstream needs it.
 - Acceptance is not effectiveness: an upstream may accept a tier and clamp
   it silently. Only vendor docs plus task-level observation can tell.
 """
@@ -44,10 +55,12 @@ from model_switch import paths
 # undeclared parts are already blocked, which is the same outcome.
 _SUPPORTED_INPUT = ("text", "image", "pdf")
 
-# Effort values meaning "barely/no thinking"; the `off` toggle covers that
-# better, so they never become tiers (same rule OpenCode's own derivation
-# applies when picking a default).
-_SKIP_EFFORT_TIERS = ("none", "minimal")
+# Effort values that never become an ``effort`` tier. ``none`` is not here:
+# it becomes a thinking-off tier instead (see `derive`). ``minimal`` is: it
+# means "a little thinking", not "no thinking", and the Anthropic effort enum
+# is low|medium|high|xhigh|max — clamping it to ``low`` would lie about the
+# tier name, so it is skipped.
+_SKIP_EFFORT_TIERS = ("minimal",)
 
 
 @dataclass
@@ -183,24 +196,27 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
     ``reasoning_options`` declared), ``variants`` (``{}`` when the entry
     declares none we can honor) and ``modalities`` (``None`` when the entry
     is text-only — declaring that adds nothing).
+
+    Tier names follow the entry's effort values in declaration order: each
+    becomes an effort tier, while ``none`` becomes a thinking-off tier (see
+    ``_SKIP_EFFORT_TIERS``). A ``toggle`` option adds nothing: OpenCode's own
+    derivation emits effort tiers only when an effort option exists, so
+    keeping the toggle would expose a cycle OpenCode itself does not.
     """
     opts = [o for o in (entry.get("reasoning_options") or []) if isinstance(o, dict)]
-    toggle = False
     effort_values: List[str] = []
     for o in opts:
-        kind = o.get("type")
-        if kind == "toggle":
-            toggle = True
-        elif kind == "effort" and not effort_values:
+        if o.get("type") == "effort" and not effort_values:
             effort_values = [v for v in (o.get("values") or []) if isinstance(v, str)]
 
     variants: Dict[str, Any] = {}
-    if toggle:
-        variants["off"] = {"thinking": {"type": "disabled"}}
     for v in effort_values:
-        if v in _SKIP_EFFORT_TIERS:
+        if v == "none":
+            variants[v] = {"thinking": {"type": "disabled"}}
+        elif v in _SKIP_EFFORT_TIERS:
             continue
-        variants[v] = {"effort": v, "thinking": {"type": "adaptive"}}
+        else:
+            variants[v] = {"effort": v, "thinking": {"type": "adaptive"}}
 
     limit = entry.get("limit") or {}
     context = limit.get("context") if isinstance(limit, dict) else None
@@ -222,12 +238,23 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def budget_only(entry: Dict[str, Any]) -> bool:
-    """True when the entry declares reasoning but no toggle/effort tiers."""
+def no_tiers_declared(entry: Dict[str, Any]) -> bool:
+    """True when the entry declares reasoning but none of it yields tiers.
+
+    Covers budget-only entries, bare toggles and effort lists whose values
+    are all skippable — in each case the caller should say so instead of
+    silently writing no variants.
+    """
     opts = [o for o in (entry.get("reasoning_options") or []) if isinstance(o, dict)]
     if not opts:
         return False
-    return not any(o.get("type") in ("toggle", "effort") for o in opts)
+    for o in opts:
+        if o.get("type") != "effort":
+            continue
+        for v in (o.get("values") or []):
+            if isinstance(v, str) and v not in _SKIP_EFFORT_TIERS:
+                return False
+    return True
 
 
 def pick(cands: List[Candidate], pin: Optional[str] = None) -> Pick:

@@ -274,9 +274,10 @@ host 派生。两条路径都不会猜——同上游同 key 的两个 provider 
 
 OpenCode 的模型可以带若干「档位」(variant),用 `ctrl+t`(`variant_cycle`)循环切换——
 比如 high/max。model-switch 不认识任何具体模型或上游:档位是纯数据,加模型/换上游都只改
-toml。**声明了 `variants` 的模型,`ctrl+t` 给出的就只有你声明的这些档位**——OpenCode 自己
-也会给某些模型家族算一套内置档位,并与你的声明深合并;driver 会在渲染时把其中你没声明的
-档位名静音掉(写 `disabled`,OpenCode 合并后立刻丢弃),详见下面「四条要知道的语义」。
+toml。**声明了 `variants` 的模型,`ctrl+t` 给出的就只有你声明的这些档位(外加最后的未选档
+Default 一站)**——OpenCode 自己也会给某些模型家族算一套内置档位,并与你的声明深合并;
+driver 会在渲染时把其中你没声明的档位名静音掉(写 `disabled`,OpenCode 合并后立刻丢弃),
+详见下面「四条要知道的语义」。
 
 这些字段(都写在 `[[models]]` 条目里,都可选):
 
@@ -361,10 +362,14 @@ provider.<id>.models.<name>.variants.<tier>`)。档位**内容**不校验(原样
    在 `opencode.json` 里给它绑一个键即可列出,例如
    `"keybinds": { "variant_list": "ctrl+v" }`。
 
-`model show <name>` 会打印 `reasoning:` 与 `variants: preset '...' -> high, max`——这行就是
-`ctrl+t` 会给出的集合(渲染时自动静音的内置档位不列出,它们的唯一作用就是被丢掉);你自己
-写的 `disabled = true` 档位也不会混进列表,而是标注在括号里(`-> high, max (disabled: low)`)
-与 OpenCode 实际给出的档位一致。没声明档位的 reasoning 模型会打印
+`model show <name>` 会打印 `reasoning:` 与 `variants: preset '...' -> high, max`——这行列的是
+**声明档位**(渲染时自动静音的内置档位不列出,它们的唯一作用就是被丢掉);你自己写的
+`disabled = true` 档位也不会混进列表,而是标注在括号里(`-> high, max (disabled: low)`)。
+
+`ctrl+t` 的站点比这行多一站:循环走到最后一档后回到**未选档(Default)**状态——不覆盖任何
+档位,请求走 provider 基线(kimi 基线是 `effort = "high"`,即 K3 的默认档,与 Kimi 文档的
+`Default → high` 一致)。所以站点数 = 声明档位数 + 1,Kimi 文档的
+`Default / low / high / max` 就是这么来的。没声明档位的 reasoning 模型会打印
 `<none declared> (OpenCode's built-in tiers apply)`——防止「没有输出」被读成「没有档位」。
 
 **Claude Code 是单槽 agent。** `model add/remove/import` 不碰它的配置;唯一例外——被删除的
@@ -432,11 +437,11 @@ model-switch model align
 
 | catalog 字段 | models.toml |
 | --- | --- |
-| `reasoning_options` 的 `toggle` | 一档 `off = { thinking = { type = "disabled" } }` |
-| `reasoning_options` 的 `effort.values` | 每值一档 `<v> = { effort = "<v>", thinking = { type = "adaptive" } }`（跳过 `none`/`minimal`） |
-| `limit.context` | `context_window` |
+| `reasoning_options` 的 `effort.values` | 每值一档 `<v> = { effort = "<v>", thinking = { type = "adaptive" } }`；`none` 翻成 `none = { thinking = { type = "disabled" } }`（Anthropic 的 effort 枚举没有 `none`，而这正是 Kimi 文档给 `none` 的定义），`minimal` 跳过（没有对应形状，硬翻会名不副实） |
+| `reasoning_options` 的 `toggle` | 不造档位（OpenCode 自己的推导在有 effort 时也丢弃 toggle），想要关思考的档位就手写一档 `off = { thinking = { type = "disabled" } }` |
+| `limit.context` | `context_window`（按模型/套餐的最大值，如 kimi `k3` 是 `1048576`——需要 Pro/Allegretto 及以上套餐，超出套餐的上下文服务端返回 401） |
 | `modalities.input` | `modalities`，剔掉 `video`/`audio`（Anthropic messages 无这两种 part） |
-| 只有 `budget_tokens` 声明 | 不造档位（打印提示，需要就手写） |
+| 只有 `budget_tokens` 或只有 toggle 声明 | 不造档位（打印提示，需要就手写） |
 
 选择哪条 catalog 条目的规则：先按 base_url 的 **host** 收敛（同名模型常挂在几十个
 provider 下且声明互相冲突）；host 匹配剩多条时，只有**推导结果逐字相同**才取字典序第一，

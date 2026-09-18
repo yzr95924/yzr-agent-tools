@@ -153,7 +153,9 @@ def test_pick_pin_wins_even_with_conflicts():
 
 # --- derive --------------------------------------------------------------------
 
-def test_derive_toggle_and_effort_tiers():
+def test_derive_effort_tiers_ignore_toggle():
+    """OpenCode's own derivation emits effort tiers only, dropping the
+    toggle, so we drop it too — a declared toggle must not add a tier."""
     fields = catalog.derive(_entry(
         options=_full_options(),
         limit={"context": 1000000, "output": 131072},
@@ -162,7 +164,6 @@ def test_derive_toggle_and_effort_tiers():
     assert fields["context_window"] == 1000000
     assert fields["reasoning"] is True
     assert fields["variants"] == {
-        "off": {"thinking": {"type": "disabled"}},
         "low": {"effort": "low", "thinking": {"type": "adaptive"}},
         "medium": {"effort": "medium", "thinking": {"type": "adaptive"}},
         "xhigh": {"effort": "xhigh", "thinking": {"type": "adaptive"}},
@@ -172,16 +173,35 @@ def test_derive_toggle_and_effort_tiers():
                                     "output": ["text"]}
 
 
-def test_derive_effort_only_has_no_off_tier():
+def test_derive_effort_only_lists_effort_tiers():
     fields = catalog.derive(_entry(
         options=[{"type": "effort", "values": ["low", "high", "max"]}]))
     assert list(fields["variants"]) == ["low", "high", "max"]
 
 
-def test_derive_skips_none_and_minimal_effort_values():
+def test_derive_none_effort_becomes_thinking_off():
+    """`none` has no Anthropic effort slot, so it is translated to the shape
+    every gateway calls thinking-off — and keeps its name."""
     fields = catalog.derive(_entry(
         options=[{"type": "effort", "values": ["none", "minimal", "low"]}]))
+    assert fields["variants"] == {
+        "none": {"thinking": {"type": "disabled"}},
+        "low": {"effort": "low", "thinking": {"type": "adaptive"}},
+    }
+
+
+def test_derive_skips_minimal_effort_value():
+    fields = catalog.derive(_entry(
+        options=[{"type": "effort", "values": ["minimal", "low"]}]))
     assert list(fields["variants"]) == ["low"]
+
+
+def test_derive_toggle_only_gets_no_tiers():
+    entry = _entry(options=[{"type": "toggle"}])
+    fields = catalog.derive(entry)
+    assert fields["variants"] == {}
+    assert fields["reasoning"] is True
+    assert catalog.no_tiers_declared(entry) is True
 
 
 def test_derive_budget_only_gets_no_tiers():
@@ -189,14 +209,25 @@ def test_derive_budget_only_gets_no_tiers():
     fields = catalog.derive(entry)
     assert fields["variants"] == {}
     assert fields["reasoning"] is True
-    assert catalog.budget_only(entry) is True
+    assert catalog.no_tiers_declared(entry) is True
+
+
+def test_derive_all_skippable_efforts_yield_no_tiers():
+    entry = _entry(options=[{"type": "effort", "values": ["minimal"]}])
+    assert catalog.derive(entry)["variants"] == {}
+    assert catalog.no_tiers_declared(entry) is True
 
 
 def test_derive_without_options_is_not_reasoning():
     fields = catalog.derive(_entry(limit={"context": 8192}))
     assert fields["reasoning"] is False
     assert fields["variants"] == {}
-    assert catalog.budget_only({}) is False
+    assert catalog.no_tiers_declared({}) is False
+
+
+def test_no_tiers_declared_false_when_a_tier_derives():
+    assert catalog.no_tiers_declared(
+        _entry(options=[{"type": "effort", "values": ["minimal", "low"]}])) is False
 
 
 def test_derive_text_only_modalities_stay_undeclared():

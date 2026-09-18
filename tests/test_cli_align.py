@@ -76,7 +76,6 @@ def test_align_updates_inline_fields_and_renders(yzr_paths):
     m = load_models(yzr_paths["models"]).models["m"]
     assert m.context_window == 500000
     assert m.extra["variants"] == {
-        "off": {"thinking": {"type": "disabled"}},
         "low": {"effort": "low", "thinking": {"type": "adaptive"}},
         "medium": {"effort": "medium", "thinking": {"type": "adaptive"}},
     }
@@ -87,7 +86,7 @@ def test_align_updates_inline_fields_and_renders(yzr_paths):
     entry = cfg["provider"]["yzr-fixture"]["models"]["fixture-model"]
     rendered = entry["variants"]
     assert [t for t, body in rendered.items() if not body.get("disabled")] == [
-        "off", "low", "medium"]
+        "low", "medium"]
     assert entry["limit"]["context"] == 500000
     assert entry["modalities"]["input"] == ["text", "image"]
 
@@ -188,7 +187,7 @@ def test_add_derives_fields_from_catalog(yzr_paths):
     m = load_models(yzr_paths["models"]).models["m"]
     assert m.context_window == 500000
     assert m.extra["reasoning"] is True
-    assert list(m.extra["variants"]) == ["off", "low", "medium"]
+    assert list(m.extra["variants"]) == ["low", "medium"]
     assert m.extra["modalities"] == {"input": ["text", "image"], "output": ["text"]}
 
 

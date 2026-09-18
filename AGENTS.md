@@ -182,11 +182,17 @@ OpenCode 遇到标量会拒载整份配置),payload 内容不校验。`variants.
 `api.id`(同值)与 `providerID`(`yzr-<provider>`),**不得靠改 provider 组名规避**——改名会连带
 丢掉 OpenCode 给该上游的请求基线,且 provider id 变化让旧会话的 provider 引用失效。静音词表
 是 1.18.31 的快照(档位名是自由字符串,该常量是补集不是白名单);未知的新档位名退化为不静音。
-详见 README「Effort 档位」。`model show` 的 variants 行就是 ctrl+t 会给出的集合;未声明档位的
-reasoning 模型显式标注内置档位生效。
+详见 README「Effort 档位」。`model show` 的 variants 行列的是声明档位;ctrl+t 的站点是它们再
+加最后回到的未选档 Default(不覆盖档位、走 provider 基线,kimi 基线即 `effort = "high"`);
+未声明档位的 reasoning 模型显式标注内置档位生效。
 
 **catalog 只供参数与档位**:`model add` 向导与 `model align` 能从 catalog 推导的只有
 `context_window` / `reasoning` / `variants` / `modalities`(`catalog.derive` 的全部产出)。
+档位推导跟 OpenCode 自己的规则一致:effort 值每值一档、`toggle` 不造档(OpenCode 的
+`reasoningVariants` 在有 effort 时同样丢弃它)、`none` 翻成 `{thinking:{type:"disabled"}}`
+(Anthropic 的 effort 枚举没有 `none`;该形状即 Kimi 文档对 `none` 的定义,实测有效)、
+`minimal` 跳过。`context_window` 按模型/套餐上限取 catalog 值(kimi `k3` = 1M,需
+Pro/Allegretto+,超出套餐服务端 401)。
 `name`(upstream id)、`base_url`、`api_key` 是模型提供商的约定,同一个模型在不同 provider
 下拼法不同(缓存里 `GLM-5.2` 有 21 种拼法),**任何路径都不得从 catalog 推断 id**:向导选中后
 把 id 预填成该行的拼法但显式问一次(`_prompt_upstream_id`,可改、首尾空白 strip),脚本侧

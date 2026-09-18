@@ -883,8 +883,8 @@ def _derive_or_report(model_name: str, base_url: str,
     fields = catalog.derive(picked.candidate.entry)
     print("catalog: {} ({}) — filled {}".format(
         picked.candidate.provider, desc, _describe_fields(fields)))
-    if catalog.budget_only(picked.candidate.entry):
-        print("  note: only budget_tokens declared — no tiers derived; "
+    if catalog.no_tiers_declared(picked.candidate.entry):
+        print("  note: declared options yield no tiers; "
               "write them by hand if needed")
     return fields
 
@@ -967,8 +967,8 @@ def _do_model_align(args: argparse.Namespace) -> int:
             elif model.extra.get(VARIANTS_KEY) != fields["variants"]:
                 changes.append("variants[{}]".format(",".join(fields["variants"])))
                 model.extra[VARIANTS_KEY] = fields["variants"]
-        elif catalog.budget_only(picked.candidate.entry):
-            notes.append("only budget_tokens declared — no tiers derived")
+        elif catalog.no_tiers_declared(picked.candidate.entry):
+            notes.append("declared options yield no tiers")
 
         if changes:
             changed += 1
