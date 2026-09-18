@@ -202,6 +202,12 @@ def test_wizard_picks_from_catalog_and_derives_fields(catalog):
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
     assert "decoy" not in result.stdout
+    # The summary must mirror the entry that gets written.
+    assert "About to add 'glm-4.7'" in result.stdout
+    assert "context window  1M" in result.stdout
+    assert "reasoning       yes" in result.stdout
+    assert "variants        low, high" in result.stdout
+    assert "modalities      text+image" in result.stdout
     m = load_models(catalog["models"]).models["glm-4.7"]
     assert m.name == "glm-4.7"
     assert m.base_url == ZAI_BASE

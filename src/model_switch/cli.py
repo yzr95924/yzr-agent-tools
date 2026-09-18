@@ -63,10 +63,15 @@ def _die(message) -> NoReturn:
     """Print ``Error: <message>`` to stderr and exit 1.
 
     The single failure path for user errors (see the module docstring's exit
-    codes); ``message`` may be an exception or a plain string.
+    codes); ``message`` may be an exception or a plain string. Delegates the
+    actual stop to `ui.abort` so every abort shares one channel.
     """
-    print(f"Error: {message}", file=sys.stderr)
-    sys.exit(1)
+    ui.abort(f"Error: {message}")
+
+
+def _interactive(args: argparse.Namespace) -> bool:
+    """True when we may prompt: a TTY and no blanket ``--yes``."""
+    return sys.stdin.isatty() and not args.yes
 
 
 def _resolve_driver(name: Optional[str]):
@@ -103,10 +108,15 @@ def _resolve_drivers(args) -> list:
         # Enter switches every agent at once (the common case: you want the
         # new model everywhere). Name a subset to scope it, e.g. "claude-code".
         print(f"Available drivers: {', '.join(available)}")
-        raw = input(
-            "Apply to which driver(s)? "
-            "(comma-separated, 'all' or Enter for all): "
-        ).strip()
+        try:
+            raw = input(
+                "Apply to which driver(s)? "
+                "(comma-separated, 'all' or Enter for all): "
+            ).strip()
+        except EOFError:
+            # Ctrl-D, or a piped session that ran out of answers: treat it
+            # like Enter — the documented default — instead of a traceback.
+            raw = ""
         if not raw or raw.lower() == "all":
             return [_resolve_driver(n) for n in available]
         names = [n.strip() for n in raw.split(",") if n.strip()]
@@ -216,18 +226,19 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
             return None
         _die(f"{label!r} is required (no TTY for interactive prompt). "
              f"Pass it as a flag.")
-    try:
-        line = input(f"{label}{suffix}: ")
-    except EOFError:
-        # Stream ran out (e.g. test piped fewer answers than prompts):
-        # fall back to the default if there's one, else fail clearly.
-        if default is not None:
-            return default
-        if optional:
-            return None
-        _die(f"{label!r} is required (input exhausted). "
-             f"Pass it as a flag.")
+    prompt_text = f"{label}{suffix}: "
     while True:
+        try:
+            line = input(prompt_text)
+        except EOFError:
+            # Stream ran out (e.g. test piped fewer answers than prompts):
+            # fall back to the default if there's one, else fail clearly.
+            if default is not None:
+                return default
+            if optional:
+                return None
+            _die(f"{label!r} is required (input exhausted). "
+                 f"Pass it as a flag.")
         if line == "":
             if default is not None:
                 return default
@@ -239,15 +250,7 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
         except ValueError:
             # Bad type (e.g. "abc" for a token count) must re-ask, not
             # traceback mid-wizard.
-            try:
-                line = input(f"  {type_.__name__} expected — try again: ")
-            except EOFError:
-                if default is not None:
-                    return default
-                if optional:
-                    return None
-                _die(f"{label!r} is required (input exhausted). "
-                     f"Pass it as a flag.")
+            prompt_text = f"  {type_.__name__} expected — try again: "
 
 
 def _prompt_secret(label: str) -> str:
@@ -426,23 +429,63 @@ def _do_model_add(args: argparse.Namespace) -> None:
     picked = None
     if (not args.no_catalog and args.model_name is None
             and args.catalog_provider is None):
-        picked = _pick_catalog_entry(base_url)
-    if picked is not None:
-        model_name = picked.model
-        derived = catalog.derive(picked.entry)
-    else:
-        model_name = args.model_name or _prompt(
-            "Model identifier (bare id, no context suffix)", default=args.name,
-        )
-        derived = _derive_or_report(model_name, base_url,
-                                    args.catalog_provider, args.no_catalog)
+        picked = _pick_catalog_model(base_url)
+    model_name, derived = _choose_upstream(args, base_url, picked)
+    name, replacing = _choose_local_name(args, reg, picked, model_name)
+    context_window, description = _collect_optional_fields(args, derived)
 
+    # Build the entry before asking: the summary then *is* what gets written,
+    # not a second assembly of the same fields that could drift from it.
+    entry = ModelEntry(
+        model_id=name,
+        name=model_name,
+        base_url=base_url,
+        api_key=api_key,
+        context_window=context_window,
+        description=description,
+        extra=_build_extra(derived, args.provider),
+    )
+
+    if _interactive(args):
+        _print_add_summary(entry, replacing)
+        if not ui.confirm("Proceed?", default=True):
+            ui.abort("Aborted — nothing written.")
+
+    _save_and_report(reg, entry, replacing)
+
+
+def _choose_upstream(args: argparse.Namespace, base_url: str,
+                     picked: Optional[catalog.Row]):
+    """Resolve ``(model_name, derived_fields)`` from the pick or from flags."""
+    if picked is not None:
+        return picked.model, catalog.derive(picked.entry)
+    model_name = args.model_name or _prompt(
+        "Model identifier (bare id, no context suffix)", default=args.name,
+    )
+    return model_name, _derive_or_report(model_name, base_url,
+                                         args.catalog_provider, args.no_catalog)
+
+
+def _choose_local_name(args: argparse.Namespace, reg: Registry,
+                       picked: Optional[catalog.Row], model_name: str):
+    """Prompt for the local name when it was not given, then gate overwrites.
+
+    Returns ``(name, replacing)``.
+    """
     name = args.name
     if name is None:
-        name = _prompt("Local name",
-                       default=picked.model if picked is not None else model_name)
-    name, replacing = _resolve_add_name(name, reg, args.yes)
+        name = _prompt(
+            "Local name",
+            default=picked.model if picked is not None else model_name,
+        )
+    return _resolve_add_name(name, reg, args.yes)
 
+
+def _collect_optional_fields(args: argparse.Namespace, derived: Dict[str, Any]):
+    """Prompt for the optional context window and description.
+
+    Returns ``(context_window, description)``; both may be None.
+    """
     if args.context_window is not None:
         context_window = args.context_window
     else:
@@ -453,42 +496,36 @@ def _do_model_add(args: argparse.Namespace) -> None:
     description = args.description
     if not description:
         description = _prompt("Description", optional=True)
+    return context_window, description
 
+
+def _save_and_report(reg: Registry, entry: ModelEntry, replacing: bool) -> None:
+    """Persist the entry, mirror the catalog and report what happened."""
+    reg.models[entry.model_id] = entry
+    save_models(paths.models_file(), reg)
+    # Mirror the catalog so the new model is immediately available in agents
+    # that hold one (OpenCode's picker). Single-slot agents (claude-code) are
+    # untouched until the next `model use`.
+    _sync_catalog(reg)
+    print(f"{'Replaced' if replacing else 'Added'} model {entry.model_id!r}.")
+    if replacing and load_state(paths.state_file()).active_main == entry.model_id:
+        print(f"  note: {entry.model_id!r} is the active model — run "
+              f"`model-switch model use {entry.model_id}` to re-apply it to "
+              f"your agents.")
+
+
+def _build_extra(derived: Dict[str, Any], provider: Optional[str]) -> dict:
+    """Assemble the passthrough fields the drivers render from `derived`."""
     extra = {}
-    if args.provider:
-        extra["provider"] = args.provider
+    if provider:
+        extra["provider"] = provider
     if derived.get("reasoning"):
         extra["reasoning"] = True
     if derived.get("variants"):
         extra["variants"] = derived["variants"]
     if derived.get("modalities"):
         extra["modalities"] = derived["modalities"]
-
-    if sys.stdin.isatty() and not args.yes:
-        _print_add_summary(name, model_name, base_url, context_window, extra,
-                           replacing)
-        if not ui.confirm("Proceed?", default=True):
-            print("Aborted — nothing written.")
-            sys.exit(1)
-
-    reg.models[name] = ModelEntry(
-        model_id=name,
-        name=model_name,
-        base_url=base_url,
-        api_key=api_key,
-        context_window=context_window,
-        description=description,
-        extra=extra,
-    )
-    save_models(paths.models_file(), reg)
-    # Mirror the catalog so the new model is immediately available in agents
-    # that hold one (OpenCode's picker). Single-slot agents (claude-code) are
-    # untouched until the next `model use`.
-    _sync_catalog(reg)
-    print(f"{'Replaced' if replacing else 'Added'} model {name!r}.")
-    if replacing and load_state(paths.state_file()).active_main == name:
-        print(f"  note: {name!r} is the active model — run "
-              f"`model-switch model use {name}` to re-apply it to your agents.")
+    return extra
 
 
 def _resolve_add_name(name: str, reg: Registry, assume_yes: bool):
@@ -513,7 +550,7 @@ def _resolve_add_name(name: str, reg: Registry, assume_yes: bool):
         name = _prompt("Local name")
 
 
-def _pick_catalog_entry(base_url: str) -> Optional[catalog.Row]:
+def _pick_catalog_model(base_url: str) -> Optional[catalog.Row]:
     """Pick the upstream model from the catalog cache (TTY only).
 
     Returns the picked `catalog.Row`, or None to fall back to typing the id
@@ -537,7 +574,9 @@ def _pick_catalog_entry(base_url: str) -> Optional[catalog.Row]:
                      "hand): ").strip()
         if raw.lower() == "skip":
             return None
-        rows = catalog.search(data, raw, host=host)
+        # Empty query = list everything on this host — reuse the scan already
+        # done for the header instead of filtering the cache again.
+        rows = host_rows if raw == "" else catalog.search(data, raw, host=host)
         if not rows:
             print(f"  no catalog entry on {host} matches {raw!r} — try again "
                   f"or 'skip'")
@@ -570,23 +609,27 @@ def _render_catalog_row(row: catalog.Row) -> str:
     return "  ".join(bits)
 
 
-def _print_add_summary(name, model_name, base_url, context_window, extra,
-                       replacing) -> None:
-    """Show exactly what is about to be written before asking to proceed."""
+def _print_add_summary(entry: ModelEntry, replacing: bool) -> None:
+    """Show exactly what is about to be written before asking to proceed.
+
+    Reads from the ``ModelEntry`` itself — the printed fields cannot drift
+    from what gets saved.
+    """
     print("")
-    print(f"About to add {name!r}{' (replaces existing)' if replacing else ''}:")
-    print(f"  upstream id     {model_name}")
-    print(f"  base URL        {base_url}")
-    if context_window:
-        print(f"  context window  {_format_context(context_window)}")
-    if extra.get("reasoning"):
+    print(f"About to add {entry.model_id!r}"
+          f"{' (replaces existing)' if replacing else ''}:")
+    print(f"  upstream id     {entry.name}")
+    print(f"  base URL        {entry.base_url}")
+    if entry.context_window:
+        print(f"  context window  {_format_context(entry.context_window)}")
+    if entry.extra.get("reasoning"):
         print("  reasoning       yes")
-    if extra.get("variants"):
-        print("  variants        " + ", ".join(extra["variants"]))
-    if extra.get("modalities"):
-        print("  modalities      " + "+".join(extra["modalities"]["input"]))
-    if extra.get("provider"):
-        print(f"  provider group  {extra['provider']}")
+    if entry.extra.get("variants"):
+        print("  variants        " + ", ".join(entry.extra["variants"]))
+    if entry.extra.get("modalities"):
+        print("  modalities      " + "+".join(entry.extra["modalities"]["input"]))
+    if entry.extra.get("provider"):
+        print(f"  provider group  {entry.extra['provider']}")
 
 
 def _derive_or_report(model_name: str, base_url: str,
@@ -791,12 +834,11 @@ def _do_model_list() -> None:
         )
 
 
-def _pick_configured_model() -> str:
+def _pick_configured_model(reg: Registry) -> str:
     """Numbered picker over the configured models (TTY only)."""
-    reg = load_models(paths.models_file())
-    state = load_state(paths.state_file())
     if not reg.models:
         _die("no models configured — run `model-switch model add` first.")
+    state = load_state(paths.state_file())
 
     def render(n):
         m = reg.models[n]
@@ -809,18 +851,19 @@ def _pick_configured_model() -> str:
     return names[ui.pick_one("Configured models:", names, render)]
 
 
-def _resolve_model_arg(name: Optional[str]) -> str:
+def _resolve_model_arg(name: Optional[str], reg: Registry) -> str:
     """`name`, or the interactive picker when omitted (never blocks non-TTY)."""
     if name is not None:
         return name
     if not sys.stdin.isatty():
         _die("model name is required (no TTY for the picker) — pass it as an "
              "argument.")
-    return _pick_configured_model()
+    return _pick_configured_model(reg)
 
 
-def _do_model_show(name: str) -> None:
+def _do_model_show(args: argparse.Namespace) -> None:
     reg = load_models(paths.models_file())
+    name = _resolve_model_arg(args.name, reg)
     if name not in reg.models:
         _die(f"model {name!r} not found.")
     m = reg.models[name]
@@ -860,16 +903,15 @@ def _do_model_show(name: str) -> None:
 
 
 def _do_model_remove(args: argparse.Namespace) -> None:
-    name = _resolve_model_arg(args.name)
     reg = load_models(paths.models_file())
+    name = _resolve_model_arg(args.name, reg)
     if name not in reg.models:
         _die(f"model {name!r} not found.")
-    if sys.stdin.isatty() and not args.yes:
+    if _interactive(args):
         m = reg.models[name]
         if not ui.confirm(f"Remove model {name!r} (upstream id {m.name})?",
                           default=False):
-            print("Aborted — nothing removed.")
-            sys.exit(1)
+            ui.abort("Aborted — nothing removed.")
     del reg.models[name]
     save_models(paths.models_file(), reg)
     # Reconcile the catalog (removed model's provider + key vanish from
@@ -880,8 +922,8 @@ def _do_model_remove(args: argparse.Namespace) -> None:
 
 
 def _do_model_use(args: argparse.Namespace) -> None:
-    name = _resolve_model_arg(args.name)
     reg = load_models(paths.models_file())
+    name = _resolve_model_arg(args.name, reg)
     if name not in reg.models:
         _die(f"model {name!r} not found.")
 
@@ -1011,8 +1053,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except KeyboardInterrupt:
         # A wizard interrupted mid-question must not print a traceback and,
         # more importantly, must not have written anything yet.
-        print("Aborted.", file=sys.stderr)
-        return 130
+        ui.abort("Aborted.", code=130)
 
 
 def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -1025,7 +1066,7 @@ def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         elif args.model_action == "list":
             _do_model_list()
         elif args.model_action == "show":
-            _do_model_show(_resolve_model_arg(args.name))
+            _do_model_show(args)
         elif args.model_action == "remove":
             _do_model_remove(args)
         elif args.model_action == "use":

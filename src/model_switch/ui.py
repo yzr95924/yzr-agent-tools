@@ -2,8 +2,8 @@
 
 Plain line-based `input()` prompts — no termios, no curses — mirroring
 mcp-plugin-mgr's interaction style: usable over ssh, inside pipes and under
-test. Menus never block a script: `pick_one` fails fast on a non-TTY stdin so
-the caller must pass the equivalent argument instead.
+test. Menus and confirmations never block a script: they fail fast on a
+non-TTY stdin, so the caller must pass the equivalent argument instead.
 
 Selections abort on EOF (a piped session ran out of answers) before anything
 is written, so a half-answered wizard can never leave a partial config.
@@ -16,9 +16,19 @@ from typing import Any, Callable, List, NoReturn, Optional, Sequence
 MENU_MAX = 20
 
 
+def abort(message: str, code: int = 1) -> NoReturn:
+    """Print ``message`` to stderr and exit — the single abort path.
+
+    Every user-facing stop (bad input, a stream that ran out, a declined
+    confirmation) goes through here, so exit codes and message shape stay
+    uniform across the CLI and this module.
+    """
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
 def _fail(message) -> NoReturn:
-    print("Error: {}".format(message), file=sys.stderr)
-    sys.exit(1)
+    abort("Error: {}".format(message))
 
 
 def ask(prompt: str) -> str:
@@ -45,6 +55,9 @@ def pick_one(title: str, items: Sequence[Any], render: Callable[[Any], str],
     if not items:
         _fail("nothing to pick from.")
     shown: List[Any] = list(items)[:MENU_MAX]
+    if default is not None and not 0 <= default < len(shown):
+        _fail("default index {} is out of range (menu shows {} row(s))".format(
+            default, len(shown)))
     if title:
         print(title)
     width = len(str(len(shown)))
@@ -64,19 +77,22 @@ def pick_one(title: str, items: Sequence[Any], render: Callable[[Any], str],
             return None
         if raw.isdigit() and 1 <= int(raw) <= len(shown):
             return int(raw) - 1
-        print("  Enter a number between 1 and {}{}.".format(
-            len(shown), " or 'b'" if allow_back else ""))
+        extras = " or 'b'" if allow_back else ""
+        if hidden:
+            extras += " — {} hidden row(s), narrow the search".format(hidden)
+        print("  Enter a number between 1 and {}{}.".format(len(shown), extras))
 
 
 def confirm(question: str, *, default: bool = True) -> bool:
     """Ask a yes/no question; Enter takes ``default``.
 
-    Non-TTY returns ``default`` without reading, matching `_prompt`'s
-    non-interactive discipline. Callers gate on ``--yes`` / isatty when a
-    silent default would be wrong.
+    TTY-only: callers decide *whether* to ask (the CLI gates on its ``--yes``
+    flag and non-interactive discipline) — a confirmation must never be
+    answered silently on someone's behalf.
     """
     if not sys.stdin.isatty():
-        return default
+        _fail("a confirmation needs a TTY — pass --yes to answer it in "
+              "advance.")
     suffix = " [Y/n]: " if default else " [y/N]: "
     while True:
         raw = ask("{}{}".format(question, suffix)).strip().lower()

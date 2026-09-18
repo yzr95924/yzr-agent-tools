@@ -71,8 +71,18 @@ def test_pick_one_rejects_hidden_rows(monkeypatch, capsys):
     _stdin(monkeypatch, "{}\n1\n".format(ui.MENU_MAX + 1))
     items = [str(i) for i in range(ui.MENU_MAX + 3)]
     assert ui.pick_one("Many:", items, str) == 0
-    assert "Enter a number between 1 and {}".format(ui.MENU_MAX) \
-        in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Enter a number between 1 and {}".format(ui.MENU_MAX) in out
+    assert "hidden row(s), narrow the search" in out
+
+
+def test_pick_one_rejects_an_out_of_range_default(monkeypatch, capsys):
+    """A default must land on a shown row — otherwise Enter returns an index
+    the caller cannot map back."""
+    _stdin(monkeypatch, "\n")
+    with pytest.raises(SystemExit):
+        ui.pick_one("Models:", ["a"], str, default=5)
+    assert "default index 5" in capsys.readouterr().err
 
 
 def test_pick_one_empty_list_fails(monkeypatch, capsys):
@@ -124,7 +134,9 @@ def test_confirm_reprompts_on_garbage(monkeypatch, capsys):
     assert "answer 'y' or 'n'" in capsys.readouterr().out
 
 
-def test_confirm_non_tty_returns_the_default(monkeypatch):
+def test_confirm_non_tty_fails(monkeypatch, capsys):
+    """A confirmation is never answered silently on the user's behalf."""
     _stdin(monkeypatch, "", tty=False)
-    assert ui.confirm("Ok?", default=False) is False
-    assert ui.confirm("Ok?", default=True) is True
+    with pytest.raises(SystemExit):
+        ui.confirm("Ok?", default=False)
+    assert "needs a TTY" in capsys.readouterr().err

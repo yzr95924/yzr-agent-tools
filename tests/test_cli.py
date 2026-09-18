@@ -420,3 +420,18 @@ def test_add_without_flags_non_tty_fails_cleanly(yzr_paths):
     result = runner(["model", "add"])
     assert result.exit_code != 0
     assert "no TTY" in result.stdout
+
+
+def test_model_use_eof_at_driver_prompt_applies_all(yzr_paths):
+    """A stream that ran out (or Ctrl-D) at the driver prompt behaves like
+    Enter — every driver — instead of raising EOFError."""
+    runner([
+        "model", "add", "glm-z1",
+        "--base-url", "https://api.example.com",
+        "--api-key", "K", "--model-name", "glm-4",
+    ])
+    result = runner(["model", "use", "glm-z1"], input="")  # EOF at driver prompt
+    assert result.exit_code == 0, result.stdout
+    assert "Traceback" not in result.stdout
+    assert yzr_paths["settings"].exists()
+    assert yzr_paths["opencode"].exists()

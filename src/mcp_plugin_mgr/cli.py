@@ -83,10 +83,15 @@ def _resolve_drivers(args) -> list:
         return [_resolve_driver(args.driver_name)]
     if sys.stdin.isatty() and available:
         print("Available drivers: {}".format(", ".join(available)))
-        raw = input(
-            "Apply to which driver(s)? "
-            "(comma-separated, 'all' or Enter for all): "
-        ).strip()
+        try:
+            raw = input(
+                "Apply to which driver(s)? "
+                "(comma-separated, 'all' or Enter for all): "
+            ).strip()
+        except EOFError:
+            # Ctrl-D, or a piped session that ran out of answers: treat it
+            # like Enter — the documented default — instead of a traceback.
+            raw = ""
         if not raw or raw.lower() == "all":
             return [_resolve_driver(n) for n in available]
         names = [n.strip() for n in raw.split(",") if n.strip()]

@@ -393,3 +393,15 @@ def test_complete_presets():
     r = run(["_complete", "presets"])
     assert r.exit_code == 0
     assert "outline" in r.stdout.split()
+
+
+def test_add_eof_at_driver_prompt_applies_all():
+    """A stream that ran out (or Ctrl-D) at the driver prompt behaves like
+    Enter — every driver — instead of raising EOFError."""
+    r = run(["add", "outline", "--url", "https://my/mcp", "--token", "tok"],
+            input="")
+    assert r.exit_code == 0, r.stdout
+    assert "Traceback" not in r.stdout
+    for p in (paths.claude_json_file(), paths.opencode_config_file(),
+              paths.qoder_settings_file()):
+        assert "outline" in p.read_text()
