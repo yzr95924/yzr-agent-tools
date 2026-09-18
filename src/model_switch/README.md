@@ -56,8 +56,9 @@ rc 块。脚本本体在 `completions/`,想自己接也可以。
 
 ```bash
 # 1. 注册一个模型 —— API key 以明文形式存在 models.toml 里。
-#    不带参数就是向导:只需粘 base URL 和 key,其余从 OpenCode 的 catalog
-#    缓存里按 host 列成编号菜单,选个数字、回车确认即可。
+#    不带参数就是向导:粘 base URL 和 key,再从 OpenCode 的 catalog 缓存里按 host
+#    列成编号菜单选模型(参数和档位从选中的条目派生)。upstream id 由你确认 ——
+#    同一个模型各家拼法不同,回车采纳目录里的拼法,你的端点要别的就输入。
 model-switch model add
 #   Upstream API base URL: https://api.z.ai/api/anthropic
 #   API key: sk-...
@@ -66,6 +67,7 @@ model-switch model add
 #     1) zai/glm-4.7  GLM-4.7  ctx 200K
 #     2) zai/glm-5.3  GLM-5.3  ctx 1M  tiers[low,high,max]  text+image
 #   Pick a number [1] ('b' = back): 2
+#   Upstream model id your endpoint expects (the pick is zai's spelling) [glm-5.3]:
 #   Local name [glm-5.3]:
 #   Context window in tokens (press Enter to skip) [1000000]:
 #   Description (optional):
@@ -148,10 +150,18 @@ model-switch status [--driver NAME] [--all-drivers]
   手打 model id 的旧流程。菜单最多显示 20 行,超出时提示缩小搜索。base_url 里没有 host
   (例如漏写 `https://`)时直接不进入选择器——无 host 可限定,选择器会把整个 catalog 当成你
   的上游列出来,不如回落到手打。
+- **catalog 只供参数与档位,id 永远由你确认**:`catalog.derive` 只产出 context window /
+  reasoning / 档位 / modalities;upstream id、base_url、api_key 是模型提供商的约定,同一个
+  模型在不同 provider 下拼法不同(当前缓存里 `GLM-5.2` 有 21 种拼法,`Kimi K3` 有 15 种),
+  无法从 catalog 推断。向导选中后把 id 预填成该行的拼法(回车采纳),你的端点要别的就输入,
+  首尾空白会被去掉。id 会原样写进 `ANTHROPIC_MODEL` 与 OpenCode 的 model 指针,填错的表现
+  是每次请求都 model not found。脚本侧对应 `--model-name`(给了它就跳过选择器,参数靠
+  `--catalog-provider` / 缓存查找);`model align` 也只更新那几类参数,从不碰 id。
 - **`all <关键词>` 放宽搜索范围**:在搜索提示处用 `all` 开头即对**全 catalog**搜索,不限
   host。宽搜结果里 host 匹配的行排在前(菜单只有 20 行,字典序会把你在配的上游挤掉),其
   余行标 `[other host]`;选中非本上游的行时打印一行 note,提示 context window 与
-  modalities 是那个 provider 的声明、未必适用于你的上游。`all` 后面必须带关键词——全
+  modalities 是那个 provider 的声明、未必适用于你的上游,**id 的拼法同理**——下一问默认填
+  的就是那一行的拼法,记得改成你端点认的。`all` 后面必须带关键词——全
   catalog 有几千条,列不完。默认 host 范围搜不到时,提示也会指向 `all <term>`。
   `skip` / `all` 都只匹配**首个 token**,所以 `skip-connections`、`allam-2-7b` 之类照常搜索。
 

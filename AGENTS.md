@@ -174,6 +174,14 @@ src/
 OpenCode 遇到标量会拒载整份配置),payload 内容不校验。`variants.py` 与 `drivers/opencode.py`
 的代码里不得出现模型/网关名(档位是数据不是特判;`test_variants.py` 有 AST 守卫)。
 
+**catalog 只供参数与档位**:`model add` 向导与 `model align` 能从 catalog 推导的只有
+`context_window` / `reasoning` / `variants` / `modalities`(`catalog.derive` 的全部产出)。
+`name`(upstream id)、`base_url`、`api_key` 是模型提供商的约定,同一个模型在不同 provider
+下拼法不同(缓存里 `GLM-5.2` 有 21 种拼法),**任何路径都不得从 catalog 推断 id**:向导选中后
+把 id 预填成该行的拼法但显式问一次(`_prompt_upstream_id`,可改、首尾空白 strip),脚本侧
+则是 `--model-name`。id 会原样进 `ANTHROPIC_MODEL` 与 OpenCode 的 model 指针,推断错的表现
+是每次请求都 model not found。`model align` 只更新那几类参数、从不碰 id。
+
 **Catalog 变更即同步**:`model add/remove/import` 也写 agent 配置(不只 `use`),保证
 `models.toml` 变更后任何 agent 配置里都不存在已删除模型的 key——opencode 靠全量 reconcile
 (删 `yzr-*` 命名空间里不在 registry 的 provider,含旧版裸 `yzr`,天然迁移),claude-code 靠

@@ -188,14 +188,16 @@ def test_add_prompts_for_all_when_nothing_provided(yzr_paths):
 # --- catalog wizard ----------------------------------------------------------
 
 def test_wizard_picks_from_catalog_and_derives_fields(catalog):
-    """Paste URL + key, then a search word and a number: the upstream id and
-    every derivable field come from the picker, nothing is typed."""
+    """Paste URL + key, then a search word and a number: every derivable
+    field comes from the picker, and the upstream id is pre-filled with the
+    catalog's spelling — Enter keeps it, since the id is asked, not guessed."""
     result = runner(["model", "add"], input="\n".join([
         ZAI_BASE,   # base URL
         "K",        # API key
         "glm",      # search
         "1",        # → zai/glm-4.7 (glm-4.7 sorts first)
-        "",         # local name = picked id
+        "",         # upstream id = the picked spelling
+        "",         # local name = resolved id
         "",         # context window = catalog default
         "",         # description (skip)
         "y",        # Proceed?
@@ -219,6 +221,51 @@ def test_wizard_picks_from_catalog_and_derives_fields(catalog):
                                      "output": ["text"]}
 
 
+def test_wizard_edited_upstream_id_carries_into_the_local_name(catalog):
+    """The pick pre-fills the id but does not decide it: every provider spells
+    the same model differently, so the typed id wins — and the local-name
+    default follows it rather than the catalog's spelling."""
+    result = runner(["model", "add"], input="\n".join([
+        ZAI_BASE, "K",
+        "glm-5",                  # 1 match
+        "1",                      # → zai/glm-5.3
+        "my-gateway/glm-5.3",     # the endpoint's own spelling
+        "",                       # local name = the edited id
+        "", "",                   # context window, description
+        "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert "Local name [my-gateway/glm-5.3]" in result.stdout
+    m = load_models(catalog["models"]).models["my-gateway/glm-5.3"]
+    assert m.name == "my-gateway/glm-5.3"
+    assert m.context_window == 1000000  # catalog fields still applied
+
+
+def test_wizard_strips_the_typed_upstream_id(catalog):
+    """A pasted id with stray whitespace must not become a broken
+    ANTHROPIC_MODEL."""
+    result = runner(["model", "add", "demo"], input="\n".join([
+        ZAI_BASE, "K",
+        "glm-5", "1",
+        "  glm-5.3-edit  ",
+        "", "",                   # context window, description
+        "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert load_models(catalog["models"]).models["demo"].name == "glm-5.3-edit"
+
+
+def test_add_strips_a_flagged_upstream_id(yzr_paths):
+    """Same for `--model-name`: the id lands verbatim in agent configs."""
+    result = runner([
+        "model", "add", "demo",
+        "--base-url", "https://x", "--api-key", "K",
+        "--model-name", "  glm-5.3  ",
+    ])
+    assert result.exit_code == 0, result.stdout
+    assert load_models(yzr_paths["models"]).models["demo"].name == "glm-5.3"
+
+
 def test_wizard_back_refines_the_search(catalog):
     """'b' at the picker returns to the search prompt (first query matches
     two rows, the refined one matches a single row)."""
@@ -228,7 +275,7 @@ def test_wizard_back_refines_the_search(catalog):
         "b",            # back — refine
         "glm-5",        # 1 match
         "1",            # → zai/glm-5.3
-        "", "", "",     # name / ctx / description defaults
+        "", "", "", "", # id / name / ctx / description defaults
         "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
@@ -260,7 +307,7 @@ def test_wizard_no_match_reprompts_the_search(catalog):
         "nope",      # no match → re-prompt
         "glm-5.3",   # 1 match
         "1",
-        "", "", "",
+        "", "", "", "",
         "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
@@ -594,12 +641,12 @@ def test_wizard_all_widens_to_other_providers(catalog):
         ZAI_BASE, "K",
         "all glm",   # widen: 2 host matches + 1 foreign
         "3",         # → decoy/glm-5.3 (last, after the host matches)
-        "", "", "y",
+        "", "", "", "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
     assert "decoy/glm-5.3" in result.stdout
     assert "[other host]" in result.stdout
-    assert "note: fields come from decoy" in result.stdout
+    assert "note: fields and id come from decoy" in result.stdout
     m = load_models(catalog["models"]).models["demo"]
     assert m.name == "glm-5.3"
     # The entry keeps the pasted upstream — only the derived fields came
@@ -612,7 +659,7 @@ def test_wizard_all_ranks_host_matches_first(catalog):
         ZAI_BASE, "K",
         "all glm",
         "1",         # zai/glm-4.7 — a host match sorts first
-        "", "", "y",
+        "", "", "", "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
     out = result.stdout
@@ -620,7 +667,7 @@ def test_wizard_all_ranks_host_matches_first(catalog):
         < out.index("decoy/glm-5.3")
     # Only the foreign row carries the tag, and a host pick is not warned about.
     assert out.count("[other host]") == 1
-    assert "note: fields come from" not in out
+    assert "note: fields and id come from" not in out
     assert load_models(catalog["models"]).models["demo"].name == "glm-4.7"
 
 
@@ -629,7 +676,7 @@ def test_wizard_all_without_a_term_reprompts(catalog):
         ZAI_BASE, "K",
         "all",       # no term — hint, then stay in the loop
         "glm", "1",  # host-scoped search still works
-        "", "", "y",
+        "", "", "", "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
     assert "'all' needs a search term" in result.stdout
@@ -641,7 +688,7 @@ def test_wizard_all_no_match_reprompts(catalog):
         ZAI_BASE, "K",
         "all zzz",
         "glm", "1",
-        "", "", "y",
+        "", "", "", "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
     assert "no catalog entry matches 'zzz' on any provider" in result.stdout
@@ -653,7 +700,7 @@ def test_wizard_host_miss_points_at_the_wide_search(catalog):
         ZAI_BASE, "K",
         "zzz",       # nothing on this host → the hint must offer 'all'
         "glm", "1",
-        "", "", "y",
+        "", "", "", "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
     assert "no catalog entry on api.z.ai matches 'zzz'" in result.stdout
@@ -668,7 +715,7 @@ def test_wizard_unknown_host_can_still_search_every_provider(catalog):
         "",          # Enter at a 0-row host → hint to widen
         "all glm",
         "1",         # no host matches → decoy sorts first (decoy < zai)
-        "", "", "y",
+        "", "", "", "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
     assert "0 model(s) on unknown.example" in result.stdout

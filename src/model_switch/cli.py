@@ -417,12 +417,12 @@ def _do_model_add(args: argparse.Namespace) -> None:
     """Add (or replace) a model definition.
 
     A wizard when stdin is a TTY: base URL and API key are pasted, then the
-    upstream id and every derivable field come from a numbered picker over
-    OpenCode's catalog cache. Any flag pre-answers its prompt, so a fully
-    flagged invocation stays script-safe — nothing is asked or confirmed.
-    Fields the cache can supply (context window, reasoning, variant tiers,
-    modalities) are derived from it; `--no-catalog` opts out,
-    `--catalog-provider` pins the provider entry when several match.
+    catalog picker fills every derivable field (context window, reasoning,
+    variant tiers, modalities) and pre-fills the upstream id — which the user
+    confirms, since only they know their endpoint's spelling. Any flag
+    pre-answers its prompt, so a fully flagged invocation stays script-safe.
+    `--no-catalog` opts out, `--catalog-provider` pins the provider entry
+    when several match.
 
     The provider group is asked about only when an existing model on the
     same base_url + api_key already declares one — see `_resolve_provider`.
@@ -433,14 +433,13 @@ def _do_model_add(args: argparse.Namespace) -> None:
     api_key = args.api_key or _prompt_secret("API key")
     provider = _resolve_provider(args, reg, base_url, api_key)
 
-    # An explicit `--model-name` / `--catalog-provider` means the model is
-    # already determined: keep the pre-wizard derivation path untouched.
+    # Explicit flags mean the model is already determined — no picker.
     picked = None
     if (not args.no_catalog and args.model_name is None
             and args.catalog_provider is None):
         picked = _pick_catalog_model(base_url)
     model_name, derived = _choose_upstream(args, base_url, picked)
-    name, replacing = _choose_local_name(args, reg, picked, model_name)
+    name, replacing = _choose_local_name(args, reg, model_name)
     if provider is None:
         _note_declined_group(reg, base_url, api_key, name)
     context_window, description = _collect_optional_fields(args, derived)
@@ -465,30 +464,62 @@ def _do_model_add(args: argparse.Namespace) -> None:
     _save_and_report(reg, entry, replacing)
 
 
+def _prompt_upstream_id(default: Optional[str],
+                        source: Optional[str] = None) -> str:
+    """Ask which id the *upstream endpoint* expects.
+
+    The catalog can only speak to a model's parameters: its rows are keyed by
+    whichever provider published them, and every provider spells the same
+    model differently (the current cache lists 21 spellings for ``GLM-5.2``
+    across 76 provider entries). A pick therefore only pre-fills the id —
+    what is typed here is what lands in ``ANTHROPIC_MODEL`` / OpenCode's
+    model pointer, and only the user knows their endpoint's convention.
+    Whitespace is stripped: a pasted id with a trailing space is silently
+    not the id the endpoint expects.
+    """
+    if source is not None:
+        label = ("Upstream model id your endpoint expects "
+                 f"(the pick is {source}'s spelling)")
+    else:
+        label = ("Upstream model id your endpoint expects "
+                 "(bare id, no context suffix)")
+    value = _prompt(label, default=default)
+    return value.strip()
+
+
 def _choose_upstream(args: argparse.Namespace, base_url: str,
                      picked: Optional[catalog.Row]):
-    """Resolve ``(model_name, derived_fields)`` from the pick or from flags."""
+    """Resolve ``(model_name, derived_fields)`` from the pick or from flags.
+
+    The split is deliberate: parameter fields (context window, reasoning,
+    tiers, modalities) are the catalog's to supply, while the upstream id is
+    the user's provider's convention and is always asked — a pick only
+    pre-fills it. See `_prompt_upstream_id`.
+    """
     if picked is not None:
-        return picked.model, catalog.derive(picked.entry)
-    model_name = args.model_name or _prompt(
-        "Model identifier (bare id, no context suffix)", default=args.name,
-    )
+        return (
+            _prompt_upstream_id(picked.model, source=picked.provider),
+            catalog.derive(picked.entry),
+        )
+    model_name = args.model_name or _prompt_upstream_id(args.name)
+    # `--model-name` can arrive from a flag; the id is written verbatim into
+    # agent configs, so strip it here rather than at the entry.
+    model_name = model_name.strip()
     return model_name, _derive_or_report(model_name, base_url,
                                          args.catalog_provider, args.no_catalog)
 
 
 def _choose_local_name(args: argparse.Namespace, reg: Registry,
-                       picked: Optional[catalog.Row], model_name: str):
+                       model_name: str):
     """Prompt for the local name when it was not given, then gate overwrites.
 
-    Returns ``(name, replacing)``.
+    The default is the *resolved* upstream id — not the catalog's spelling —
+    so editing the id above carries into the local name, and the two cannot
+    drift apart. Returns ``(name, replacing)``.
     """
     name = args.name
     if name is None:
-        name = _prompt(
-            "Local name",
-            default=picked.model if picked is not None else model_name,
-        )
+        name = _prompt("Local name", default=model_name)
     return _resolve_add_name(name, reg, args.yes)
 
 
@@ -783,9 +814,10 @@ def _pick_catalog_model(base_url: str) -> Optional[catalog.Row]:
             continue  # 'b' — refine the search
         row = rows[idx]
         if _catalog_row_key(row) not in host_keys:
-            print(f"  note: fields come from {row.provider}'s catalog entry, "
-                  f"not {host}'s — verify the context window and modalities "
-                  f"against your upstream")
+            print(f"  note: fields and id come from {row.provider}'s catalog "
+                  f"entry, not {host}'s — it spells the model {row.model!r}, "
+                  f"which your endpoint may not accept; verify the context "
+                  f"window and modalities too")
         return row
 
 
