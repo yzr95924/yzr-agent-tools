@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from mcp_plugin_mgr._compat import toml_dump, toml_loads
+from mcp_plugin_mgr._compat import toml_dumps, toml_loads
 
 
 # Canonical transports. "http" covers Streamable HTTP / SSE remotes; "stdio"
@@ -137,6 +137,21 @@ class ServerRegistry:
         return out
 
 
+# ---- atomic io ---------------------------------------------------------------
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write `text` via `<path>.tmp` + `os.replace` — never a half-written file.
+
+    Shared by this store and the drivers' JSON writer (`drivers._atomic`), so
+    the atomicity rule has one implementation.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
 # ---- servers.toml ------------------------------------------------------------
 
 def load_servers(path: Path) -> ServerRegistry:
@@ -202,9 +217,4 @@ def load_servers(path: Path) -> ServerRegistry:
 
 def save_servers(path: Path, reg: ServerRegistry) -> None:
     """Atomic write of servers.toml. Preserves unknown top-level + per-server keys."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    raw = reg.to_toml_dict()
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        toml_dump(raw, f)
-    os.replace(tmp, path)
+    atomic_write_text(path, toml_dumps(reg.to_toml_dict()))

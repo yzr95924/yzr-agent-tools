@@ -207,12 +207,12 @@ class DriverRegistry:
         return sorted(self._drivers.keys())
 
     def default(self) -> Optional[McpDriver]:
-        """Return the default driver (currently: claude-code)."""
-        if "claude-code" in self._drivers:
-            return self._drivers["claude-code"]
-        if not self._drivers:
-            return None
-        return self._drivers[sorted(self._drivers.keys())[0]]
+        """Return the default driver (currently: claude-code).
+
+        `_ensure_default_registered` always registers claude-code, so this is
+        a plain lookup; None means the caller ran before any registration.
+        """
+        return self._drivers.get("claude-code")
 
 
 # Singleton registry; built-in drivers are registered lazily by

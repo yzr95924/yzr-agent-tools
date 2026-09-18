@@ -83,14 +83,12 @@ def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
         _dump_section(buf, v, prefix=table_name + ".")
 
 
-def _toml_dumps(data: Dict[str, Any]) -> str:
+def toml_dumps(data: Dict[str, Any]) -> str:
+    """Render `data` as TOML. Hand-written: stdlib tomllib and tomli have no
+    write API, and unknown fields must round-trip."""
     buf = io.StringIO()
     _dump_section(buf, data, prefix="")
     return buf.getvalue()
-
-
-def _toml_dump(data: Dict[str, Any], fp) -> None:
-    fp.write(_toml_dumps(data))
 
 
 # Loader: prefer stdlib tomllib (3.11+), fall back to tomli.
@@ -98,7 +96,3 @@ try:
     from tomllib import loads as toml_loads
 except ImportError:  # Python <3.11
     from tomli import loads as toml_loads  # type: ignore[no-redef]
-
-
-# Hand-written dumper — both stdlib tomllib and tomli lack a write API.
-toml_dump = _toml_dump
