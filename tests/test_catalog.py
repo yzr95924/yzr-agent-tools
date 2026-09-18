@@ -215,6 +215,81 @@ def test_derive_modalities_without_text_input_is_none():
     assert fields["modalities"] is None
 
 
+# --- search --------------------------------------------------------------------
+
+def _search_cache():
+    return {
+        "zai": {
+            "id": "zai", "name": "Z.AI", "api": "https://api.z.ai/api/paas/v4",
+            "models": {
+                "glm-5.3": _entry(limit={"context": 1000000}),
+                "glm-4.7": _entry(),
+                "text-only": _entry(),
+            },
+        },
+        "kimi-for-coding": {
+            "id": "kimi-for-coding", "name": "Kimi For Coding",
+            "api": "https://api.kimi.com/coding/v1",
+            "models": {"k3": _entry()},
+        },
+        "decoy": {
+            "id": "decoy", "name": "Decoy", "api": "https://decoy.example/v1",
+            "models": {"glm-5.3": _entry()},
+        },
+    }
+
+
+def test_search_returns_everything_sorted_without_query():
+    data = _search_cache()
+    rows = catalog.search(data)
+    assert [(r.provider, r.model) for r in rows] == [
+        ("decoy", "glm-5.3"),
+        ("kimi-for-coding", "k3"),
+        ("zai", "glm-4.7"),
+        ("zai", "glm-5.3"),
+        ("zai", "text-only"),
+    ]
+    assert rows[0].provider_name == "Decoy"
+    assert rows[0].entry is data["decoy"]["models"]["glm-5.3"]
+
+
+def test_search_matches_model_id_case_insensitively():
+    rows = catalog.search(_search_cache(), "GLM")
+    assert [(r.provider, r.model) for r in rows] == [
+        ("decoy", "glm-5.3"), ("zai", "glm-4.7"), ("zai", "glm-5.3")]
+
+
+def test_search_matches_provider_id_and_display_name():
+    assert [r.model for r in catalog.search(_search_cache(), "kimi")] == ["k3"]
+    assert [r.model for r in catalog.search(_search_cache(), "z.a")] == [
+        "glm-4.7", "glm-5.3", "text-only"]
+
+
+def test_search_requires_all_tokens():
+    """Multi-token queries narrow instead of OR-ing the tokens."""
+    assert [r.model for r in catalog.search(_search_cache(), "zai glm-5")] == [
+        "glm-5.3"]
+    assert catalog.search(_search_cache(), "zai k3") == []
+
+
+def test_search_host_filter_keeps_only_that_upstream():
+    rows = catalog.search(_search_cache(), "", host="api.z.ai")
+    assert [(r.provider, r.model) for r in rows] == [
+        ("zai", "glm-4.7"), ("zai", "glm-5.3"), ("zai", "text-only")]
+    assert catalog.search(_search_cache(), "", host="nowhere.example") == []
+
+
+def test_search_matches_model_display_name():
+    data = _search_cache()
+    data["zai"]["models"]["glm-4.7"]["name"] = "Legacy Falcon"
+    assert [r.model for r in catalog.search(data, "falcon")] == ["glm-4.7"]
+
+
+def test_search_tolerates_malformed_provider_shapes():
+    rows = catalog.search({"broken": None, "nouser": {"api": "https://x"}})
+    assert rows == []
+
+
 # --- no network, ever ----------------------------------------------------------
 
 def test_catalog_never_opens_a_socket(tmp_path, monkeypatch):

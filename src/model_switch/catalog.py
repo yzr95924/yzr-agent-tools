@@ -69,6 +69,16 @@ class Pick:
     alternatives: List[Candidate] = field(default_factory=list)
 
 
+@dataclass
+class Row:
+    """One catalog model, flattened for the interactive picker."""
+
+    provider: str
+    provider_name: str
+    model: str
+    entry: Dict[str, Any]
+
+
 def host_of(url: str) -> str:
     """The netloc of a URL, lowercased (``""`` when unparseable)."""
     return urlsplit(str(url or "")).netloc.lower()
@@ -121,6 +131,49 @@ def candidates(data: Dict[str, Any], model_name: str, base_url: str) -> List[Can
             # ports or bare hosts, and a host match must not be missed.
             host_match=bool(host and host in host_of(api)),
         ))
+    return out
+
+
+def search(data: Dict[str, Any], query: str = "",
+           host: Optional[str] = None) -> List[Row]:
+    """Every catalog model matching ``query``, flattened for a menu.
+
+    Matching is case-insensitive and token-wise (all whitespace-separated
+    tokens must appear somewhere in ``provider id / provider display name /
+    model id / model display name``). ``host`` restricts to providers whose
+    declared API carries that host — the same substring rule as
+    `candidates`, and the reason the picker can offer "models on your
+    upstream" without asking which provider is meant.
+
+    Rows are sorted by ``(provider, model)`` so menus are deterministic.
+    Nothing is capped here: the caller truncates the display and reports how
+    many rows were hidden, and the true count drives its "refine" hint.
+    """
+    tokens = [t for t in (query or "").lower().split() if t]
+    wanted_host = (host or "").lower()
+    out: List[Row] = []
+    for provider in sorted(data):
+        entry_map = data.get(provider) or {}
+        if not isinstance(entry_map, dict):
+            continue
+        if wanted_host and wanted_host not in host_of(entry_map.get("api") or ""):
+            continue
+        provider_name = str(entry_map.get("name") or provider)
+        models = entry_map.get("models") or {}
+        if not isinstance(models, dict):
+            continue
+        for model_id in sorted(models):
+            entry = models.get(model_id)
+            if not isinstance(entry, dict):
+                continue
+            if tokens:
+                haystack = " ".join((
+                    provider, provider_name, model_id,
+                    str(entry.get("name") or ""),
+                )).lower()
+                if not all(t in haystack for t in tokens):
+                    continue
+            out.append(Row(provider, provider_name, model_id, entry))
     return out
 
 
