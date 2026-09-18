@@ -364,7 +364,8 @@ provider.<id>.models.<name>.variants.<tier>`)。档位**内容**不校验(原样
 `model show <name>` 会打印 `reasoning:` 与 `variants: preset '...' -> high, max`——这行就是
 `ctrl+t` 会给出的集合(渲染时自动静音的内置档位不列出,它们的唯一作用就是被丢掉);你自己
 写的 `disabled = true` 档位也不会混进列表,而是标注在括号里(`-> high, max (disabled: low)`)
-与 OpenCode 实际给出的档位一致。
+与 OpenCode 实际给出的档位一致。没声明档位的 reasoning 模型会打印
+`<none declared> (OpenCode's built-in tiers apply)`——防止「没有输出」被读成「没有档位」。
 
 **Claude Code 是单槽 agent。** `model add/remove/import` 不碰它的配置;唯一例外——被删除的
 模型正是当前 active 时,`remove`/`import replace` 会把 model-switch 自己管理的四个键

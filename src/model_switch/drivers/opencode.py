@@ -130,22 +130,16 @@ _DEFAULT_MAX_OUTPUT = 131_072
 # values in rendered messages.
 _MODALITY_VALUES = ("text", "audio", "image", "video", "pdf")
 
-# Tier names OpenCode's built-in rules can inject for NPM_ADAPTER models
-# (verified against 1.18.31). A declared `variants` table does not replace
-# them, it is deep-merged *over* them — so a tier nobody declared would still
-# appear in the ctrl+t cycle. Rendering the omitted names as ``disabled``
-# makes the declaration authoritative: OpenCode filters disabled tiers out
-# immediately after the merge, before anything reads them.
-#
-# This is not a whitelist. Declared tier names are arbitrary strings
-# (`VariantID` is a branded string and the config schema a plain record);
-# this is only the union of names the built-ins can inject here: kimi/moonshot
-# (matched on provider id, api id *or* base URL) and claude >= 4.7 contribute
-# low/medium/high/xhigh/max, opus-4.5 low/medium/high, minimax-m3
-# none/thinking, and the non-claude anthropic fallback high/max. Muting a name
-# that was never injected is a no-op, so erring wide costs nothing beyond a
-# few ``{disabled: true}`` keys; a tier a later OpenCode adds simply stays
-# unmuted (today's behaviour, not a regression).
+# The tier names OpenCode's built-in rules can inject for NPM_ADAPTER models
+# (1.18.31 snapshot; the contract consuming this list is in the module
+# docstring). Deliberately a superset, and explicitly not a whitelist — a
+# declared tier name is an arbitrary string. For this npm adapter the built-ins
+# contribute low/medium/high/xhigh/max (kimi/moonshot, matched on provider id,
+# api id *or* base URL, and claude >= 4.7), low/medium/high/max (opus/sonnet
+# 4.6), low/medium/high (opus 4.5), none/thinking (minimax-m3) and high/max
+# (non-claude fallback). Muting a name that was never injected is a no-op, so
+# erring wide only costs a few ``{disabled: true}`` keys; a tier a later
+# OpenCode adds stays unmuted (today's behaviour, not a regression).
 #
 # Do not try to dodge these rules by renaming the provider group: the
 # kimi/moonshot match also reads the base URL, and the fallback that replaces

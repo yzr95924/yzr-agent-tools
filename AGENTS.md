@@ -182,7 +182,8 @@ OpenCode 遇到标量会拒载整份配置),payload 内容不校验。`variants.
 `api.id`(同值)与 `providerID`(`yzr-<provider>`),**不得靠改 provider 组名规避**——改名会连带
 丢掉 OpenCode 给该上游的请求基线,且 provider id 变化让旧会话的 provider 引用失效。静音词表
 是 1.18.31 的快照(档位名是自由字符串,该常量是补集不是白名单);未知的新档位名退化为不静音。
-详见 README「Effort 档位」。`model show` 打印的就是 ctrl+t 会给出的集合。
+详见 README「Effort 档位」。`model show` 的 variants 行就是 ctrl+t 会给出的集合;未声明档位的
+reasoning 模型显式标注内置档位生效。
 
 **catalog 只供参数与档位**:`model add` 向导与 `model align` 能从 catalog 推导的只有
 `context_window` / `reasoning` / `variants` / `modalities`(`catalog.derive` 的全部产出)。

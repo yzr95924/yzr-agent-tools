@@ -122,6 +122,20 @@ def test_model_show_reports_inline_variants(yzr_paths):
     assert "variants:       (inline) -> none" in r.stdout
 
 
+def test_model_show_marks_builtin_tiers_when_nothing_is_declared(yzr_paths):
+    """A reasoning model without a declaration still gets OpenCode's built-in
+    tiers, so an omitted variants line would read as "no tiers"."""
+    _seed_models(yzr_paths, MODELS_TOML.replace(
+        'variants_preset = "z-effort"\n', '', 1))
+
+    r = runner(["model", "show", "glm-5_3-1m"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "reasoning:      true" in r.stdout
+    assert ("variants:       <none declared> "
+            "(OpenCode's built-in tiers apply)") in r.stdout
+
+
 def test_model_show_names_muted_tiers(yzr_paths):
     """`disabled = true` tiers won't appear in OpenCode's cycle, so show must
     not list them as if they were active."""

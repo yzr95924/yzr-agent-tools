@@ -1124,6 +1124,10 @@ def _do_model_show(args: argparse.Namespace) -> None:
         if muted:
             line += " (disabled: {})".format(", ".join(muted))
         print(line)
+    elif m.extra.get("reasoning") is True:
+        # No declaration, but OpenCode computes built-in tiers for reasoning
+        # models — silence here would read as "no tiers".
+        print("variants:       <none declared> (OpenCode's built-in tiers apply)")
 
 
 def _do_model_remove(args: argparse.Namespace) -> None:

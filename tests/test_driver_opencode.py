@@ -586,7 +586,7 @@ def test_apply_keeps_tier_names_outside_the_injectable_set(driver):
         {"reasoning": True, "variants": {"off": {"thinking": {"type": "disabled"}}}},
     ))
     assert entry["variants"]["off"] == {"thinking": {"type": "disabled"}}
-    assert "max" in entry["variants"]  # ...and the built-ins are still muted
+    assert entry["variants"]["max"] == {"disabled": True}
 
 
 def test_apply_preserves_a_hand_written_disabled_tier(driver):
