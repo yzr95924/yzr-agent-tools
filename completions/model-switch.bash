@@ -63,7 +63,7 @@ _model_switch() {
             fi
             case "$action" in
                 add)
-                    COMPREPLY=( $(compgen -W "--base-url --api-key --model-name --description --context-window --provider --catalog-provider --no-catalog --help" -- "$cur") )
+                    COMPREPLY=( $(compgen -W "--base-url --api-key --model-name --description --context-window --provider --catalog-provider --no-catalog --yes --help" -- "$cur") )
                     ;;
                 list)
                     COMPREPLY=( $(compgen -W "--help" -- "$cur") )
@@ -72,6 +72,7 @@ _model_switch() {
                     if [[ "$cur" == -* ]]; then
                         local flags="--help"
                         [ "$action" = "use" ] && flags="--driver --all-drivers --help"
+                        [ "$action" = "remove" ] && flags="--yes --help"
                         COMPREPLY=( $(compgen -W "$flags" -- "$cur") )
                     else
                         COMPREPLY=( $(compgen -W "$(model-switch _complete models 2>/dev/null)" -- "$cur") )

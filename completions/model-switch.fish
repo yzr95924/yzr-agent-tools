@@ -104,6 +104,7 @@ complete -c model-switch -n '__fish_model_switch_using_action add' -l context-wi
 complete -c model-switch -n '__fish_model_switch_using_action add' -l provider -r -f -d 'Provider group name (id yzr-<name>); default derived from base_url'
 complete -c model-switch -n '__fish_model_switch_using_action add' -l catalog-provider -r -f -d 'Pin the OpenCode-catalog provider entry used to fill fields'
 complete -c model-switch -n '__fish_model_switch_using_action add' -l no-catalog -f -d 'Skip deriving fields from the catalog cache'
+complete -c model-switch -n '__fish_model_switch_using_action add' -s y -l yes -f -d 'Assume yes: skip confirmation and overwrite'
 complete -c model-switch -n '__fish_model_switch_using_action add' -s h -l help -f -d 'Show help'
 
 # --- flags: model use ---------------------------------------------------------
@@ -121,6 +122,7 @@ complete -c model-switch -n '__fish_model_switch_using_action align' -s h -l hel
 
 # --- flags: model list / show / remove ----------------------------------------
 complete -c model-switch -n '__fish_model_switch_using_action list show remove' -s h -l help -f -d 'Show help'
+complete -c model-switch -n '__fish_model_switch_using_action remove' -s y -l yes -f -d 'Skip the removal confirmation'
 
 # --- flags: status ------------------------------------------------------------
 complete -c model-switch -n '__fish_model_switch_using_command status' -l driver -r -f -a '(__fish_model_switch_drivers)' -d 'Target agent driver'

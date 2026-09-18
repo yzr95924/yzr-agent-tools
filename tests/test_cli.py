@@ -94,6 +94,7 @@ def test_model_add_requires_all_required_options(yzr_paths):
         "m",         # model_name
         "",          # context_window default
         "",          # description skip
+        "y",         # Proceed?
     ]) + "\n")
     assert runner_inv.exit_code == 0, runner_inv.stdout
 
@@ -360,3 +361,62 @@ def test_status_when_no_active_model(yzr_paths):
     result = runner(["status"])
     assert result.exit_code == 0, result.stdout
     assert "active main:  (none)" in result.stdout
+
+# --- interactive pickers (name omitted) ---------------------------------------
+
+def _seed_two(yzr_paths):
+    runner(["model", "add", "first", "--base-url", "https://a",
+            "--api-key", "K1", "--model-name", "m1"])
+    runner(["model", "add", "second", "--base-url", "https://b",
+            "--api-key", "K2", "--model-name", "m2"])
+
+
+def test_use_without_name_picks_from_a_menu(yzr_paths):
+    _seed_two(yzr_paths)
+    result = runner(["model", "use"], input="2\n\n")  # pick #2, Enter = all drivers
+    assert result.exit_code == 0, result.stdout
+    assert "Configured models:" in result.stdout
+    assert load_state(yzr_paths["state"]).active_main == "second"
+
+
+def test_show_without_name_picks_from_a_menu(yzr_paths):
+    _seed_two(yzr_paths)
+    result = runner(["model", "show"], input="1\n")
+    assert result.exit_code == 0, result.stdout
+    assert "https://a" in result.stdout
+
+
+def test_remove_without_name_confirmation_defaults_to_no(yzr_paths):
+    _seed_two(yzr_paths)
+    result = runner(["model", "remove"], input="1\n\n")  # pick #1, Enter = no
+    assert result.exit_code != 0
+    assert "Aborted — nothing removed." in result.stdout
+    assert set(load_models(yzr_paths["models"]).models) == {"first", "second"}
+
+
+def test_remove_without_name_confirmed_removes(yzr_paths):
+    _seed_two(yzr_paths)
+    result = runner(["model", "remove"], input="2\ny\n")
+    assert result.exit_code == 0, result.stdout
+    assert set(load_models(yzr_paths["models"]).models) == {"first"}
+
+
+def test_remove_yes_skips_the_confirmation(yzr_paths):
+    _seed_two(yzr_paths)
+    result = runner(["model", "remove", "--yes"], input="1\n")
+    assert result.exit_code == 0, result.stdout
+    assert "Remove model" not in result.stdout
+    assert set(load_models(yzr_paths["models"]).models) == {"second"}
+
+
+@pytest.mark.parametrize("action", ["use", "remove", "show"])
+def test_picker_without_a_tty_fails_cleanly(yzr_paths, action):
+    result = runner(["model", action])  # no input => non-TTY
+    assert result.exit_code != 0
+    assert "no TTY" in result.stdout
+
+
+def test_add_without_flags_non_tty_fails_cleanly(yzr_paths):
+    result = runner(["model", "add"])
+    assert result.exit_code != 0
+    assert "no TTY" in result.stdout

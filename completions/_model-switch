@@ -73,13 +73,20 @@ case $state in
                   '--provider[Provider group name (id yzr-<name>); default derived from base_url]:name:_message -r "name"' \
                   '--catalog-provider[Pin the OpenCode-catalog provider entry]:provider:_message -r "provider"' \
                   '--no-catalog[Skip deriving fields from the catalog cache]' \
+                  '(-y --yes)'{-y,--yes}'[Assume yes: skip confirmation and overwrite]' \
                   '(-h --help)'{-h,--help}'[Show help]'
                 ;;
               list)
                 _arguments '(-h --help)'{-h,--help}'[Show help]'
                 ;;
-              show|remove)
+              show)
                 _arguments \
+                  '(-h --help)'{-h,--help}'[Show help]' \
+                  ':model:($_ms_models)'
+                ;;
+              remove)
+                _arguments \
+                  '(-y --yes)'{-y,--yes}'[Skip the removal confirmation]' \
                   '(-h --help)'{-h,--help}'[Show help]' \
                   ':model:($_ms_models)'
                 ;;
