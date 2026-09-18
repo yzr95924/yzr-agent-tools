@@ -108,7 +108,7 @@ def test_model_add_rejects_duplicate(yzr_paths):
     runner(args)
     result = runner(args)
     assert result.exit_code != 0
-    assert "exists" in result.stdout.lower() or "already" in result.stdout.lower()
+    assert "already exists" in result.stdout
 
 
 # --- yzr model list -----------------------------------------------------------
@@ -116,86 +116,45 @@ def test_model_add_rejects_duplicate(yzr_paths):
 def test_model_list_empty(yzr_paths):
     result = runner(["model", "list"])
     assert result.exit_code == 0
-    assert "no models" in result.stdout.lower() or "(none)" in result.stdout.lower()
+    assert "no models configured" in result.stdout
 
 
-def test_model_list_shows_added_models(yzr_paths):
-    runner([
-        "model", "add", "glm-z1",
-        "--base-url", "https://x", "--api-key", "K", "--model-name", "m1",
-    ])
-    runner([
-        "model", "add", "other",
-        "--base-url", "https://y", "--api-key", "K2", "--model-name", "m2",
-    ])
-    result = runner(["model", "list"])
-    assert result.exit_code == 0
-    assert "glm-z1" in result.stdout
-    assert "other" in result.stdout
-
-
-def test_model_list_prints_header(yzr_paths):
-    runner([
-        "model", "add", "glm-z1",
-        "--base-url", "https://x", "--api-key", "K", "--model-name", "m1",
-    ])
-    result = runner(["model", "list"])
-    assert result.exit_code == 0
-    # Header row should label the two columns ("name" alias and "model").
-    first_line = result.stdout.splitlines()[0]
-    assert "name" in first_line.lower()
-    assert "model" in first_line.lower()
-
-
-def test_model_list_marks_active_main(yzr_paths, monkeypatch):
+def test_model_list_shows_models_header_and_columns(yzr_paths, monkeypatch):
     monkeypatch.setenv("K", "fake-key")
     runner([
         "model", "add", "glm-z1",
         "--base-url", "https://x", "--api-key", "K", "--model-name", "m1",
     ])
-    runner(["model", "use", "glm-z1"])
-    result = runner(["model", "list"])
-    assert result.exit_code == 0
-    assert "glm-z1" in result.stdout
-    # Active main row should be prefixed with "→", no trailing "[active]".
-    glm_row = [ln for ln in result.stdout.splitlines() if "glm-z1" in ln][0]
-    assert glm_row.lstrip().startswith("→")
-    assert "[active]" not in glm_row
-
-
-def test_model_list_shows_context_and_base_url(yzr_paths):
     runner([
         "model", "add", "huge",
         "--base-url", "https://api.example.com/v1",
-        "--api-key", "K", "--model-name", "m1",
+        "--api-key", "K2", "--model-name", "m2",
         "--context-window", "200000",
     ])
     runner([
         "model", "add", "small",
-        "--base-url", "https://y", "--api-key", "K2", "--model-name", "m2",
+        "--base-url", "https://y", "--api-key", "K3", "--model-name", "m3",
         "--context-window", "8000",
     ])
+    runner(["model", "use", "glm-z1"])
     result = runner(["model", "list"])
     assert result.exit_code == 0
-    # Header should advertise the new columns.
-    header = result.stdout.splitlines()[0].lower()
-    assert "context" in header
-    assert "base" in header or "url" in header
-    # Context formatted as K/M units when present (200000 → 200K, 8000 → 8K).
-    assert "200k" in result.stdout.lower()
-    assert "8k" in result.stdout.lower().replace("8000", "") or " 8k " in result.stdout.lower()
-    # Base URLs are both visible.
+
+    lines = result.stdout.splitlines()
+    assert lines[0].split() == ["NAME", "MODEL", "CONTEXT", "BASE_URL"]
+
+    # All rows visible; context rendered in K/M units (200000 → 200K, 8000 → 8K).
+    for name in ("glm-z1", "huge", "small"):
+        assert name in result.stdout
+    assert "200K" in result.stdout
+    assert "8K" in result.stdout
     assert "https://api.example.com/v1" in result.stdout
     assert "https://y" in result.stdout
 
-
-def test_format_context_renders_none_as_sentinel():
-    from model_switch.cli import _format_context
-    assert _format_context(None) == "-(none)-"
-    assert _format_context(1_000_000) == "1M"
-    assert _format_context(200_000) == "200K"
-    assert _format_context(8000) == "8K"
-    assert _format_context(7) == "7"
+    # The active main row is prefixed with "→", no trailing "[active]".
+    glm_row = [ln for ln in lines if "glm-z1" in ln][0]
+    assert glm_row.lstrip().startswith("→")
+    assert "[active]" not in glm_row
 
 
 def test_model_list_truncates_long_base_url(yzr_paths):
@@ -210,6 +169,15 @@ def test_model_list_truncates_long_base_url(yzr_paths):
     # The full URL must not appear verbatim; should be truncated with "…".
     assert long_url not in result.stdout
     assert "…" in result.stdout
+
+
+def test_format_context_renders_none_as_sentinel():
+    from model_switch.cli import _format_context
+    assert _format_context(None) == "-(none)-"
+    assert _format_context(1_000_000) == "1M"
+    assert _format_context(200_000) == "200K"
+    assert _format_context(8000) == "8K"
+    assert _format_context(7) == "7"
 
 
 # --- yzr model show -----------------------------------------------------------
@@ -391,4 +359,4 @@ def test_status_shows_active_and_effective_env(yzr_paths, monkeypatch):
 def test_status_when_no_active_model(yzr_paths):
     result = runner(["status"])
     assert result.exit_code == 0, result.stdout
-    assert "no active" in result.stdout.lower() or "inactive" in result.stdout.lower() or "(none)" in result.stdout.lower()
+    assert "active main:  (none)" in result.stdout

@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from model_switch.store import ModelEntry as Model
-from model_switch.drivers.claude_code import ClaudeCodeDriver
 from model_switch.drivers.opencode import OpenCodeDriver
 
 
@@ -22,13 +21,6 @@ def glm_main() -> Model:
     )
 
 
-def _make_claude_driver(tmp_path: Path, monkeypatch) -> ClaudeCodeDriver:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    d = ClaudeCodeDriver()
-    d.settings_path = tmp_path / ".claude" / "settings.json"
-    return d
-
-
 def _make_opencode_driver(tmp_path: Path, monkeypatch) -> OpenCodeDriver:
     monkeypatch.setenv("HOME", str(tmp_path))
     d = OpenCodeDriver()
@@ -36,14 +28,11 @@ def _make_opencode_driver(tmp_path: Path, monkeypatch) -> OpenCodeDriver:
     return d
 
 
-# --- ClaudeCodeDriver: [1m] suffix + ANTHROPIC_MODEL + top-level model -------
-
-
-
+# --- OpenCodeDriver: bare model id, no [1m] suffix ---------------------------
 
 def test_opencode_does_not_append_1m_suffix(tmp_path, monkeypatch, glm_main):
-    """OpenCode keeps the model id bare (no [1m] suffix); context_window is
-    not surfaced to OpenCode (its limit schema requires output we don't track)."""
+    """OpenCode keeps the model id bare — the `[1m]` suffix is a Claude Code
+    display convention, not part of the upstream model id."""
     monkeypatch.setenv("KEY", "k")
     d = _make_opencode_driver(tmp_path, monkeypatch)
     d.apply(models=[glm_main], active=glm_main)
@@ -52,23 +41,3 @@ def test_opencode_does_not_append_1m_suffix(tmp_path, monkeypatch, glm_main):
     assert written["model"] == "yzr-example/MiniMax-M3"
     provider = written["provider"]["yzr-example"]
     assert "MiniMax-M3[1m]" not in json.dumps(provider)
-
-
-# --- Model serialization ----------------------------------------------------
-
-def test_model_context_window_roundtrip(tmp_path):
-    from model_switch.store import save_models, load_models, Registry
-    cfg_p = tmp_path / "models.toml"
-
-    reg = Registry()
-    reg.models["m1"] = Model(
-        model_id="m1", base_url="x", api_key="K", name="m", context_window=200000,
-    )
-    reg.models["m2"] = Model(
-        model_id="m2", base_url="y", api_key="K2", name="n",
-    )
-    save_models(cfg_p, reg)
-    loaded = load_models(cfg_p)
-
-    assert loaded.models["m1"].context_window == 200000
-    assert loaded.models["m2"].context_window is None

@@ -31,12 +31,21 @@ def test_load_models_round_trip(tmp_path):
             base_url="https://api.example.com",
             api_key="GLM_API_KEY",
             description="GLM-4 Plus",
+            context_window=200000,
+        ),
+        "no-ctx": ModelEntry(
+            model_id="no-ctx",
+            name="n",
+            base_url="https://y",
+            api_key="K2",
         ),
     })
     save_models(p, reg)
     loaded = load_models(p)
     assert loaded.models["glm"].name == "glm-4-plus"
     assert loaded.models["glm"].api_key == "GLM_API_KEY"
+    assert loaded.models["glm"].context_window == 200000
+    assert loaded.models["no-ctx"].context_window is None
 
 
 def test_load_models_preserves_unknown_top_level_keys(tmp_path):
@@ -153,67 +162,59 @@ def test_save_models_creates_parent_directory(tmp_path):
 # entry) or made the file unparseable ("Cannot declare ('variants',) twice",
 # two or more entries).
 
-def test_variants_round_trip_single_entry(tmp_path):
+@pytest.mark.parametrize("toml_text, expected, must_contain", [
+    pytest.param(
+        # Loader pulls a `[models.variants]` section into the model's extra
+        # (never a top-level table), and the dumper writes it back inline.
+        '[[models]]\n'
+        'model_id = "glm-5_3-1m"\n'
+        'name = "glm-5.3"\n'
+        'base_url = "u"\n'
+        'api_key = "K"\n'
+        'reasoning = true\n'
+        '\n[models.variants]\n'
+        'high = { effort = "high" }\n'
+        'max = { effort = "max" }\n',
+        {"glm-5_3-1m": {"high": {"effort": "high"}, "max": {"effort": "max"}}},
+        ('variants = { high = { effort = "high" }, max = { effort = "max" } }',),
+        id="section-input",
+    ),
+    pytest.param(
+        # Two entries carrying variants: the old dumper emitted a duplicate
+        # top-level `[variants]` table and tomllib refused the whole file.
+        '[[models]]\n'
+        'model_id = "a"\nname = "a"\nbase_url = "u"\napi_key = "K"\n'
+        'variants = { high = { effort = "high" } }\n'
+        '[[models]]\n'
+        'model_id = "b"\nname = "b"\nbase_url = "u"\napi_key = "K"\n'
+        'variants = { max = { effort = "max" } }\n',
+        {"a": {"high": {"effort": "high"}}, "b": {"max": {"effort": "max"}}},
+        (),
+        id="two-entries",
+    ),
+    pytest.param(
+        # Opaque values survive verbatim: a float must not truncate to int.
+        '[[models]]\n'
+        'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n'
+        'variants = { high = { temperature = 0.7 } }\n',
+        {"m": {"high": {"temperature": 0.7}}},
+        ("temperature = 0.7",),
+        id="float-values",
+    ),
+])
+def test_variants_round_trip(tmp_path, toml_text, expected, must_contain):
     p = tmp_path / "models.toml"
-    p.write_text('[[models]]\n'
-                 'model_id = "glm-5_3-1m"\n'
-                 'name = "glm-5.3"\n'
-                 'base_url = "u"\n'
-                 'api_key = "K"\n'
-                 'reasoning = true\n'
-                 '\n[models.variants]\n'
-                 'high = { effort = "high" }\n'
-                 'max = { effort = "max" }\n')
+    p.write_text(toml_text)
 
-    reg = load_models(p)
-    assert reg.models["glm-5_3-1m"].extra["variants"] == {
-        "high": {"effort": "high"},
-        "max": {"effort": "max"},
-    }
-    assert reg.extra_top.get("variants") is None
-
-    save_models(p, reg)
+    save_models(p, load_models(p))
     text = p.read_text()
-    assert 'variants = { high = { effort = "high" }, max = { effort = "max" } }' in text
+    for needle in must_contain:
+        assert needle in text
     assert "\n[variants]" not in text
 
     reloaded = load_models(p)
-    assert reloaded.models["glm-5_3-1m"].extra["variants"] == {
-        "high": {"effort": "high"},
-        "max": {"effort": "max"},
-    }
+    assert {k: m.extra["variants"] for k, m in reloaded.models.items()} == expected
     assert reloaded.extra_top.get("variants") is None
-
-
-def test_variants_round_trip_two_entries(tmp_path):
-    """Two entries carrying variants: the old dumper emitted a duplicate
-    top-level `[variants]` table and tomllib refused the whole file."""
-    p = tmp_path / "models.toml"
-    p.write_text('[[models]]\n'
-                 'model_id = "a"\nname = "a"\nbase_url = "u"\napi_key = "K"\n'
-                 'variants = { high = { effort = "high" } }\n'
-                 '[[models]]\n'
-                 'model_id = "b"\nname = "b"\nbase_url = "u"\napi_key = "K"\n'
-                 'variants = { max = { effort = "max" } }\n')
-
-    save_models(p, load_models(p))
-    reloaded = load_models(p)
-
-    assert reloaded.models["a"].extra["variants"] == {"high": {"effort": "high"}}
-    assert reloaded.models["b"].extra["variants"] == {"max": {"effort": "max"}}
-
-
-def test_variants_float_values_round_trip(tmp_path):
-    p = tmp_path / "models.toml"
-    p.write_text('[[models]]\n'
-                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n'
-                 'variants = { high = { temperature = 0.7 } }\n')
-
-    save_models(p, load_models(p))
-    assert "temperature = 0.7" in p.read_text()
-    reloaded = load_models(p)
-    # Still a float, not truncated to an int.
-    assert reloaded.models["m"].extra["variants"]["high"]["temperature"] == 0.7
 
 
 def test_variants_presets_table_round_trip(tmp_path):

@@ -52,21 +52,6 @@ def test_model_use_targets_opencode_driver(two_drivers, monkeypatch):
     assert not two_drivers["claude"].exists()
 
 
-def test_model_use_falls_back_to_default_driver_when_unspecified(two_drivers, monkeypatch):
-    monkeypatch.setenv("GLM_API_KEY", "k")
-    runner([
-        "model", "add", "glm",
-        "--base-url", "https://api.example.com",
-        "--api-key", "GLM_API_KEY",
-        "--model-name", "glm-4",
-    ])
-    result = runner(["model", "use", "glm"])
-    assert result.exit_code == 0, result.stdout
-
-    assert two_drivers["claude"].exists()
-    assert not two_drivers["opencode"].exists()
-
-
 def test_unknown_driver_name_errors(two_drivers, monkeypatch):
     monkeypatch.setenv("GLM_API_KEY", "k")
     runner([

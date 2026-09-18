@@ -154,301 +154,192 @@ def zsh_complete(env, line, cwd=None):
     )
     return [l for l in r.stdout.splitlines() if l]
 
-# --- bash ---------------------------------------------------------------------
+
+# --- per-shell adapters -------------------------------------------------------
+#
+# Every shell is driven through the same shape: a token list whose last
+# element is the (possibly empty) token being completed. The adapters
+# translate that into the shell's native driver call, so one behavior is
+# written once and parametrized across shells.
+
+def _bash_tokens(env, tokens, cwd=None):
+    return bash_complete(env, list(tokens), len(tokens) - 1, cwd=cwd)
 
 
-def test_bash_top_level_commands(comp_env):
-    got = bash_complete(comp_env, ["model-switch", ""], 1)
+def _zsh_tokens(env, tokens, cwd=None):
+    return zsh_complete(env, " ".join(tokens), cwd=cwd)
+
+
+def _fish_tokens(env, tokens, cwd=None):
+    return fish_complete(env, " ".join(tokens), cwd=cwd)
+
+
+_SHELL_FUNCS = {"bash": _bash_tokens, "zsh": _zsh_tokens, "fish": _fish_tokens}
+_SHELL_MARKS = {"bash": (), "zsh": (needs_zsh,), "fish": (needs_fish,)}
+
+
+def shell_params(*names):
+    """Fresh pytest.params for the named shells (bash always available)."""
+    return [
+        pytest.param(_SHELL_FUNCS[n], id=n, marks=_SHELL_MARKS[n]) for n in names
+    ]
+
+
+# --- model-switch: shared behaviors, parametrized across shells --------------
+
+
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
+def test_top_level_commands(comp_env, shell):
+    got = shell(comp_env, ["model-switch", ""])
     assert set(got) == {"init", "model", "status"}
 
 
-def test_bash_top_level_prefix_filter(comp_env):
-    assert bash_complete(comp_env, ["model-switch", "m"], 1) == ["model"]
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
+def test_top_level_prefix_filter(comp_env, shell):
+    assert shell(comp_env, ["model-switch", "m"]) == ["model"]
 
 
-def test_bash_model_actions(comp_env):
-    got = bash_complete(comp_env, ["model-switch", "model", ""], 2)
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
+def test_model_actions(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "model", ""])
     assert set(got) == {"add", "list", "show", "remove", "use", "import", "align"}
 
 
-def test_bash_model_action_prefix_filter(comp_env):
-    assert bash_complete(comp_env, ["model-switch", "model", "u"], 2) == ["use"]
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
+def test_model_action_prefix_filter(comp_env, shell):
+    assert shell(comp_env, ["model-switch", "model", "u"]) == ["use"]
 
 
-def test_bash_use_completes_model_names(comp_env):
-    got = bash_complete(comp_env, ["model-switch", "model", "use", ""], 3)
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
+def test_use_completes_model_names(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "model", "use", ""])
     assert set(got) == {"glm-z1", "kimi-k2"}
 
 
-def test_bash_remove_completes_model_names_with_prefix(comp_env):
-    got = bash_complete(comp_env, ["model-switch", "model", "remove", "gl"], 3)
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
+def test_remove_completes_model_names_with_prefix(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "model", "remove", "gl"])
     assert got == ["glm-z1"]
 
 
-def test_bash_use_completes_flags(comp_env):
-    got = bash_complete(comp_env, ["model-switch", "model", "use", "--"], 3)
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
+def test_use_completes_flags(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "model", "use", "--"])
     assert set(got) == {"--driver", "--all-drivers", "--help"}
 
 
-def test_bash_driver_value_completes_driver_names(comp_env):
-    got = bash_complete(comp_env, ["model-switch", "model", "use", "--driver", ""], 4)
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
+def test_driver_value_completes_driver_names(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "model", "use", "--driver", ""])
     assert set(got) == {"claude-code", "opencode"}
 
 
-def test_bash_status_completes_flags(comp_env):
-    got = bash_complete(comp_env, ["model-switch", "status", ""], 2)
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
+def test_status_completes_flags(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "status", "--"])
     assert set(got) == {"--driver", "--all-drivers", "--help"}
 
 
-def test_bash_add_completes_flags(comp_env):
-    got = bash_complete(comp_env, ["model-switch", "model", "add", ""], 3)
-    assert "--base-url" in got
-    assert "--api-key" in got
-    assert "--model-name" in got
-    assert "--context-window" in got
-    assert "--provider" in got
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
+def test_add_completes_flags(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "model", "add", "--"])
+    assert set(got) == {
+        "--base-url", "--api-key", "--model-name", "--description",
+        "--context-window", "--provider", "--catalog-provider",
+        "--no-catalog", "--help",
+    }
 
 
-def test_bash_add_flag_value_offers_nothing(comp_env):
-    got = bash_complete(comp_env, ["model-switch", "model", "add", "--base-url", ""], 4)
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
+def test_add_flag_value_offers_nothing(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "model", "add", "--base-url", ""])
     assert got == []
 
 
-def test_bash_init_offers_nothing(comp_env):
-    assert bash_complete(comp_env, ["model-switch", "init", ""], 2) == []
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
+def test_init_offers_nothing(comp_env, shell):
+    assert shell(comp_env, ["model-switch", "init", ""]) == []
+
+
+@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
+def test_import_completes_files(comp_env, tmp_path, shell):
+    (tmp_path / "sample.toml").write_text("")
+    (tmp_path / "notes.txt").write_text("")
+    got = shell(comp_env, ["model-switch", "model", "import", ""], cwd=tmp_path)
+    assert "sample.toml" in got
 
 
 def test_bash_align_completes_flags_and_models(comp_env):
-    flags = bash_complete(comp_env, ["model-switch", "model", "align", "--"], 3)
+    flags = _bash_tokens(comp_env, ["model-switch", "model", "align", "--"])
     assert set(flags) == {"--catalog-provider", "--help"}
-    models = bash_complete(comp_env, ["model-switch", "model", "align", ""], 3)
+    models = _bash_tokens(comp_env, ["model-switch", "model", "align", ""])
     assert set(models) == {"glm-z1", "kimi-k2"}
 
 
-def test_bash_import_completes_files(comp_env, tmp_path):
-    (tmp_path / "sample.toml").write_text("")
-    (tmp_path / "notes.txt").write_text("")
-    got = bash_complete(comp_env, ["model-switch", "model", "import", ""], 3, cwd=tmp_path)
-    assert "sample.toml" in got
-
-
-# --- fish ---------------------------------------------------------------------
-
-
-@needs_fish
-def test_fish_top_level_commands(comp_env):
-    got = fish_complete(comp_env, "model-switch ")
-    assert set(got) == {"init", "model", "status"}
-
-
-@needs_fish
-def test_fish_model_actions(comp_env):
-    got = fish_complete(comp_env, "model-switch model ")
-    assert set(got) == {"add", "list", "show", "remove", "use", "import", "align"}
-
-
-@needs_fish
-def test_fish_use_completes_model_names(comp_env):
-    got = fish_complete(comp_env, "model-switch model use ")
-    assert set(got) == {"glm-z1", "kimi-k2"}
-
-
-@needs_fish
-def test_fish_remove_completes_model_names_with_prefix(comp_env):
-    assert fish_complete(comp_env, "model-switch model remove gl") == ["glm-z1"]
-
-
-@needs_fish
-def test_fish_use_completes_flags(comp_env):
-    got = fish_complete(comp_env, "model-switch model use --")
-    assert {"--driver", "--all-drivers", "--help"} <= set(got)
-
-
-@needs_fish
-def test_fish_driver_value_completes_driver_names(comp_env):
-    got = fish_complete(comp_env, "model-switch model use --driver ")
-    assert set(got) == {"claude-code", "opencode"}
-
-
-@needs_fish
 def test_fish_no_file_fallback_after_positional(comp_env, tmp_path):
     """Once the model name is given, an empty token must not offer files."""
     (tmp_path / "stray.toml").write_text("")
-    got = fish_complete(comp_env, "model-switch model use glm-z1 ", cwd=tmp_path)
+    got = _fish_tokens(comp_env, ["model-switch", "model", "use", "glm-z1", ""],
+                       cwd=tmp_path)
     assert got == []
 
 
-@needs_fish
-def test_fish_status_completes_flags(comp_env):
-    got = fish_complete(comp_env, "model-switch status --")
-    assert {"--driver", "--all-drivers", "--help"} <= set(got)
+# --- mcp-plugin-mgr: bash/zsh only (no fish script) ---------------------------
 
 
-@needs_fish
-def test_fish_import_completes_toml_files(comp_env, tmp_path):
-    (tmp_path / "sample.toml").write_text("")
-    (tmp_path / "notes.txt").write_text("")
-    got = fish_complete(comp_env, "model-switch model import ", cwd=tmp_path)
-    assert "sample.toml" in got
-
-
-# --- zsh ----------------------------------------------------------------------
-
-
-@needs_zsh
-def test_zsh_top_level_commands(comp_env):
-    got = zsh_complete(comp_env, "model-switch ")
-    assert set(got) == {"init", "model", "status"}
-
-
-@needs_zsh
-def test_zsh_top_level_prefix_filter(comp_env):
-    assert zsh_complete(comp_env, "model-switch m") == ["model"]
-
-
-@needs_zsh
-def test_zsh_model_actions(comp_env):
-    got = zsh_complete(comp_env, "model-switch model ")
-    assert set(got) == {"add", "list", "show", "remove", "use", "import", "align"}
-
-
-@needs_zsh
-def test_zsh_model_action_prefix_filter(comp_env):
-    assert zsh_complete(comp_env, "model-switch model u") == ["use"]
-
-
-@needs_zsh
-def test_zsh_use_completes_model_names(comp_env):
-    got = zsh_complete(comp_env, "model-switch model use ")
-    assert set(got) == {"glm-z1", "kimi-k2"}
-
-
-@needs_zsh
-def test_zsh_remove_completes_model_names_with_prefix(comp_env):
-    assert zsh_complete(comp_env, "model-switch model remove gl") == ["glm-z1"]
-
-
-@needs_zsh
-def test_zsh_use_completes_flags(comp_env):
-    got = zsh_complete(comp_env, "model-switch model use --")
-    assert set(got) == {"--driver", "--all-drivers", "--help"}
-
-
-@needs_zsh
-def test_zsh_driver_value_completes_driver_names(comp_env):
-    got = zsh_complete(comp_env, "model-switch model use --driver ")
-    assert set(got) == {"claude-code", "opencode"}
-
-
-@needs_zsh
-def test_zsh_status_completes_flags(comp_env):
-    got = zsh_complete(comp_env, "model-switch status --")
-    assert set(got) == {"--driver", "--all-drivers", "--help"}
-
-
-@needs_zsh
-def test_zsh_add_completes_flags(comp_env):
-    got = zsh_complete(comp_env, "model-switch model add --")
-    assert "--base-url" in got
-    assert "--api-key" in got
-    assert "--model-name" in got
-    assert "--context-window" in got
-
-
-@needs_zsh
-def test_zsh_add_flag_value_offers_nothing(comp_env):
-    got = zsh_complete(comp_env, "model-switch model add --base-url ")
-    assert got == []
-
-
-@needs_zsh
-def test_zsh_init_offers_nothing(comp_env):
-    assert zsh_complete(comp_env, "model-switch init ") == []
-
-
-@needs_zsh
-def test_zsh_import_completes_toml_files(comp_env, tmp_path):
-    # Membership only: the harness's compadd shadow also observes one
-    # unfiltered _files fallback round (see tests/zsh_capture.zsh header).
-    (tmp_path / "sample.toml").write_text("")
-    (tmp_path / "notes.txt").write_text("")
-    got = zsh_complete(comp_env, "model-switch model import ", cwd=tmp_path)
-    assert "sample.toml" in got
-
-
-# --- mcp-plugin-mgr: test subcommand + --auto-allow (bash/zsh) ----------------
-
-
-def _mcp_bash(env, words, cword, cwd=None):
-    return bash_complete(env, words, cword, cwd=cwd,
+def _mcp_bash_tokens(env, tokens, cwd=None):
+    return bash_complete(env, list(tokens), len(tokens) - 1, cwd=cwd,
                          script="mcp-plugin-mgr", func="_mcp_plugin_mgr")
 
 
-def test_bash_mcp_top_level_includes_test(mcp_env):
-    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", ""], 1)
-    # The bash script's top-level word list also offers --help (pre-existing).
-    assert set(got) == {"init", "add", "list", "remove", "presets", "status",
-                        "test", "enable", "disable", "--help"}
+@pytest.mark.parametrize("shell, expected", [
+    pytest.param(_mcp_bash_tokens, {"init", "add", "list", "remove", "presets",
+                                    "status", "test", "enable", "disable",
+                                    "--help"}, id="bash"),
+    pytest.param(_zsh_tokens, {"init", "add", "list", "remove", "presets",
+                               "status", "test", "enable", "disable"},
+                 id="zsh", marks=needs_zsh),
+])
+def test_mcp_top_level_includes_test(mcp_env, shell, expected):
+    assert set(shell(mcp_env, ["mcp-plugin-mgr", ""])) == expected
 
 
-def test_bash_mcp_disable_completes_servers(mcp_env):
-    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "disable", ""], 2)
+@pytest.mark.parametrize("shell, action", [
+    pytest.param(_mcp_bash_tokens, "disable", id="bash-disable"),
+    pytest.param(_mcp_bash_tokens, "enable", id="bash-enable"),
+    pytest.param(_mcp_bash_tokens, "test", id="bash-test"),
+    pytest.param(_zsh_tokens, "test", id="zsh-test", marks=needs_zsh),
+])
+def test_mcp_server_name_completion(mcp_env, shell, action):
+    got = shell(mcp_env, ["mcp-plugin-mgr", action, ""])
     assert set(got) == {"outline", "memos"}
 
 
-def test_bash_mcp_enable_completes_servers(mcp_env):
-    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "enable", ""], 2)
-    assert set(got) == {"outline", "memos"}
-
-
-def test_bash_mcp_test_completes_servers(mcp_env):
-    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "test", ""], 2)
-    assert set(got) == {"outline", "memos"}
-
-
-def test_bash_mcp_test_completes_flags(mcp_env):
-    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "test", "--"], 2)
+def test_mcp_test_completes_flags(mcp_env):
+    got = _mcp_bash_tokens(mcp_env, ["mcp-plugin-mgr", "test", "--"])
     assert set(got) == {"--url", "--token", "--header", "--timeout", "--help"}
 
 
-def test_bash_mcp_add_flags_include_auto_allow(mcp_env):
-    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "add", "--auto"], 2)
+@pytest.mark.parametrize("shell", [
+    pytest.param(_mcp_bash_tokens, id="bash"),
+    pytest.param(_zsh_tokens, id="zsh", marks=needs_zsh),
+])
+def test_mcp_add_flags_include_auto_allow(mcp_env, shell):
+    assert shell(mcp_env, ["mcp-plugin-mgr", "add", "--auto"]) == ["--auto-allow"]
+
+
+@pytest.mark.parametrize("shell", [
+    pytest.param(_mcp_bash_tokens, id="bash"),
+    pytest.param(_zsh_tokens, id="zsh", marks=needs_zsh),
+])
+def test_mcp_remove_flags_include_auto_allow(mcp_env, shell):
+    got = shell(mcp_env, ["mcp-plugin-mgr", "remove", "--auto"])
     assert got == ["--auto-allow"]
 
 
-def test_bash_mcp_remove_flags_include_auto_allow(mcp_env):
-    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "remove", "--auto"], 2)
-    assert got == ["--auto-allow"]
-
-
-def test_bash_mcp_test_flag_value_offers_nothing(mcp_env):
-    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "test", "--timeout", ""], 3)
+def test_mcp_test_flag_value_offers_nothing(mcp_env):
+    got = _mcp_bash_tokens(mcp_env, ["mcp-plugin-mgr", "test", "--timeout", ""])
     assert got == []
-
-
-@needs_zsh
-def test_zsh_mcp_top_level_includes_test(mcp_env):
-    got = zsh_complete(mcp_env, "mcp-plugin-mgr ")
-    assert set(got) == {"init", "add", "list", "remove", "presets", "status",
-                        "test", "enable", "disable"}
-
-
-@needs_zsh
-def test_zsh_mcp_test_completes_servers(mcp_env):
-    got = zsh_complete(mcp_env, "mcp-plugin-mgr test ")
-    assert set(got) == {"outline", "memos"}
-
-
-@needs_zsh
-def test_zsh_mcp_add_flags_include_auto_allow(mcp_env):
-    got = zsh_complete(mcp_env, "mcp-plugin-mgr add --auto")
-    assert got == ["--auto-allow"]
-
-
-@needs_zsh
-def test_zsh_mcp_remove_flags_include_auto_allow(mcp_env):
-    got = zsh_complete(mcp_env, "mcp-plugin-mgr remove --auto")
-    assert got == ["--auto-allow"]
 
 
 @needs_zsh

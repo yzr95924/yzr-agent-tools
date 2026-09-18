@@ -74,7 +74,7 @@ def test_driver_is_catalog_capable(driver):
 #   1. wrong config path              — covered in test_paths.py
 #   2. missing `npm` AI-SDK adapter   — test_apply_emits_anthropic_npm_adapter
 #   3. limit block mishandled         — test_apply_emits_context_limit_when_known
-#                                       + test_apply_omits_limit_when_context_unknown
+#                                       + test_apply_omits_undeclared_optional_fields
 
 
 def test_apply_writes_resolved_api_key_verbatim(driver, glm_ctx):
@@ -120,17 +120,16 @@ def test_apply_emits_context_limit_when_known(driver, glm_ctx):
     }
 
 
-def test_apply_omits_limit_when_context_unknown(driver, glm_main):
-    """context_window unknown → omit `limit` entirely, never a partial block.
-    OpenCode rejects a limit missing output, and without context_window we
-    can't build a valid one, so an empty model entry is the only schema-valid
-    option here."""
+def test_apply_omits_undeclared_optional_fields(driver, glm_main):
+    """No context_window and no modalities → neither `limit` nor `modalities`
+    is emitted, and never a partial block: OpenCode rejects a limit missing
+    its paired `output`, so an empty model entry is the only schema-valid
+    rendering of undeclared optional fields."""
     assert glm_main.context_window is None
     driver.apply(models=[glm_main], active=glm_main)
     cfg = json.loads(driver.settings_path.read_text())
     entry = cfg["provider"][_pid(glm_main)]["models"][glm_main.name]
     assert entry == {}
-    assert "limit" not in entry
 
 
 # --- modalities: opt-in non-text input, validated locally --------------------
@@ -156,13 +155,6 @@ def test_apply_emits_modalities_when_declared(driver):
     entry = cfg["provider"][_pid(model)]["models"][model.name]
     assert entry["modalities"] == {"input": ["text", "image"],
                                    "output": ["text"]}
-
-
-def test_apply_omits_modalities_when_undeclared(driver, glm_main):
-    driver.apply(models=[glm_main], active=glm_main)
-    cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_pid(glm_main)]["models"][glm_main.name]
-    assert "modalities" not in entry
 
 
 @pytest.mark.parametrize("value", [
@@ -215,31 +207,20 @@ def test_apply_preserves_unrelated_providers_and_keys(driver, glm_ctx):
 # both agents — the protocol difference lives inside each driver.
 
 
-def test_apply_appends_v1_when_missing(driver, glm_ctx):
+@pytest.mark.parametrize("base_url, expected", [
+    ("https://api.z.ai/api/anthropic", "https://api.z.ai/api/anthropic/v1"),
+    ("https://api.z.ai/api/anthropic/v1", "https://api.z.ai/api/anthropic/v1"),
+    ("https://example.test/api/anthropic/v2", "https://example.test/api/anthropic/v2"),
+    ("https://api.z.ai/api/anthropic/", "https://api.z.ai/api/anthropic/v1"),
+])
+def test_apply_adapts_baseurl_to_a_version_segment(driver, glm_ctx, base_url, expected):
+    """Missing → append /v1; already versioned (v1 or otherwise) → keep as-is;
+    trailing slash → normalized before appending. The same stored base_url
+    serves both agents; the protocol difference lives inside each driver."""
+    glm_ctx.base_url = base_url
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
-
-
-def test_apply_does_not_double_append_v1(driver, glm_ctx):
-    glm_ctx.base_url = "https://api.z.ai/api/anthropic/v1"
-    driver.apply(models=[glm_ctx], active=glm_ctx)
-    cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
-
-
-def test_apply_keeps_arbitrary_version_segment(driver, glm_ctx):
-    glm_ctx.base_url = "https://example.test/api/anthropic/v2"
-    driver.apply(models=[glm_ctx], active=glm_ctx)
-    cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == "https://example.test/api/anthropic/v2"
-
-
-def test_apply_normalizes_trailing_slash_before_appending_v1(driver, glm_ctx):
-    glm_ctx.base_url = "https://api.z.ai/api/anthropic/"
-    driver.apply(models=[glm_ctx], active=glm_ctx)
-    cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
+    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == expected
 
 
 # --- upstream slug derivation -------------------------------------------------
