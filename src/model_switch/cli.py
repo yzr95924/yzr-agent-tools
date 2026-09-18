@@ -16,9 +16,10 @@ Output goes to stdout; errors to stderr. Exit codes:
 """
 import argparse
 import datetime
+import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, NoReturn, Optional
 
 from model_switch import paths
 from model_switch.drivers.base import registry
@@ -59,6 +60,16 @@ def _ensure_default_registered() -> None:
         registry.register(OpenCodeDriver())
 
 
+def _die(message) -> NoReturn:
+    """Print ``Error: <message>`` to stderr and exit 1.
+
+    The single failure path for user errors (see the module docstring's exit
+    codes); ``message`` may be an exception or a plain string.
+    """
+    print(f"Error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
 def _resolve_driver(name: Optional[str]):
     """Return the named driver, or the default if name is None/empty."""
     _ensure_default_registered()
@@ -66,12 +77,10 @@ def _resolve_driver(name: Optional[str]):
         try:
             return registry.get(name)
         except KeyError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
+            _die(e)
     driver = registry.default()
     if driver is None:
-        print("Error: no agent driver registered.", file=sys.stderr)
-        sys.exit(1)
+        _die("no agent driver registered.")
     return driver
 
 
@@ -104,9 +113,7 @@ def _resolve_drivers(args) -> list:
         names = [n.strip() for n in raw.split(",") if n.strip()]
         for n in names:
             if n not in available:
-                print(f"Error: unknown driver {n!r}. Available: {available}",
-                      file=sys.stderr)
-                sys.exit(1)
+                _die(f"unknown driver {n!r}. Available: {available}")
         return [_resolve_driver(n) for n in names]
     # Non-interactive (no TTY): keep the old single-driver default so CI
     # scripts don't unexpectedly write multiple agent configs.
@@ -117,11 +124,7 @@ def _resolve_api_key(model) -> str:
     """Return the model's API key (stored plaintext in models.toml)."""
     if model.api_key:
         return model.api_key
-    print(
-        f"Error: model {model.model_id!r} has no api_key in models.toml.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+    _die(f"model {model.model_id!r} has no api_key in models.toml.")
 
 
 def _registered_drivers() -> list:
@@ -144,8 +147,7 @@ def _expand_or_die(reg: Registry,
     try:
         return [expand_model(reg, only)] if only is not None else expand(reg)
     except VariantsError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        _die(e)
 
 
 def _sync_catalog(reg: Registry) -> None:
@@ -156,12 +158,17 @@ def _sync_catalog(reg: Registry) -> None:
     targeted `model use` creates them).
 
     Takes the Registry (not just the model list) so variant presets declared
-    at the top level can be expanded before rendering.
+    at the top level can be expanded before rendering. Grouping errors
+    (conflicting provider declarations, duplicate names) surface as a clean
+    one-line error instead of a traceback.
     """
     models = _expand_or_die(reg)
-    for d in _registered_drivers():
-        if getattr(d, "supports_catalog", False):
-            d.sync_catalog(models)
+    try:
+        for d in _registered_drivers():
+            if getattr(d, "supports_catalog", False):
+                d.sync_catalog(models)
+    except ValueError as e:
+        _die(e)
 
 
 def _clear_active_if_orphaned(reg: Registry) -> None:
@@ -208,12 +215,8 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
             return default
         if optional:
             return None
-        print(
-            f"Error: {label!r} is required (no TTY for interactive prompt). "
-            f"Pass it as a flag.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        _die(f"{label!r} is required (no TTY for interactive prompt). "
+             f"Pass it as a flag.")
     try:
         line = input(f"{label}{suffix}: ")
     except EOFError:
@@ -223,19 +226,14 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
             return default
         if optional:
             return None
-        print(
-            f"Error: {label!r} is required (input exhausted). "
-            f"Pass it as a flag.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        _die(f"{label!r} is required (input exhausted). "
+             f"Pass it as a flag.")
     if line == "":
         if default is not None:
             return default
         if optional:
             return None
-        print("Error: value is required.", file=sys.stderr)
-        sys.exit(1)
+        _die("value is required.")
     return type_(line)
 
 
@@ -248,24 +246,15 @@ def _prompt_secret(label: str) -> str:
     pass `--api-key`.
     """
     if not sys.stdin.isatty():
-        print(
-            f"Error: {label} is required (no TTY for prompt). "
-            f"Pass it via --api-key.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        _die(f"{label} is required (no TTY for prompt). "
+             f"Pass it via --api-key.")
     try:
         value = input(f"{label}: ")
     except EOFError:
-        print(
-            f"Error: {label} is required (input exhausted). "
-            f"Pass it via --api-key.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        _die(f"{label} is required (input exhausted). "
+             f"Pass it via --api-key.")
     if value == "":
-        print("Error: value is required.", file=sys.stderr)
-        sys.exit(1)
+        _die("value is required.")
     return value
 
 
@@ -297,6 +286,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Model identifier expected by upstream (bare id, no context suffix).",
     )
     p_add.add_argument("--description", default=None, help="Free-text description.")
+    p_add.add_argument(
+        "--provider", default=None,
+        help="Pin the provider group name (id becomes yzr-<name>); defaults "
+             "to a slug derived from base_url. Models sharing a name must "
+             "share base_url and api_key.",
+    )
     p_add.add_argument(
         "--context-window", type=int, default=None,
         help="Max input tokens (e.g. 200000 or 1000000 for 1M-context variants).",
@@ -330,6 +325,39 @@ def build_parser() -> argparse.ArgumentParser:
     p_import.add_argument(
         "--merge", action="store_true",
         help="Merge into existing models.toml (default: replace).",
+    )
+
+    p_probe = model_sub.add_parser(
+        "probe",
+        help="Probe upstream reasoning-shape acceptance (read-only unless --apply).",
+    )
+    p_probe.add_argument("name")
+    p_probe.add_argument(
+        "--budgets", default=None,
+        help="Comma-separated budget ladder (overrides catalog-derived rungs).",
+    )
+    p_probe.add_argument(
+        "--catalog-source", default="auto",
+        choices=["auto", "live", "cache"],
+        help="models.dev catalog source (default: live, fall back to cache).",
+    )
+    p_probe.add_argument(
+        "--catalog-provider", default=None,
+        help="Pin the models.dev provider entry used to build the matrix "
+             "(disambiguates the same model under many providers).",
+    )
+    p_probe.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Machine-readable JSON output.",
+    )
+    p_probe.add_argument(
+        "--out", default=None,
+        help="Also write the markdown report to this path.",
+    )
+    p_probe.add_argument(
+        "--apply", action="store_true",
+        help="Write the suggested tiers into a probe-<model_id> preset "
+             "(models.toml, atomic + .bak; never touches user presets).",
     )
 
     # status
@@ -385,8 +413,10 @@ def _do_model_add(args: argparse.Namespace) -> None:
 
     reg = load_models(paths.models_file())
     if args.name in reg.models:
-        print(f"Error: model {args.name!r} already exists.", file=sys.stderr)
-        sys.exit(1)
+        _die(f"model {args.name!r} already exists.")
+    extra = {}
+    if args.provider:
+        extra["provider"] = args.provider
     reg.models[args.name] = ModelEntry(
         model_id=args.name,
         name=model_name,
@@ -394,6 +424,7 @@ def _do_model_add(args: argparse.Namespace) -> None:
         api_key=api_key,
         context_window=context_window,
         description=description,
+        extra=extra,
     )
     save_models(paths.models_file(), reg)
     # Mirror the catalog so the new model is immediately available in agents
@@ -477,8 +508,7 @@ def _do_model_list() -> None:
 def _do_model_show(name: str) -> None:
     reg = load_models(paths.models_file())
     if name not in reg.models:
-        print(f"Error: model {name!r} not found.", file=sys.stderr)
-        sys.exit(1)
+        _die(f"model {name!r} not found.")
     m = reg.models[name]
     # Resolve the variant declaration up front: a broken one should fail
     # before any of the model's fields are printed.
@@ -489,6 +519,8 @@ def _do_model_show(name: str) -> None:
     print(f"base_url:       {m.base_url}")
     print(f"api_key:        {'<set>' if m.api_key else '<missing>'}")
     print(f"model_name:     {m.name}")
+    if isinstance(m.extra.get("provider"), str):
+        print(f"provider:       {m.extra['provider']}")
     if m.context_window is not None:
         print(f"context_window: {m.context_window}")
     if m.description:
@@ -516,8 +548,7 @@ def _do_model_show(name: str) -> None:
 def _do_model_remove(name: str) -> None:
     reg = load_models(paths.models_file())
     if name not in reg.models:
-        print(f"Error: model {name!r} not found.", file=sys.stderr)
-        sys.exit(1)
+        _die(f"model {name!r} not found.")
     del reg.models[name]
     save_models(paths.models_file(), reg)
     # Reconcile the catalog (removed model's provider + key vanish from
@@ -530,8 +561,7 @@ def _do_model_remove(name: str) -> None:
 def _do_model_use(args: argparse.Namespace) -> None:
     reg = load_models(paths.models_file())
     if args.name not in reg.models:
-        print(f"Error: model {args.name!r} not found.", file=sys.stderr)
-        sys.exit(1)
+        _die(f"model {args.name!r} not found.")
 
     # Variant presets are materialized here (in memory) so every driver sees
     # plain `variants` dicts; models.toml keeps the preset + reference form.
@@ -542,9 +572,12 @@ def _do_model_use(args: argparse.Namespace) -> None:
     _resolve_api_key(main_model)
 
     applied = []
-    for driver in _resolve_drivers(args):
-        driver.apply(models=list(expanded.values()), active=main_model)
-        applied.append(driver)
+    try:
+        for driver in _resolve_drivers(args):
+            driver.apply(models=list(expanded.values()), active=main_model)
+            applied.append(driver)
+    except ValueError as e:
+        _die(e)
 
     state = load_state(paths.state_file())
     state.active_main = args.name
@@ -572,14 +605,12 @@ def _do_model_import(args: argparse.Namespace) -> None:
 
     src_path = Path(args.path)
     if not src_path.exists():
-        print(f"Error: {src_path} does not exist.", file=sys.stderr)
-        sys.exit(1)
+        _die(f"{src_path} does not exist.")
 
     try:
         result = import_from_path(src_path)
     except _ImportError as e:
-        print(f"Error importing {src_path}: {e}", file=sys.stderr)
-        sys.exit(1)
+        _die(f"importing {src_path}: {e}")
 
     incoming = result.registry
 
@@ -604,6 +635,66 @@ def _do_model_import(args: argparse.Namespace) -> None:
     _clear_active_if_orphaned(result_reg)
 
     print(f"Imported {len(incoming.models)} model(s) from {src_path}.")
+
+
+def _do_model_probe(args: argparse.Namespace) -> None:
+    """Probe the upstream for reasoning-shape acceptance.
+
+    Read-only by default (a handful of small requests against the model's own
+    endpoint). ``--apply`` additionally writes the evidence-derived tiers into
+    a probe-owned preset — never a user preset.
+    """
+    from model_switch import probe as probe_mod
+
+    reg = load_models(paths.models_file())
+    if args.name not in reg.models:
+        _die(f"model {args.name!r} not found.")
+    model = reg.models[args.name]
+
+    budgets = None
+    if args.budgets:
+        try:
+            budgets = tuple(
+                int(x) for x in args.budgets.split(",") if x.strip()
+            )
+        except ValueError:
+            _die("--budgets must be comma-separated integers.")
+
+    data, source_desc = probe_mod.load_catalog(args.catalog_source)
+    catalog = probe_mod.lookup_catalog(
+        model, catalog_data=data, provider=args.catalog_provider)
+    entry = catalog[0] if catalog else None
+
+    results = probe_mod.probe(model, budgets=budgets, entry=entry)
+    report = probe_mod.render_report(model, results, catalog, meta={"source": source_desc})
+    suggestion = probe_mod.suggest_variants(results)
+
+    if args.as_json:
+        print(json.dumps({
+            "model": model.model_id,
+            "results": [r.__dict__ for r in results],
+            "catalog_source": source_desc,
+            "catalog_entry": entry,
+            "suggested": suggestion,
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(report)
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report, encoding="utf-8")
+        print(f"Report written to {out_path}")
+
+    if args.apply:
+        if not suggestion:
+            _die("no accepted thinking shape — refusing to apply an empty preset.")
+        key = probe_mod.apply_preset(paths.models_file(), model.model_id, suggestion)
+        print(f"Wrote preset {key!r} (backup: {paths.models_file()}.bak).")
+        print(
+            "  Point the model at it with variants_preset = \"{}\" in models.toml, "
+            "then `model-switch model use {}`.".format(key, model.model_id)
+        )
 
 
 def _do_complete_models() -> None:
@@ -669,6 +760,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             _do_model_use(args)
         elif args.model_action == "import":
             _do_model_import(args)
+        elif args.model_action == "probe":
+            _do_model_probe(args)
         return 0
     if args.cmd == "status":
         _do_status(args)

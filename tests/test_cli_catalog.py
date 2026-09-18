@@ -34,15 +34,17 @@ def _use(runner, name, **kw):
 # --- model add mirrors into an existing opencode catalog ----------------------
 
 def test_model_add_updates_existing_opencode_catalog(yzr_paths):
-    _add(runner, "glm", key="K1", model_name="glm-4")
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
     _use(runner, "glm", input="opencode\n")  # create opencode.json with catalog
 
     # Add a second model — its provider appears in the existing opencode.json
     # and the default pointer is preserved.
-    _add(runner, "kimi", key="K2", model_name="kimi-k2")
+    _add(runner, "kimi", key="K2", model_name="kimi-k2",
+         base_url="https://api.kimi.com/coding/")
     cfg = json.loads(yzr_paths["opencode"].read_text())
     assert "yzr-kimi" in cfg["provider"]
-    assert cfg["model"] == "yzr-glm/glm-4"  # default unchanged
+    assert cfg["model"] == "yzr-zai/glm-4"  # default unchanged
 
 
 def test_model_add_does_not_create_opencode_file(yzr_paths):
@@ -61,28 +63,33 @@ def test_model_add_does_not_hijack_foreign_default(yzr_paths):
         "model": "anthropic/claude-sonnet-4",
     }), encoding="utf-8")
 
-    _add(runner, "glm", key="K1", model_name="glm-4")
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
     cfg = json.loads(yzr_paths["opencode"].read_text())
-    assert "yzr-glm" in cfg["provider"]
+    assert "yzr-zai" in cfg["provider"]
     assert cfg["model"] == "anthropic/claude-sonnet-4"
 
 
 # --- model remove --------------------------------------------------------------
 
 def test_model_remove_of_non_active_reclaims_provider_and_keeps_default(yzr_paths):
-    _add(runner, "glm", key="K1", model_name="glm-4")
-    _add(runner, "kimi", key="K2", model_name="kimi-k2")
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
+    _add(runner, "kimi", key="K2", model_name="kimi-k2",
+         base_url="https://api.kimi.com/coding/")
     _use(runner, "glm", input="opencode\n")  # default = glm
 
     runner(["model", "remove", "kimi"])
     cfg = json.loads(yzr_paths["opencode"].read_text())
     assert "yzr-kimi" not in cfg["provider"]  # provider + key gone
-    assert cfg["model"] == "yzr-glm/glm-4"    # default still points at glm
+    assert cfg["model"] == "yzr-zai/glm-4"    # default still points at glm
 
 
 def test_model_remove_of_active_clears_claude_and_repoints_opencode(yzr_paths):
-    _add(runner, "glm", key="K1", model_name="glm-4")
-    _add(runner, "kimi", key="K2", model_name="kimi-k2")
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
+    _add(runner, "kimi", key="K2", model_name="kimi-k2",
+         base_url="https://api.kimi.com/coding/")
     # Use on both agents (interactive all).
     _use(runner, "glm", input="all\n")
     assert "ANTHROPIC_AUTH_TOKEN" in json.loads(yzr_paths["settings"].read_text())["env"]
@@ -95,7 +102,7 @@ def test_model_remove_of_active_clears_claude_and_repoints_opencode(yzr_paths):
     assert "model" not in claude
     # OpenCode default falls to the first remaining model; glm provider gone.
     opencode = json.loads(yzr_paths["opencode"].read_text())
-    assert "yzr-glm" not in opencode["provider"]
+    assert "yzr-zai" not in opencode["provider"]
     assert opencode["model"] == "yzr-kimi/kimi-k2"
     # State no longer claims an active model.
     assert load_state(yzr_paths["state"]).active_main is None
@@ -104,7 +111,8 @@ def test_model_remove_of_active_clears_claude_and_repoints_opencode(yzr_paths):
 def test_model_remove_of_active_clears_claude_when_no_opencode(yzr_paths):
     """Even with no opencode involvement, removing the active model clears the
     claude-code slot (default driver)."""
-    _add(runner, "glm", key="K1", model_name="glm-4")
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
     _use(runner, "glm")  # non-TTY → claude-code only
     assert "ANTHROPIC_AUTH_TOKEN" in json.loads(yzr_paths["settings"].read_text())["env"]
 
@@ -117,12 +125,14 @@ def test_model_remove_of_active_clears_claude_when_no_opencode(yzr_paths):
 # --- model use writes the full catalog -----------------------------------------
 
 def test_model_use_opencode_writes_all_models(yzr_paths):
-    _add(runner, "glm", key="K1", model_name="glm-4")
-    _add(runner, "kimi", key="K2", model_name="kimi-k2")
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
+    _add(runner, "kimi", key="K2", model_name="kimi-k2",
+         base_url="https://api.kimi.com/coding/")
     _use(runner, "kimi", input="opencode\n")
 
     cfg = json.loads(yzr_paths["opencode"].read_text())
-    assert "yzr-glm" in cfg["provider"]
+    assert "yzr-zai" in cfg["provider"]
     assert "yzr-kimi" in cfg["provider"]
     assert cfg["model"] == "yzr-kimi/kimi-k2"
 
@@ -130,9 +140,10 @@ def test_model_use_opencode_writes_all_models(yzr_paths):
 # --- model import --------------------------------------------------------------
 
 def test_model_import_replace_reconciles_catalog(yzr_paths):
-    _add(runner, "glm", key="K1", model_name="glm-4")
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
     _use(runner, "glm", input="opencode\n")
-    assert "yzr-glm" in json.loads(yzr_paths["opencode"].read_text())["provider"]
+    assert "yzr-zai" in json.loads(yzr_paths["opencode"].read_text())["provider"]
 
     src = yzr_paths["config_dir"] / "incoming.toml"
     src.write_text(
@@ -143,24 +154,25 @@ def test_model_import_replace_reconciles_catalog(yzr_paths):
     runner(["model", "import", str(src)])
 
     cfg = json.loads(yzr_paths["opencode"].read_text())
-    assert "yzr-glm" not in cfg["provider"]   # replaced model's provider reclaimed
-    assert "yzr-new" in cfg["provider"]
-    assert cfg["model"] == "yzr-new/new-m"    # default re-pointed to remaining
+    assert "yzr-zai" not in cfg["provider"]   # replaced model's provider reclaimed
+    assert "yzr-n" in cfg["provider"]
+    assert cfg["model"] == "yzr-n/new-m"    # default re-pointed to remaining
     assert load_state(yzr_paths["state"]).active_main is None  # glm was active
 
 
 def test_model_import_merge_adds_provider_keeps_default(yzr_paths):
-    _add(runner, "glm", key="K1", model_name="glm-4")
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
     _use(runner, "glm", input="opencode\n")
 
     src = yzr_paths["config_dir"] / "incoming.toml"
     src.write_text(
         "[[models]]\n"
-        'model_id = "kimi"\nname = "kimi-k2"\nbase_url = "https://b"\napi_key = "K2"\n',
+        'model_id = "kimi"\nname = "kimi-k2"\nbase_url = "https://api.kimi.com/coding/"\napi_key = "K2"\n',
         encoding="utf-8",
     )
     runner(["model", "import", str(src), "--merge"])
 
     cfg = json.loads(yzr_paths["opencode"].read_text())
     assert "yzr-kimi" in cfg["provider"]
-    assert cfg["model"] == "yzr-glm/glm-4"  # default preserved
+    assert cfg["model"] == "yzr-zai/glm-4"  # default preserved

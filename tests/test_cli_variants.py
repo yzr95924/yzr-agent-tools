@@ -36,7 +36,7 @@ MODELS_TOML = (
     '[[models]]\n'
     'model_id = "inline-1m"\n'
     'name = "inline"\n'
-    'base_url = "https://api.example.com"\n'
+    'base_url = "https://api.kimi.com/coding/"\n'
     'api_key = "K2"\n'
     'variants = { none = { thinking = { type = "disabled" } } }\n'
 )
@@ -56,11 +56,11 @@ def test_model_use_renders_expanded_variants(yzr_paths):
     assert r.exit_code == 0, r.stdout
 
     cfg = json.loads(yzr_paths["opencode"].read_text())
-    entry = cfg["provider"]["yzr-glm-5_3-1m"]["models"]["glm-5.3"]
+    entry = cfg["provider"]["yzr-example"]["models"]["glm-5.3"]
     assert entry["reasoning"] is True
     assert entry["variants"] == {"high": {"effort": "high"}, "max": {"effort": "max"}}
     # The other model's inline variants are rendered untouched.
-    inline = cfg["provider"]["yzr-inline-1m"]["models"]["inline"]
+    inline = cfg["provider"]["yzr-kimi"]["models"]["inline"]
     assert inline["variants"] == {"none": {"thinking": {"type": "disabled"}}}
 
 

@@ -1,6 +1,7 @@
 """Tests for the TOML-backed store."""
 import pytest
 
+from model_switch._compat import toml_loads
 from model_switch.store import (
     DuplicateModelId,
     InvalidContextWindow,
@@ -93,6 +94,22 @@ def test_load_models_preserves_unknown_keys_after_save(tmp_path):
     assert reloaded.models["glm"].context_window == 1000000
 
 
+def test_provider_key_round_trips_as_per_model_extra(tmp_path):
+    """`provider` is a grouping directive the store doesn't model — it must
+    ride in the per-model extras untouched."""
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'provider = "dashscope"\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n')
+
+    reg = load_models(p)
+    assert reg.models["m"].extra["provider"] == "dashscope"
+
+    save_models(p, reg)
+    assert 'provider = "dashscope"' in p.read_text()
+    assert load_models(p).models["m"].extra["provider"] == "dashscope"
+
+
 def test_load_models_rejects_missing_required_field(tmp_path):
     p = tmp_path / "models.toml"
     p.write_text('[[models]]\nmodel_id = "glm"\nname = "glm-4"\n'
@@ -157,7 +174,7 @@ def test_variants_round_trip_single_entry(tmp_path):
 
     save_models(p, reg)
     text = p.read_text()
-    assert "[models.variants.max]" in text
+    assert 'variants = { high = { effort = "high" }, max = { effort = "max" } }' in text
     assert "\n[variants]" not in text
 
     reloaded = load_models(p)
@@ -217,6 +234,111 @@ def test_variants_presets_table_round_trip(tmp_path):
         "max": {"effort": "max"},
     }
     assert reloaded.models["m"].extra["variants_preset"] == "z-effort"
+
+
+# --- dumper inline compaction -------------------------------------------------
+#
+# Tables render inline (`key = { ... }`) when shallow enough; a pure-namespace
+# table (no scalars of its own, all children expanding) drops its header. The
+# invariant under all of this is plain round-trip equality.
+
+def test_dumper_inlines_preset_tiers_and_skips_namespace_header(tmp_path):
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n'
+                 'variants_preset = "z-effort"\n\n'
+                 '[variants_presets.z-effort]\n'
+                 'off = { thinking = { type = "disabled" } }\n'
+                 'low = { thinking = { type = "adaptive" }, effort = "low" }\n'
+                 'high = { thinking = { type = "adaptive" }, effort = "high" }\n'
+                 'max = { thinking = { type = "adaptive" }, effort = "max" }\n\n'
+                 '[variants_presets.q-budget]\n'
+                 'off = { thinking = { type = "disabled" } }\n'
+                 'low = { thinking = { type = "enabled", budgetTokens = 8192 } }\n'
+                 'high = { thinking = { type = "enabled", budgetTokens = 32768 } }\n')
+    before = toml_loads(p.read_text())
+
+    save_models(p, load_models(p))
+    text = p.read_text()
+
+    assert "[[models]]" in text
+    assert "\n[variants_presets]\n" not in text
+    assert "[variants_presets.z-effort]" in text
+    assert 'off = { thinking = { type = "disabled" } }' in text
+    assert 'low = { thinking = { type = "adaptive" }, effort = "low" }' in text
+    assert toml_loads(text) == before
+
+
+def test_dumper_inlines_small_preset_whole(tmp_path):
+    """A short enough root-level table inlines entirely. It must land before
+    every [header] — after a header the line would be swallowed by it."""
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n\n'
+                 '[variants_presets.z-effort]\n'
+                 'high = { effort = "high" }\n'
+                 'max = { effort = "max" }\n')
+    before = toml_loads(p.read_text())
+
+    save_models(p, load_models(p))
+    text = p.read_text()
+
+    assert ('variants_presets = { z-effort = { high = { effort = "high" }, '
+            'max = { effort = "max" } } }') in text
+    assert text.index("variants_presets =") < text.index("[[models]]")
+    assert toml_loads(text) == before
+
+
+def test_dumper_expands_overlong_subtree(tmp_path):
+    """Past the line-length cap the subtree falls back to a [header], while
+    each tier inside still inlines."""
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n'
+                 'variants = { low = { effort = "low" }, '
+                 'medium = { effort = "medium" }, high = { effort = "high" }, '
+                 'xhigh = { effort = "xhigh" }, max = { effort = "max" } }\n')
+    before = toml_loads(p.read_text())
+
+    save_models(p, load_models(p))
+    text = p.read_text()
+
+    assert "[models.variants]" in text
+    assert 'low = { effort = "low" }' in text
+    assert 'max = { effort = "max" }' in text
+    assert toml_loads(text) == before
+
+
+def test_dumper_empty_table_survives(tmp_path):
+    """An empty table must render as `key = {}` — never vanish."""
+    p = tmp_path / "models.toml"
+    p.write_text('a = {}\n\n'
+                 '[[models]]\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n')
+    before = toml_loads(p.read_text())
+
+    save_models(p, load_models(p))
+    text = p.read_text()
+
+    assert "a = {}" in text
+    assert toml_loads(text) == before
+
+
+def test_dumper_quotes_non_bare_keys(tmp_path):
+    """An inline key containing `.` must be quoted, or it would silently
+    become an extra table level."""
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n\n'
+                 '[variants_presets."z.effort"]\n'
+                 'high = { effort = "high" }\n')
+    before = toml_loads(p.read_text())
+
+    save_models(p, load_models(p))
+    text = p.read_text()
+
+    assert '"z.effort"' in text
+    assert toml_loads(text) == before
 
 
 # --- state --------------------------------------------------------------------

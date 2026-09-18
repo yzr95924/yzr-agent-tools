@@ -13,21 +13,28 @@ to the active one::
 
   {
     "provider": {
-      "yzr-glm": {
+      "yzr-zai": {
         "npm": "@ai-sdk/anthropic",
-        "name": "yzr-glm",
+        "name": "yzr-zai",
         "options": { "baseURL": "<base_url>/v1", "apiKey": "<resolved-key>" },
-        "models": { "<model_id>": {} }
+        "models": { "<model name>": {} }
       },
       "yzr-kimi": { ... }
     },
-    "model": "yzr-glm/glm-4"
+    "model": "yzr-zai/glm-5.3"
   }
 
-One provider per model: ``baseURL`` and ``apiKey`` are **provider-level**, not
-per-model, so models from different upstreams (different base_url/key) cannot
-share a provider block. Each ``yzr-<model_id>`` provider is self-contained and
-the model picker shows one group per upstream.
+One provider per **upstream**, not per model: ``baseURL`` and ``apiKey`` are
+**provider-level** (not per-model), so models share a block exactly when they
+share both. A model may pin its group name with ``provider = "<name>"``
+(→ ``yzr-<name>``); otherwise the name derives from the upstream host
+(``api.z.ai`` → ``zai``, ``api.kimi.com`` → ``kimi``,
+``dashscope.aliyuncs.com`` → ``dashscope``). Declared names win collisions
+with derived slugs; leftovers get ``-2``/``-3`` suffixes in sorted order, so
+re-renders are stable. All models under one declared name must share one
+upstream — a partial key rotation fails loudly instead of silently splitting
+the group — and model *names* must be unique within a group, since they key
+the provider's ``models`` map.
 
 Reconciliation is a mirror: ``apply()`` / ``sync_catalog()`` rewrite the whole
 ``yzr-*`` namespace from models.toml, deleting any ``yzr-*`` provider (or the
@@ -75,7 +82,7 @@ knowledge, so adding a model or an upstream never touches it.
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from model_switch import paths
 from model_switch.drivers._atomic import atomic_write_json
@@ -84,10 +91,13 @@ from model_switch.store import ModelEntry as Model
 
 PROVIDER_ID = "yzr"
 
-# The provider namespace model-switch owns. Each registered model becomes one
-# provider `yzr-<model_id>` (baseURL/apiKey are provider-level, so models from
-# different upstreams can't share a block). The bare `yzr` id is the legacy
-# single-slot form — still reclaimed so an upgrade migrates automatically.
+# The provider namespace model-switch owns. Models are grouped by upstream
+# (baseURL/apiKey are provider-level, so a block is shareable exactly when
+# both match) and each group renders as `yzr-<host-slug>` — see
+# `_upstream_slug` — or as `yzr-<name>` when the model pins one with
+# `provider = "<name>"`. The bare `yzr` id is the legacy single-slot form and
+# per-model `yzr-<model_id>` ids are the pre-grouping form; both stay
+# reclaimable so upgrades migrate automatically.
 PROVIDER_PREFIX = "yzr-"
 
 # Anthropic-compatible upstreams (model-switch's only supported protocol) load
@@ -164,39 +174,155 @@ def _render_model_entry(model: Model) -> Dict[str, Any]:
     return entry
 
 
-def _provider_id(model_id: str) -> str:
-    """Provider id for a registered model: ``yzr-<model_id>``."""
-    return PROVIDER_PREFIX + model_id
+def _upstream_slug(base_url: str) -> str:
+    """Derive a short provider slug from an upstream base_url host.
+
+    ``api.z.ai`` → ``zai`` (first label is ≤2 chars, so join the second),
+    ``api.kimi.com`` → ``kimi``, ``dashscope.aliyuncs.com`` → ``dashscope``.
+    Leading ``api.``/``www.`` labels are dropped; non-alphanumerics stripped.
+    """
+    host = base_url.split("//")[-1].split("/")[0].lower()
+    labels = [l for l in host.split(".") if l]
+    if labels and labels[0] in ("api", "www"):
+        labels = labels[1:]
+    if not labels:
+        return "upstream"
+    slug = labels[0]
+    if len(slug) <= 2 and len(labels) > 1:
+        slug += labels[1]
+    slug = re.sub(r"[^a-z0-9]", "", slug)
+    return slug or "upstream"
 
 
-def _model_id_from_provider(provider_id: str) -> Optional[str]:
-    """Reverse ``_provider_id``; None for foreign / legacy-``yzr`` ids."""
-    if provider_id.startswith(PROVIDER_PREFIX):
-        return provider_id[len(PROVIDER_PREFIX):]
-    return None
+# Group key: (declared provider name or None, base_url, api_key). A provider
+# block is shareable exactly when all three match.
+_GroupKey = Tuple[Optional[str], str, str]
+
+_PROVIDER_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+
+
+def _declared_provider(m: Model) -> Optional[str]:
+    """The model's ``provider = "<name>"`` declaration, if any."""
+    value = m.extra.get("provider")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            "model {!r}: provider must be a string, got {}".format(
+                m.model_id, type(value).__name__))
+    return value
+
+
+def _validate_provider_names(groups: Dict[_GroupKey, List[Model]]) -> None:
+    """Loud checks on declared provider names (see `_group_assignments`)."""
+    by_name: Dict[str, List[_GroupKey]] = {}
+    for key in groups:
+        if key[0] is not None:
+            by_name.setdefault(key[0], []).append(key)
+    for name, keys in sorted(by_name.items()):
+        if name.startswith(PROVIDER_PREFIX):
+            raise ValueError(
+                "provider {!r} must not start with {!r} — the tool adds that "
+                "prefix when building the provider id".format(
+                    name, PROVIDER_PREFIX))
+        if not _PROVIDER_NAME_RE.match(name):
+            raise ValueError(
+                "provider {!r} is not a valid name: use lowercase letters, "
+                "digits and hyphens ({}); '/' or spaces would corrupt the "
+                "'<provider>/<model>' default pointer".format(
+                    name, _PROVIDER_NAME_RE.pattern))
+        if len(keys) > 1:
+            fields = []
+            if len({k[1] for k in keys}) > 1:
+                fields.append("base_url")
+            if len({k[2] for k in keys}) > 1:
+                fields.append("api_key")
+            model_ids = sorted(m.model_id for k in keys for m in groups[k])
+            raise ValueError(
+                "provider {!r} is declared with conflicting upstreams ({} "
+                "differ): {}. One provider block holds one baseURL/apiKey — "
+                "give the models distinct provider names or align the "
+                "values".format(
+                    name, " and ".join(fields),
+                    ", ".join(repr(i) for i in model_ids)))
+
+
+def _group_assignments(models: List[Model]) -> Tuple[Dict[_GroupKey, List[Model]], Dict[_GroupKey, str]]:
+    """Group models into provider blocks and assign provider ids.
+
+    Returns ``(groups, pid_by_key)``. A model may pin its id with
+    ``provider = "<name>"`` → ``yzr-<name>``; without it the id is derived
+    from the base_url host (``yzr-<host-slug>``), so a pinned name outlives
+    base_url changes. Groups are keyed by ``(declared, base_url, api_key)`` —
+    baseURL/apiKey are provider-level, so a block is shareable exactly when
+    both match. Declared names win collisions with derived slugs; leftovers
+    get ``-2``/``-3`` suffixes in sorted order, so repeated renders are
+    byte-stable. All models declaring one name must share one upstream — a
+    partial key rotation fails loudly instead of silently splitting the
+    group in two. Duplicate model names within a group would overwrite each
+    other in the provider's ``models`` map — rejected loudly too.
+    """
+    groups: Dict[_GroupKey, List[Model]] = {}
+    for m in models:
+        groups.setdefault(
+            (_declared_provider(m), m.base_url, m.api_key or ""), []
+        ).append(m)
+    _validate_provider_names(groups)
+
+    pid_by_key: Dict[_GroupKey, str] = {}
+    taken: set = set()
+
+    def assign(key: _GroupKey, base: str) -> None:
+        slug = base
+        n = 2
+        while slug in taken:
+            slug = "{}-{}".format(base, n)
+            n += 1
+        taken.add(slug)
+        pid_by_key[key] = PROVIDER_PREFIX + slug
+
+    for key in sorted((k for k in groups if k[0] is not None),
+                      key=lambda k: k[0]):
+        assign(key, key[0])
+    for key in sorted((k for k in groups if k[0] is None),
+                      key=lambda k: (k[1], k[2])):
+        assign(key, _upstream_slug(key[1]))
+
+    for members in groups.values():
+        seen = set()
+        for m in members:
+            if m.name in seen:
+                raise ValueError(
+                    "model names must be unique within one upstream: "
+                    "{!r} is claimed by multiple models on {}".format(
+                        m.name, m.base_url))
+            seen.add(m.name)
+    return groups, pid_by_key
+
+
+def _provider_layout(models: List[Model]) -> Tuple[Dict[_GroupKey, str], Dict[_GroupKey, List[Model]], Dict[str, str]]:
+    """Return ``(pid_by_key, groups, ref_by_model_id)`` for a model list.
+
+    ``ref_by_model_id`` maps model_id → ``<provider_id>/<model name>`` (the
+    form OpenCode's default pointer uses), letting references be resolved by
+    lookup instead of string surgery on the provider id.
+    """
+    groups, pid_by_key = _group_assignments(models)
+    ref_by_model_id: Dict[str, str] = {}
+    for key, members in groups.items():
+        for m in members:
+            ref_by_model_id[m.model_id] = "{}/{}".format(pid_by_key[key], m.name)
+    return pid_by_key, groups, ref_by_model_id
 
 
 def _is_owned_provider(provider_id: str) -> bool:
     """Whether model-switch owns (and may reclaim) this provider id.
 
-    Covers both the per-model ``yzr-*`` ids and the legacy single-slot ``yzr``,
-    so an upgrade to the catalog form migrates automatically.
+    Covers the grouped ``yzr-<slug>`` ids, the pre-grouping per-model
+    ``yzr-<model_id>`` ids, and the legacy single-slot ``yzr``, so upgrades
+    migrate automatically.
     """
     return provider_id == PROVIDER_ID or provider_id.startswith(PROVIDER_PREFIX)
-
-
-def _model_id_from_reference(model_ref: str) -> Optional[str]:
-    """Extract the model_id from a ``yzr-<id>/<name>`` default reference."""
-    if not model_ref or "/" not in model_ref:
-        return None
-    return _model_id_from_provider(model_ref.split("/", 1)[0])
-
-
-def _find_model(models: List[Model], model_id: str) -> Optional[Model]:
-    for m in models:
-        if m.model_id == model_id:
-            return m
-    return None
 
 
 class OpenCodeDriver:
@@ -238,9 +364,13 @@ class OpenCodeDriver:
                      create: bool = False) -> None:
         """Mirror `models` into the ``yzr-*`` provider namespace.
 
-        Reconciles the whole namespace: every registered model gets its own
-        ``yzr-<model_id>`` provider; any ``yzr-*``/legacy ``yzr`` provider not
-        in `models` is deleted (with its plaintext key). Foreign providers and
+        Reconciles the whole namespace: models are grouped into upstreams
+        (``(declared provider, base_url, api_key)``; see
+        `_group_assignments`) and each group renders as one
+        ``yzr-<host-slug>`` or ``yzr-<name>`` provider; any ``yzr-*`` provider
+        not produced by that grouping (including per-model ``yzr-<model_id>``
+        blocks from the pre-grouping scheme, and the legacy single-slot
+        ``yzr``) is deleted with its plaintext key. Foreign providers and
         top-level keys are preserved.
 
         The default pointer (`config["model"]`) is kept when it still names a
@@ -260,27 +390,28 @@ class OpenCodeDriver:
             k: v for k, v in config.get("provider", {}).items()
             if not _is_owned_provider(k)
         }
-        for model in models:
-            if not model.api_key:
-                continue
-            provider_block = {
+        keyed = [m for m in models if m.api_key]
+        pid_by_key, groups, _refs = _provider_layout(keyed)
+        for key in sorted(groups, key=lambda k: pid_by_key[k]):
+            _declared, base_url, api_key = key
+            members = sorted(groups[key], key=lambda m: m.name)
+            providers[pid_by_key[key]] = {
                 "npm": NPM_ADAPTER,
-                "name": _provider_id(model.model_id),
+                "name": pid_by_key[key],
                 "options": {
-                    "baseURL": _base_url_for_ai_sdk(model.base_url),
-                    "apiKey": model.api_key,
+                    "baseURL": _base_url_for_ai_sdk(base_url),
+                    "apiKey": api_key,
                 },
                 # Per-model object: `reasoning`/`variants` passed through from
                 # models.toml (tier declarations for the variant cycle), plus a
                 # `limit` block when context_window is known (a custom provider
                 # isn't on models.dev, so OpenCode needs it told). See
                 # _render_model_entry for the schema constraint.
-                "models": {model.name: _render_model_entry(model)},
+                "models": {m.name: _render_model_entry(m) for m in members},
             }
-            providers[_provider_id(model.model_id)] = provider_block
 
         config["provider"] = providers
-        default = self._resolve_default(config.get("model"), models, active_id)
+        default = self._resolve_default(config.get("model"), keyed, active_id)
         if default is None:
             config.pop("model", None)
         else:
@@ -296,20 +427,18 @@ class OpenCodeDriver:
         key). A foreign pointer (or an absent key) is never touched — moving
         the default is the `model use` path's job, and sync_catalog must not
         hijack a default the user set themselves."""
-        if active_id is not None:
-            m = _find_model(models, active_id)
-            if m is not None and m.api_key:
-                return "{}/{}".format(_provider_id(m.model_id), m.name)
+        if not models:
+            return None
+        _pid_by_key, _groups, ref_by_model_id = _provider_layout(models)
+        if active_id is not None and active_id in ref_by_model_id:
+            return ref_by_model_id[active_id]
         if current:
-            mid = _model_id_from_reference(current)
-            if mid is not None:
-                m = _find_model(models, mid)
-                if m is not None and m.api_key:
-                    return current
+            if current in ref_by_model_id.values():
+                return current
+            if _is_owned_provider(current.split("/", 1)[0]):
                 # Ours but vanished — fall to the first remaining model.
                 for m in models:
-                    if m.api_key:
-                        return "{}/{}".format(_provider_id(m.model_id), m.name)
+                    return ref_by_model_id[m.model_id]
                 return None
             # Foreign reference — not ours to move.
             return current

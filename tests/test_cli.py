@@ -46,6 +46,45 @@ def test_model_add_creates_entry(yzr_paths):
     assert cfg.models["glm-z1"].base_url == "https://api.example.com"
 
 
+def test_model_add_provider_flag_pins_group(yzr_paths):
+    result = runner([
+        "model", "add", "qwen-3_8-flash-1m",
+        "--base-url", "https://dashscope.aliyuncs.com/apps/anthropic",
+        "--api-key", "K",
+        "--model-name", "qwen3.8-flash",
+        "--provider", "dashscope",
+    ])
+    assert result.exit_code == 0, result.stdout
+    cfg = load_models(yzr_paths["models"])
+    assert cfg.models["qwen-3_8-flash-1m"].extra["provider"] == "dashscope"
+    assert 'provider = "dashscope"' in yzr_paths["models"].read_text()
+
+    shown = runner(["model", "show", "qwen-3_8-flash-1m"])
+    assert "provider:       dashscope" in shown.stdout
+
+
+def test_model_add_conflicting_provider_is_a_clean_error(yzr_paths):
+    """Same declared name with a different upstream must fail with a one-line
+    error, not a traceback (the agent config has to exist for sync to run)."""
+    first = runner([
+        "model", "add", "a",
+        "--base-url", "https://a.example/anthropic",
+        "--api-key", "K", "--model-name", "m1", "--provider", "gw",
+    ])
+    assert first.exit_code == 0, first.stdout
+    use = runner(["model", "use", "a", "--driver", "opencode"])
+    assert use.exit_code == 0, use.stdout
+
+    second = runner([
+        "model", "add", "b",
+        "--base-url", "https://b.example/anthropic",
+        "--api-key", "K", "--model-name", "m2", "--provider", "gw",
+    ])
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "Traceback" not in second.stdout
+
+
 def test_model_add_requires_all_required_options(yzr_paths):
     """Required options are now prompted. Providing only the prompted
     answers is sufficient to succeed (no flag-only failure)."""
@@ -260,7 +299,7 @@ def test_model_use_writes_stored_api_key_to_driver(yzr_paths):
     assert result.exit_code == 0, result.stdout
 
     written = json.loads(yzr_paths["opencode"].read_text())
-    assert written["provider"]["yzr-stored"]["options"]["apiKey"] == "sk-from-toml"
+    assert written["provider"]["yzr-zai"]["options"]["apiKey"] == "sk-from-toml"
 
 
 def test_model_use_interactive_default_applies_all_drivers(yzr_paths):
@@ -277,7 +316,7 @@ def test_model_use_interactive_default_applies_all_drivers(yzr_paths):
     claude = json.loads(yzr_paths["settings"].read_text())
     assert claude["env"]["ANTHROPIC_AUTH_TOKEN"] == "K"
     opencode = json.loads(yzr_paths["opencode"].read_text())
-    assert opencode["provider"]["yzr-glm-z1"]["options"]["apiKey"] == "K"
+    assert opencode["provider"]["yzr-example"]["options"]["apiKey"] == "K"
 
 
 def test_model_use_interactive_all_keyword(yzr_paths):

@@ -28,10 +28,10 @@ PATH 块。不创建虚拟环境,不调 `pip install`。
 
 安装脚本**不会**安装任何 Python 包。运行 `model-switch` 之前请确保:
 
-| 用途         | Python < 3.11                     | Python ≥ 3.11 |
-| ------------ | --------------------------------- | ------------- |
-| 运行 CLI     | `pip install --user 'tomli>=1.1'` | (仅标准库)    |
-| 跑测试       | `pip install --user pytest pytest-cov` | 同上         |
+| 用途 | Python < 3.11 | Python ≥ 3.11 |
+| --- | --- | --- |
+| 运行 CLI | `pip install --user 'tomli>=1.1'` | (仅标准库) |
+| 跑测试 | `pip install --user pytest pytest-cov` | 同上 |
 
 如果在 Python < 3.11 上缺 `tomli`,第一次跑 `model-switch` 会在 `import tomli` 处
 抛 `ImportError`——装上再重试。
@@ -96,13 +96,19 @@ model-switch model add <name> \
      --api-key <KEY> \
      --model-name <id> \
      [--description <text>] \
-     [--context-window <tokens>]
+     [--context-window <tokens>] \
+     [--provider <group-name>]
 
 model-switch model list                        # 列出所有模型 + 激活标记
 model-switch model show <name>
 model-switch model remove <name>
 
 model-switch model use <name> [--driver NAME] [--all-drivers]   # 交互式默认 = 全部 driver;非 TTY / CI = 仅 claude-code
+
+model-switch model probe <name> \
+     [--budgets 1024,4096,8192,32768] \
+     [--json] [--out <file.md>] [--apply]
+                                               # 探测上游 thinking 形状接受度(默认只读;--apply 只写 probe-* preset)
 
 model-switch status [--driver NAME] [--all-drivers]
 ```
@@ -165,16 +171,30 @@ model-switch status --driver opencode
 ```
 
 OpenCode driver 往 OpenCode 的全局配置 `~/.config/opencode/opencode.json`
-(`$XDG_CONFIG_HOME/opencode/opencode.json`)里写 `yzr-<模型名>` 的 provider 块(带
+(`$XDG_CONFIG_HOME/opencode/opencode.json`)里写 `yzr-<上游slug>` 的 provider 块(带
 `@ai-sdk/anthropic` adapter),并把解析出的 API key 直接写入 `apiKey`——密钥是落盘的,
 请把文件权限收紧。模型定义(`models.toml`)在 Claude Code 和 OpenCode driver 之间共享,
 所以切换 agent 不用重新注册模型。
 
 **OpenCode 是 catalog 型 agent。** 与 Claude Code 的单槽不同,OpenCode 的模型 picker
-里能看到所有已配置的 provider。所以 model-switch 把 `models.toml` 里的**全部模型**镜像进
-`yzr-*` 命名空间——每个模型一个 provider(`baseURL`/`apiKey` 是 provider 级字段,不同上游的
-模型不能共用一个块),`config["model"]` 只作为默认指针指向激活的模型。你在 OpenCode 里用
-`/models` 随时切,不必回 CLI:
+里能看到所有已配置的 provider。所以 model-switch 把 `models.toml` 里的**全部模型**按
+上游分组镜像进 `yzr-*` 命名空间——`baseURL`/`apiKey` 是 provider 级字段,共享一个块的
+模型必须同上游同 key;每组一个 provider。**provider id 的确定方式是「声明优先,缺省派生」**:
+
+- 模型条目里写 `provider = "<名字>"` → id 即 `yzr-<名字>`(名字只写 slug,`yzr-` 前缀
+  由工具加;允许小写字母/数字/连字符,因为 id 会拼进 `yzr-<名字>/<模型>` 指针);
+  同一名字下的所有模型必须共享 `base_url` 和 `api_key`——**key 轮换漏改一处会显式报错**,
+  不会静默裂成两个 provider;
+- 不写 `provider` → 按上游 host 派生(`api.z.ai`→`yzr-zai`、`api.kimi.com`→`yzr-kimi`、
+  `dashscope.aliyuncs.com`→`yzr-dashscope`),不同组撞名时按排序加 `-2`/`-3` 后缀
+  (渲染结果稳定;已声明的名字优先占用,派生 slug 让位)。
+
+**写 `provider` 的价值是 id 稳定**:以后换 `base_url`(换网关/换区域),id 不变,
+外部引用(脚本里的 `opencode run -m yzr-<名字>/...`、项目级 opencode.json、文档)不会断;
+不写则 host 一变 id 就变。声明成与派生值相同的名字,渲染结果**逐字节不变**——旧文件可以
+逐步加声明,零风险。同组内的模型名必须唯一(它是 `models` 映射的键)。`config["model"]`
+只作为默认指针指向激活的模型,形如 `yzr-zai/glm-5.3`。你在 OpenCode 里用 `/models`
+随时切,不必回 CLI:
 
 - `model use <name>` — 全量 reconcile + 把默认指针指到该模型;
 - `model add` / `model remove` / `model import` — 同样触发 reconcile:新增的模型立刻进
@@ -182,8 +202,9 @@ OpenCode driver 往 OpenCode 的全局配置 `~/.config/opencode/opencode.json`
 - `config["model"]` 默认指针:指向的模型还在就保持;被删了则落到剩余模型的第一个;一个都不
   剩就删掉该键。**默认指针只会被 `model use` 改动**——add/remove/import 的 reconcile 从不
   碰你手动设的外来默认模型。
-- `yzr-*` 命名空间归 model-switch 管:任何 `yzr-*` 前缀(含旧版单槽的裸 `yzr`)都会被
-  reconcile 回收,请别在这个前缀下自建 provider。`yzr-*` 之外的一切原样保留。
+- `yzr-*` 命名空间归 model-switch 管:任何 `yzr-*` 前缀(含旧版单槽的裸 `yzr` 和旧版
+  每模型一个的 `yzr-<model_id>`)都会被 reconcile 回收,请别在这个前缀下自建 provider。
+  `yzr-*` 之外的一切原样保留。
 - 镜像只作用于已存在的 `opencode.json`:`model add` 不会凭空创建一个你没用过的全局配置文件,
   只有 `model use --driver opencode`(或 interactive all)才创建它。
 
@@ -193,10 +214,11 @@ OpenCode 的模型可以带若干「档位」(variant),用 `ctrl+t`(`variant_cyc
 比如 high/max。model-switch 不认识任何具体模型或上游:它把 `models.toml` 里声明的东西
 **原样透传**进 `opencode.json` 的 model 块,所以档位是纯数据,加模型/换上游都只改 toml。
 
-两个字段(都写在 `[[models]]` 条目里,都可选):
+这些字段(都写在 `[[models]]` 条目里,都可选):
 
 | 字段 | 作用 |
 | --- | --- |
+| `provider = "<名字>"` | 钉住 provider 分组名,id 即 `yzr-<名字>`(缺省按 base_url host 派生;同名字下所有模型必须同 base_url + api_key) |
 | `reasoning = true` | 声明该模型支持推理(OpenCode 的一些行为以此为闸门,如内置档位规则与 picker 上的标注) |
 | `variants_preset = "<名字>"` | 引用顶层 `[variants_presets.<名字>]` 定义的档位表(推荐) |
 | `variants = { ... }` | 直接内联档位表(逃生舱;与 preset 同时存在时,逐字段覆盖 preset) |
@@ -263,6 +285,41 @@ provider.<id>.models.<name>.variants.<tier>`)。档位**内容**不校验(原样
 (`env.ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL` + 顶层 `model`)清掉,
 避免已删除模型的 key 残留,同时清空 state.toml 的 active_main。非 active 模型的删除对
 Claude Code 无影响(单槽天然无残留)。
+
+### 探针(`model probe`)
+
+`model-switch model probe <model_id>` 向上游发一轮**小请求**,输出「接受矩阵」:哪些
+thinking 形状过、哪些被拒、响应里有没有 thinking 块。默认只读;`--apply` 才写配置,而且只写
+它自己的 `variants_presets["probe-<model_id>"]`(原子写 + `models.toml.bak` 备份),绝不碰
+你的 preset。
+
+**矩阵由 catalog 驱动**:探测前先取 models.dev 里同名模型的 `reasoning_options`(数据源
+`--catalog-source auto|live|cache`,默认 auto = 先拉 `https://models.opencode.ai/api.json`、失败回落
+OpenCode 本地缓存 `~/.cache/opencode/models.json`;OpenCode 自己每 60 分钟刷新该缓存),
+据此生成候选行——声明的每个 effort 值一行(自动覆盖 `medium`/`xhigh` 这类固定矩阵探不到的
+档)、budget 按 min/max 夹出梯度、toggle 则探 `disabled`;没有 catalog 条目时退回固定矩阵
+(control / disabled / adaptive / effort low+high / budget 4 档)。
+
+- 同名模型在 models.dev 下可能有几十个 provider、`reasoning_options` 互相冲突;默认排序
+  取「host 匹配 + 声明了 effort/budget 的富条目」优先,不确定时用
+  `--catalog-provider <id>` 钉死(报告列出全部候选)
+- 报告的 Catalog 节带 caveat:catalog 描述的是 provider **声明**的端点(通常是其 OpenAI
+  兼容 API),而我们走 Anthropic 兼容路径——档位名是家族级的,那条对照是推断,probe 行才是
+  我们端点的证据
+- 接受边界 ≠ 有效预算——上游可能收了 32768 再静默 clamp,那只能靠供应商文档 + 实测观察
+
+```bash
+# 只探测,打印报告(矩阵大小取决于 catalog 声明,通常 5~7 次小请求)
+model-switch model probe glm-5_3-1m
+
+# 报告另存文件 + 推荐 preset 落盘(probe- 命名空间)
+model-switch model probe glm-5_3-1m --out /tmp/probe-glm53.md --apply
+
+# 同名模型多 provider 时钉死对照条目 / 自定义 budget 梯度 / 只用本地缓存 / JSON 输出
+model-switch model probe qwen-3_7-max-1m --catalog-provider alibaba-cn
+model-switch model probe qwen-3_7-max-1m --budgets 8192,32768,131072
+model-switch model probe kimi-k3-1m --catalog-source cache --json
+```
 
 ## 跑测试
 

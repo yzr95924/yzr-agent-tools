@@ -49,8 +49,8 @@ def test_opencode_does_not_append_1m_suffix(tmp_path, monkeypatch, glm_main):
     d.apply(models=[glm_main], active=glm_main)
 
     written = json.loads(d.settings_path.read_text())
-    assert written["model"] == "yzr-glm/MiniMax-M3"
-    provider = written["provider"]["yzr-glm"]
+    assert written["model"] == "yzr-example/MiniMax-M3"
+    provider = written["provider"]["yzr-example"]
     assert "MiniMax-M3[1m]" not in json.dumps(provider)
 
 

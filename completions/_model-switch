@@ -27,6 +27,7 @@ actions=(
   'remove:Remove a model definition'
   'use:Activate a model'
   'import:Import models from a TOML file'
+  'probe:Probe upstream reasoning-shape acceptance'
 )
 
 local -a _ms_models _ms_drivers
@@ -69,6 +70,7 @@ case $state in
                   '--model-name[Upstream model identifier]:name:_message -r "name"' \
                   '--description[Free-text description]:desc:_message -r "description"' \
                   '--context-window[Max input tokens]:tokens:_message -r "tokens"' \
+                  '--provider[Provider group name (id yzr-<name>); default derived from base_url]:name:_message -r "name"' \
                   '(-h --help)'{-h,--help}'[Show help]'
                 ;;
               list)
@@ -91,6 +93,17 @@ case $state in
                   '--merge[Merge into existing models.toml]' \
                   '(-h --help)'{-h,--help}'[Show help]' \
                   '*:TOML file:_files -g "*.toml"'
+                ;;
+              probe)
+                _arguments \
+                  '--budgets[Comma-separated budget ladder]:budgets:_message -r "budgets"' \
+                  '--catalog-source[models.dev catalog source]:source:(auto live cache)' \
+                  '--catalog-provider[Pin the models.dev provider entry]:provider:' \
+                  '--json[Machine-readable JSON output]' \
+                  '--out[Also write the markdown report to this path]:path:_files' \
+                  '--apply[Write the suggested tiers into a probe-<model_id> preset]' \
+                  '(-h --help)'{-h,--help}'[Show help]' \
+                  ':model:($_ms_models)'
                 ;;
             esac
             ;;

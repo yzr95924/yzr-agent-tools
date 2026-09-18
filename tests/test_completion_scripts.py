@@ -168,7 +168,7 @@ def test_bash_top_level_prefix_filter(comp_env):
 
 def test_bash_model_actions(comp_env):
     got = bash_complete(comp_env, ["model-switch", "model", ""], 2)
-    assert set(got) == {"add", "list", "show", "remove", "use", "import"}
+    assert set(got) == {"add", "list", "show", "remove", "use", "import", "probe"}
 
 
 def test_bash_model_action_prefix_filter(comp_env):
@@ -206,6 +206,7 @@ def test_bash_add_completes_flags(comp_env):
     assert "--api-key" in got
     assert "--model-name" in got
     assert "--context-window" in got
+    assert "--provider" in got
 
 
 def test_bash_add_flag_value_offers_nothing(comp_env):
@@ -215,6 +216,14 @@ def test_bash_add_flag_value_offers_nothing(comp_env):
 
 def test_bash_init_offers_nothing(comp_env):
     assert bash_complete(comp_env, ["model-switch", "init", ""], 2) == []
+
+
+def test_bash_probe_completes_flags_and_models(comp_env):
+    flags = bash_complete(comp_env, ["model-switch", "model", "probe", "--"], 3)
+    assert set(flags) == {"--budgets", "--catalog-source", "--catalog-provider",
+                          "--json", "--out", "--apply", "--help"}
+    models = bash_complete(comp_env, ["model-switch", "model", "probe", ""], 3)
+    assert set(models) == {"glm-z1", "kimi-k2"}
 
 
 def test_bash_import_completes_files(comp_env, tmp_path):
@@ -236,7 +245,7 @@ def test_fish_top_level_commands(comp_env):
 @needs_fish
 def test_fish_model_actions(comp_env):
     got = fish_complete(comp_env, "model-switch model ")
-    assert set(got) == {"add", "list", "show", "remove", "use", "import"}
+    assert set(got) == {"add", "list", "show", "remove", "use", "import", "probe"}
 
 
 @needs_fish
@@ -301,7 +310,7 @@ def test_zsh_top_level_prefix_filter(comp_env):
 @needs_zsh
 def test_zsh_model_actions(comp_env):
     got = zsh_complete(comp_env, "model-switch model ")
-    assert set(got) == {"add", "list", "show", "remove", "use", "import"}
+    assert set(got) == {"add", "list", "show", "remove", "use", "import", "probe"}
 
 
 @needs_zsh
@@ -380,7 +389,17 @@ def test_bash_mcp_top_level_includes_test(mcp_env):
     got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", ""], 1)
     # The bash script's top-level word list also offers --help (pre-existing).
     assert set(got) == {"init", "add", "list", "remove", "presets", "status",
-                        "test", "--help"}
+                        "test", "enable", "disable", "--help"}
+
+
+def test_bash_mcp_disable_completes_servers(mcp_env):
+    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "disable", ""], 2)
+    assert set(got) == {"outline", "memos"}
+
+
+def test_bash_mcp_enable_completes_servers(mcp_env):
+    got = _mcp_bash(mcp_env, ["mcp-plugin-mgr", "enable", ""], 2)
+    assert set(got) == {"outline", "memos"}
 
 
 def test_bash_mcp_test_completes_servers(mcp_env):
@@ -411,7 +430,8 @@ def test_bash_mcp_test_flag_value_offers_nothing(mcp_env):
 @needs_zsh
 def test_zsh_mcp_top_level_includes_test(mcp_env):
     got = zsh_complete(mcp_env, "mcp-plugin-mgr ")
-    assert set(got) == {"init", "add", "list", "remove", "presets", "status", "test"}
+    assert set(got) == {"init", "add", "list", "remove", "presets", "status",
+                        "test", "enable", "disable"}
 
 
 @needs_zsh

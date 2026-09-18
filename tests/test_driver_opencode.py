@@ -1,7 +1,8 @@
 """Tests for OpenCode driver — reads/writes ~/.config/opencode/opencode.json.
 
-OpenCode holds a multi-model catalog: model-switch mirrors every model into a
-`yzr-<model_id>` provider and sets `config["model"]` as the default pointer.
+OpenCode holds a multi-model catalog: model-switch groups models by
+(base_url, api_key) upstream and mirrors each group into a `yzr-<host-slug>`
+provider, with `config["model"]` as the default pointer.
 """
 import json
 from pathlib import Path
@@ -9,11 +10,12 @@ from pathlib import Path
 import pytest
 
 from model_switch.store import ModelEntry as Model
-from model_switch.drivers.opencode import OpenCodeDriver
+from model_switch.drivers.opencode import OpenCodeDriver, _upstream_slug
 
 
-def _provider_id(model_id: str) -> str:
-    return "yzr-" + model_id
+def _pid(model: Model) -> str:
+    """Provider id for a model under the grouped scheme."""
+    return "yzr-" + _upstream_slug(model.base_url)
 
 
 @pytest.fixture
@@ -82,7 +84,7 @@ def test_apply_writes_resolved_api_key_verbatim(driver, glm_ctx):
     holds a secret; keep its permissions tight)."""
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    pid = _provider_id(glm_ctx.model_id)
+    pid = _pid(glm_ctx)
     assert cfg["model"] == "{}/{}".format(pid, glm_ctx.name)
     provider = cfg["provider"][pid]
     # baseURL is /v1-adapted for @ai-sdk/anthropic (see the baseURL test group
@@ -99,7 +101,7 @@ def test_apply_emits_anthropic_npm_adapter(driver, glm_ctx):
     @ai-sdk/anthropic."""
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_provider_id("glm")]["npm"] == "@ai-sdk/anthropic"
+    assert cfg["provider"][_pid(glm_ctx)]["npm"] == "@ai-sdk/anthropic"
 
 
 def test_apply_emits_context_limit_when_known(driver, glm_ctx):
@@ -111,7 +113,7 @@ def test_apply_emits_context_limit_when_known(driver, glm_ctx):
     from model_switch.drivers.opencode import _DEFAULT_MAX_OUTPUT
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_provider_id("glm")]["models"][glm_ctx.name]
+    entry = cfg["provider"][_pid(glm_ctx)]["models"][glm_ctx.name]
     assert entry["limit"] == {
         "context": glm_ctx.context_window,
         "output": _DEFAULT_MAX_OUTPUT,
@@ -126,7 +128,7 @@ def test_apply_omits_limit_when_context_unknown(driver, glm_main):
     assert glm_main.context_window is None
     driver.apply(models=[glm_main], active=glm_main)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_provider_id("glm")]["models"][glm_main.name]
+    entry = cfg["provider"][_pid(glm_main)]["models"][glm_main.name]
     assert entry == {}
     assert "limit" not in entry
 
@@ -143,17 +145,17 @@ def test_apply_preserves_unrelated_providers_and_keys(driver, glm_ctx):
     driver.settings_path.write_text(json.dumps(seed), encoding="utf-8")
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert _provider_id("glm") in cfg["provider"]  # our provider added
-    assert "existing" in cfg["provider"]           # foreign provider preserved
-    assert cfg["small_model"] == "existing/foo"    # foreign top-level key preserved
+    assert _pid(glm_ctx) in cfg["provider"]   # our provider added
+    assert "existing" in cfg["provider"]      # foreign provider preserved
+    assert cfg["small_model"] == "existing/foo"  # foreign top-level key preserved
 
 
 # --- apply: baseURL /v1 adaptation -----------------------------------------
 #
 # @ai-sdk/anthropic (opencode's adapter) appends ONLY `/messages` to baseURL —
-# it treats baseURL as a prefix that already includes the API version. So a
+# it treats it as a prefix that already includes the API version. So a
 # base_url stored WITHOUT `/v1` (which is exactly what the claude-code driver
-# wants: Claude Code appends `/v1` itself) makes opencode request
+# wants: Claude Code appends /v1 itself) makes opencode request
 # `.../anthropic/messages`. z.ai answers that with a 404 wrapped in HTTP 200,
 # and ai-sdk's SSE parser drops the non-event body silently → zero-token
 # empty reply, no error event. The opencode driver owns this adaptation:
@@ -164,28 +166,40 @@ def test_apply_preserves_unrelated_providers_and_keys(driver, glm_ctx):
 def test_apply_appends_v1_when_missing(driver, glm_ctx):
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_provider_id("glm")]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
+    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
 
 
 def test_apply_does_not_double_append_v1(driver, glm_ctx):
     glm_ctx.base_url = "https://api.z.ai/api/anthropic/v1"
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_provider_id("glm")]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
+    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
 
 
 def test_apply_keeps_arbitrary_version_segment(driver, glm_ctx):
     glm_ctx.base_url = "https://example.test/api/anthropic/v2"
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_provider_id("glm")]["options"]["baseURL"] == "https://example.test/api/anthropic/v2"
+    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == "https://example.test/api/anthropic/v2"
 
 
 def test_apply_normalizes_trailing_slash_before_appending_v1(driver, glm_ctx):
     glm_ctx.base_url = "https://api.z.ai/api/anthropic/"
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_provider_id("glm")]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
+    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == "https://api.z.ai/api/anthropic/v1"
+
+
+# --- upstream slug derivation -------------------------------------------------
+
+
+def test_upstream_slug_examples():
+    assert _upstream_slug("https://api.z.ai/api/anthropic") == "zai"
+    assert _upstream_slug("https://api.kimi.com/coding/") == "kimi"
+    assert _upstream_slug("https://dashscope.aliyuncs.com/apps/anthropic") == "dashscope"
+    assert _upstream_slug("https://open.bigmodel.cn/api/anthropic") == "open"
+    assert _upstream_slug("https://a") == "a"
+    assert _upstream_slug("not-a-url") == "notaurl"
 
 
 # --- catalog semantics -------------------------------------------------------
@@ -197,34 +211,184 @@ def _models():
     return [glm, kimi]
 
 
-def test_apply_writes_one_provider_per_model(driver):
+def test_apply_writes_one_provider_per_upstream(driver):
     models = _models()
     driver.apply(models=models, active=models[0])
     cfg = json.loads(driver.settings_path.read_text())
-    assert _provider_id("glm") in cfg["provider"]
-    assert _provider_id("kimi") in cfg["provider"]
+    assert _pid(models[0]) in cfg["provider"]
+    assert _pid(models[1]) in cfg["provider"]
     # Each provider is self-contained (baseURL/key differ per upstream).
-    assert cfg["provider"][_provider_id("glm")]["options"]["apiKey"] == "K1"
-    assert cfg["provider"][_provider_id("kimi")]["options"]["apiKey"] == "K2"
+    assert cfg["provider"][_pid(models[0])]["options"]["apiKey"] == "K1"
+    assert cfg["provider"][_pid(models[1])]["options"]["apiKey"] == "K2"
     # Default pointer names the active model.
-    assert cfg["model"] == "{}/glm-4".format(_provider_id("glm"))
+    assert cfg["model"] == "{}/glm-4".format(_pid(models[0]))
+
+
+def test_apply_groups_same_upstream_models_into_one_provider(driver):
+    """Models sharing (base_url, api_key) share one provider block; the
+    default pointer still names the active model individually."""
+    glm = Model(model_id="glm52", base_url="https://api.z.ai/api/anthropic",
+                api_key="K", name="glm-5.2")
+    glm53 = Model(model_id="glm53", base_url="https://api.z.ai/api/anthropic",
+                  api_key="K", name="glm-5.3")
+    driver.apply(models=[glm, glm53], active=glm53)
+    cfg = json.loads(driver.settings_path.read_text())
+    assert list(cfg["provider"]) == ["yzr-zai"]
+    assert set(cfg["provider"]["yzr-zai"]["models"]) == {"glm-5.2", "glm-5.3"}
+    assert cfg["model"] == "yzr-zai/glm-5.3"
+
+
+def test_apply_splits_same_host_different_key(driver):
+    """Same base_url but different keys cannot share a block (apiKey is
+    provider-level); they get distinct providers via collision suffixes."""
+    a = Model(model_id="a", base_url="https://api.z.ai/api/anthropic",
+              api_key="K1", name="m1")
+    b = Model(model_id="b", base_url="https://api.z.ai/api/anthropic",
+              api_key="K2", name="m2")
+    driver.apply(models=[a, b], active=a)
+    cfg = json.loads(driver.settings_path.read_text())
+    assert set(cfg["provider"]) == {"yzr-zai", "yzr-zai-2"}
+    assert cfg["provider"]["yzr-zai"]["options"]["apiKey"] == "K1"
+    assert cfg["provider"]["yzr-zai-2"]["options"]["apiKey"] == "K2"
+    assert cfg["model"] == "yzr-zai/m1"
+
+
+def test_apply_collision_suffix_is_stable_across_renders(driver):
+    a = Model(model_id="a", base_url="https://api.z.ai/one",
+              api_key="K1", name="m1")
+    b = Model(model_id="b", base_url="https://api.z.ai/two",
+              api_key="K2", name="m2")
+    driver.apply(models=[a, b], active=a)
+    first = json.loads(driver.settings_path.read_text())
+    driver.apply(models=[a, b], active=a)
+    second = json.loads(driver.settings_path.read_text())
+    assert first == second
+
+
+def test_apply_rejects_duplicate_name_within_group(driver):
+    a = Model(model_id="a", base_url="https://api.z.ai/api/anthropic",
+              api_key="K", name="glm-5.3")
+    b = Model(model_id="b", base_url="https://api.z.ai/api/anthropic",
+              api_key="K", name="glm-5.3")
+    with pytest.raises(ValueError, match="unique within one upstream"):
+        driver.apply(models=[a, b], active=a)
+
+
+# --- declared provider names --------------------------------------------------
+
+def test_apply_declared_provider_groups_and_names_ids(driver):
+    """`provider = "<name>"` pins the id to yzr-<name>; members sharing it
+    group into one block."""
+    a = Model(model_id="a", base_url="https://dashscope.aliyuncs.com/apps/anthropic",
+              api_key="K", name="qwen3.8-max", extra={"provider": "dashscope"})
+    b = Model(model_id="b", base_url="https://dashscope.aliyuncs.com/apps/anthropic",
+              api_key="K", name="qwen3.8-flash", extra={"provider": "dashscope"})
+    driver.apply(models=[a, b], active=b)
+    cfg = json.loads(driver.settings_path.read_text())
+    assert list(cfg["provider"]) == ["yzr-dashscope"]
+    assert set(cfg["provider"]["yzr-dashscope"]["models"]) == {
+        "qwen3.8-max", "qwen3.8-flash"}
+    assert cfg["model"] == "yzr-dashscope/qwen3.8-flash"
+
+
+def test_apply_declared_provider_id_survives_base_url_change(driver):
+    """The pinned name is the identity: changing base_url later must not
+    rename the provider or leave the old block behind."""
+    pinned = {"provider": "dashscope"}
+    old = Model(model_id="m", base_url="https://dashscope.aliyuncs.com/apps/anthropic",
+                api_key="K", name="qwen3.8-flash", extra=dict(pinned))
+    driver.apply(models=[old], active=old)
+    assert list(json.loads(driver.settings_path.read_text())["provider"]) == [
+        "yzr-dashscope"]
+
+    moved = Model(model_id="m", base_url="https://new-gateway.example.com/anthropic",
+                  api_key="K", name="qwen3.8-flash", extra=dict(pinned))
+    driver.apply(models=[moved], active=moved)
+    cfg = json.loads(driver.settings_path.read_text())
+    assert list(cfg["provider"]) == ["yzr-dashscope"]
+    assert cfg["provider"]["yzr-dashscope"]["options"]["baseURL"] == (
+        "https://new-gateway.example.com/anthropic/v1")
+    assert cfg["model"] == "yzr-dashscope/qwen3.8-flash"
+
+
+@pytest.mark.parametrize("a_key,b_key,b_url,field,secrets", [
+    pytest.param("K", "K", "https://b.example/anthropic", "base_url", (),
+                 id="base_url"),
+    pytest.param("SECRET-ONE", "SECRET-TWO", "https://a.example/anthropic",
+                 "api_key", ("SECRET-ONE", "SECRET-TWO"), id="api_key"),
+])
+def test_apply_rejects_conflicting_upstream_under_one_name(
+        driver, a_key, b_key, b_url, field, secrets):
+    """Models under one declared name must share base_url and api_key; a
+    partial key rotation must fail loudly — and the error never prints the
+    keys themselves."""
+    a = Model(model_id="a", base_url="https://a.example/anthropic",
+              api_key=a_key, name="m1", extra={"provider": "gw"})
+    b = Model(model_id="b", base_url=b_url, api_key=b_key, name="m2",
+              extra={"provider": "gw"})
+    with pytest.raises(ValueError) as ei:
+        driver.apply(models=[a, b], active=a)
+    msg = str(ei.value)
+    assert "conflicting upstreams" in msg
+    assert field in msg
+    assert "'a'" in msg and "'b'" in msg
+    for secret in secrets:
+        assert secret not in msg
+
+
+def test_apply_declared_name_wins_collision_with_derived_slug(driver):
+    """A declared name keeps the plain id; a derived slug that wants the
+    same name takes the suffix."""
+    declared = Model(model_id="d", base_url="https://one.example/anthropic",
+                     api_key="K", name="m1", extra={"provider": "zai"})
+    derived = Model(model_id="x", base_url="https://api.z.ai/api/anthropic",
+                    api_key="K2", name="m2")
+    driver.apply(models=[declared, derived], active=declared)
+    cfg = json.loads(driver.settings_path.read_text())
+    assert set(cfg["provider"]) == {"yzr-zai", "yzr-zai-2"}
+    assert cfg["provider"]["yzr-zai"]["options"]["baseURL"] == (
+        "https://one.example/anthropic/v1")
+    assert cfg["provider"]["yzr-zai-2"]["options"]["baseURL"] == (
+        "https://api.z.ai/api/anthropic/v1")
+
+
+@pytest.mark.parametrize("name", ["Foo", "with space", "a/b", "yzr-zai",
+                                  "", "-lead", "trail-", "a..b"])
+def test_apply_rejects_invalid_provider_names(driver, name):
+    m = Model(model_id="m", base_url="https://a.example/anthropic", api_key="K",
+              name="m1", extra={"provider": name})
+    with pytest.raises(ValueError):
+        driver.apply(models=[m], active=m)
+
+
+def test_apply_declared_name_equal_to_derived_slug_is_transparent(driver):
+    """Declaring the slug the tool would derive anyway must not change the
+    rendered config — the migration guarantee for existing files."""
+    plain = Model(model_id="m", base_url="https://api.z.ai/api/anthropic",
+                  api_key="K", name="glm-5.3")
+    pinned = Model(model_id="m", base_url="https://api.z.ai/api/anthropic",
+                   api_key="K", name="glm-5.3", extra={"provider": "zai"})
+    driver.apply(models=[plain], active=plain)
+    first = driver.settings_path.read_text()
+    driver.apply(models=[pinned], active=pinned)
+    assert driver.settings_path.read_text() == first
 
 
 def test_apply_sets_default_to_active(driver):
     models = _models()
     driver.apply(models=models, active=models[1])
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["model"] == "{}/kimi-k2".format(_provider_id("kimi"))
+    assert cfg["model"] == "{}/kimi-k2".format(_pid(models[1]))
 
 
 def test_sync_catalog_preserves_valid_default(driver):
     """sync_catalog (add/remove path) keeps the existing default pointer when
     it still names a live model."""
     models = _models()
-    driver.apply(models=models, active=models[0])  # default = yzr-glm/glm-4
+    driver.apply(models=models, active=models[0])
     driver.sync_catalog(models)                     # no active change
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["model"] == "{}/glm-4".format(_provider_id("glm"))
+    assert cfg["model"] == "{}/glm-4".format(_pid(models[0]))
 
 
 def test_sync_catalog_falls_back_when_default_vanished(driver):
@@ -234,8 +398,8 @@ def test_sync_catalog_falls_back_when_default_vanished(driver):
     remaining = [models[1]]                         # glm removed
     driver.sync_catalog(remaining)
     cfg = json.loads(driver.settings_path.read_text())
-    assert _provider_id("glm") not in cfg["provider"]  # provider + key reclaimed
-    assert cfg["model"] == "{}/kimi-k2".format(_provider_id("kimi"))
+    assert _pid(models[0]) not in cfg["provider"]   # provider + key reclaimed
+    assert cfg["model"] == "{}/kimi-k2".format(_pid(models[1]))
 
 
 def test_sync_catalog_drops_default_when_no_models(driver):
@@ -249,7 +413,7 @@ def test_sync_catalog_drops_default_when_no_models(driver):
 
 def test_sync_catalog_reclaims_legacy_single_slot_provider(driver):
     """An upgrade from the old single-slot `yzr` provider is reclaimed (with
-    its key) and re-rendered as `yzr-<id>`."""
+    its key) and re-rendered under the grouped scheme."""
     legacy = {
         "provider": {"yzr": {"options": {"apiKey": "OLD_KEY"}}},
         "model": "yzr/glm-4",
@@ -259,8 +423,22 @@ def test_sync_catalog_reclaims_legacy_single_slot_provider(driver):
     driver.sync_catalog(models)
     cfg = json.loads(driver.settings_path.read_text())
     assert "yzr" not in cfg["provider"]
-    assert _provider_id("glm") in cfg["provider"]
-    assert cfg["provider"][_provider_id("glm")]["options"]["apiKey"] == "K1"
+    assert _pid(models[0]) in cfg["provider"]
+    assert cfg["provider"][_pid(models[0])]["options"]["apiKey"] == "K1"
+
+
+def test_sync_catalog_reclaims_per_model_ids_from_pre_grouping_scheme(driver):
+    """Old `yzr-<model_id>` blocks are owned ids too and must be reclaimed
+    when the grouping scheme re-renders."""
+    legacy = {
+        "provider": {"yzr-glm": {"options": {"apiKey": "OLD_KEY"}}},
+    }
+    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
+    models = _models()
+    driver.sync_catalog(models)
+    cfg = json.loads(driver.settings_path.read_text())
+    assert "yzr-glm" not in cfg["provider"]
+    assert _pid(models[0]) in cfg["provider"]
 
 
 def test_sync_catalog_does_not_create_missing_file(driver):
@@ -285,7 +463,7 @@ def test_sync_catalog_preserves_foreign_default_pointer(driver):
     cfg = json.loads(driver.settings_path.read_text())
     assert cfg["model"] == "anthropic/claude-sonnet-4"  # foreign default intact
     assert "anthropic" in cfg["provider"]                # foreign provider intact
-    assert _provider_id("glm") in cfg["provider"]        # ours added alongside
+    assert _pid(models[0]) in cfg["provider"]            # ours added alongside
 
 
 def test_sync_catalog_does_not_conjure_default_when_absent(driver):
@@ -305,8 +483,8 @@ def test_sync_catalog_skips_models_without_key(driver, glm_ctx):
     kimi = Model(model_id="kimi", base_url="https://b", api_key="K2", name="kimi")
     driver.apply(models=[glm_ctx, kimi], active=kimi)
     cfg = json.loads(driver.settings_path.read_text())
-    assert _provider_id("kimi") in cfg["provider"]
-    assert _provider_id("glm") not in cfg["provider"]
+    assert _pid(kimi) in cfg["provider"]
+    assert _pid(glm_ctx) not in cfg["provider"]
 
 
 def test_apply_errors_when_active_missing_key(driver, glm_ctx):
@@ -322,10 +500,10 @@ def test_current_reports_default_and_catalog(driver):
     models = _models()
     driver.apply(models=models, active=models[0])
     cur = driver.current()
-    assert cur["model"] == "{}/glm-4".format(_provider_id("glm"))
+    assert cur["model"] == "{}/glm-4".format(_pid(models[0]))
     assert "catalog" in cur
-    assert _provider_id("glm") in cur["catalog"]
-    assert _provider_id("kimi") in cur["catalog"]
+    assert _pid(models[0]) in cur["catalog"]
+    assert _pid(models[1]) in cur["catalog"]
 
 
 # --- reasoning / variants passthrough ----------------------------------------
@@ -347,7 +525,7 @@ def test_apply_passes_reasoning_and_variants_through(driver):
     )
     driver.apply(models=[m], active=m)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_provider_id("m")]["models"]["m"]
+    entry = cfg["provider"][_pid(m)]["models"]["m"]
     assert entry["reasoning"] is True
     assert entry["variants"] == {"high": {"effort": "high"}, "max": {"effort": "max"}}
     assert entry["limit"] == {"context": 1000000, "output": _DEFAULT_MAX_OUTPUT}
@@ -362,7 +540,7 @@ def test_apply_renders_optional_fields_without_context_window(driver):
     )
     driver.apply(models=[m], active=m)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_provider_id("m")]["models"]["m"]
+    entry = cfg["provider"][_pid(m)]["models"]["m"]
     assert "limit" not in entry
     assert entry["reasoning"] is True
     assert entry["variants"] == {"high": {"effort": "high"}}
@@ -374,7 +552,7 @@ def test_apply_ignores_non_true_reasoning_and_empty_variants(driver, glm_ctx):
     glm_ctx.extra = {"reasoning": "true", "variants": {}}
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_provider_id("glm")]["models"][glm_ctx.name]
+    entry = cfg["provider"][_pid(glm_ctx)]["models"][glm_ctx.name]
     assert entry == {"limit": {"context": 1000000, "output": 131072}}
 
 
@@ -388,8 +566,8 @@ def test_sync_catalog_keeps_reasoning_and_variants_on_reconcile(driver):
     )
     driver.settings_path.write_text("{}", encoding="utf-8")  # sync never creates
     driver.sync_catalog([m])
-    first = json.loads(driver.settings_path.read_text())["provider"][_provider_id("m")]
+    first = json.loads(driver.settings_path.read_text())["provider"][_pid(m)]
     driver.sync_catalog([m])
-    second = json.loads(driver.settings_path.read_text())["provider"][_provider_id("m")]
+    second = json.loads(driver.settings_path.read_text())["provider"][_pid(m)]
     assert first == second
     assert second["models"]["m"]["variants"] == {"high": {"effort": "high"}}

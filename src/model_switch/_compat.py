@@ -5,7 +5,16 @@ write API) so that fields copied verbatim from `workspace_models.toml`
 data loss.
 """
 import io
-from typing import Any, Dict
+import re
+from typing import Any, Dict, Optional
+
+
+# Bare TOML keys: A-Za-z0-9_-; anything else must be quoted.
+_BARE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+# Inline tables must stay on one line; a subtree whose `key = value`
+# rendering is longer than this falls back to `[header]` form.
+_INLINE_MAX = 120
 
 
 # TOML basic string escapes: backslash, double-quote, control chars.
@@ -46,17 +55,77 @@ def _format_scalar(v: Any) -> str:
     raise TypeError("Unsupported TOML scalar type: {}".format(type(v)))
 
 
-def _dump_value(buf, v: Any) -> None:
-    """Write one inline value (scalar or array). Dicts are routed to
-    `_dump_section`'s table handling, so they never reach this function."""
+def _dump_key(k: str) -> str:
+    """A TOML key: bare when safe, otherwise a quoted basic string.
+
+    Unquoted, a key containing `.` would silently add a table level.
+    """
+    if _BARE_KEY_RE.match(k):
+        return k
+    return '"{}"'.format(_toml_escape_str(k))
+
+
+def _can_inline(v: Any) -> bool:
+    """Scalars, arrays of scalars and tables of those fit on one line;
+    arrays of tables never do."""
+    if isinstance(v, dict):
+        return all(_can_inline(x) for x in v.values())
     if isinstance(v, list):
-        buf.write("[{}]".format(", ".join(_format_scalar(x) for x in v)))
-    else:
-        buf.write(_format_scalar(v))
+        return all(not isinstance(x, dict) for x in v)
+    return True
+
+
+def _format_inline(v: Any) -> str:
+    """Render one inline value (scalar, array, or nested inline table)."""
+    if isinstance(v, dict):
+        if not v:
+            return "{}"
+        return "{{ {} }}".format(
+            ", ".join(
+                "{} = {}".format(_dump_key(k), _format_inline(x))
+                for k, x in v.items()
+            )
+        )
+    if isinstance(v, list):
+        return "[{}]".format(", ".join(_format_scalar(x) for x in v))
+    return _format_scalar(v)
+
+
+def _inline_form(k: str, v: Any) -> Optional[str]:
+    """The one-line `key = value` rendering, or None when it must expand."""
+    if not _can_inline(v):
+        return None
+    text = "{} = {}".format(_dump_key(k), _format_inline(v))
+    if len(text) > _INLINE_MAX:
+        return None
+    return text
+
+
+def _needs_scope(v: Dict[str, Any]) -> bool:
+    """Whether a table must open a `[header]` line of its own.
+
+    A table may drop its header only when it is a pure namespace: no scalars
+    or table-arrays of its own and every child table expands. A child that
+    renders inline has no scope of its own — its line would otherwise land
+    in whatever table was opened last.
+    """
+    if not v:
+        return True
+    for k, x in v.items():
+        if isinstance(x, dict):
+            if _inline_form(k, x) is not None:
+                return True
+        else:
+            return True
+    return False
 
 
 def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
-    """Dump a dict: scalars first, then [[arrays-of-tables]], then [tables]."""
+    """Dump a dict: scalars first, then [[arrays-of-tables]], then tables.
+
+    Tables render inline (`key = { ... }`) when shallow enough, otherwise
+    as `[header]` sections; a pure-namespace table drops its own header.
+    """
     scalars = {}
     arrays = []
     tables = {}
@@ -64,18 +133,21 @@ def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
         if isinstance(v, list) and v and isinstance(v[0], dict):
             arrays.append((k, v))
         elif isinstance(v, dict):
-            tables[k] = v
+            # A root-level inline value must precede every [header]: after a
+            # header, a bare `key = ...` line would land inside that table.
+            if not prefix and _inline_form(k, v) is not None:
+                scalars[k] = v
+            else:
+                tables[k] = v
         else:
             scalars[k] = v
 
     for k, v in scalars.items():
-        buf.write("{} = ".format(k))
-        _dump_value(buf, v)
-        buf.write("\n")
+        buf.write("{} = {}\n".format(_dump_key(k), _format_inline(v)))
 
     for k, items in arrays:
         for item in items:
-            header = "{}{}".format(prefix, k)
+            header = "{}{}".format(prefix, _dump_key(k))
             buf.write("\n[[{}]]\n".format(header))
             # Carry the array header into the item's nested dicts so they
             # render as `[<array>.<key>]` (a sub-table of the current array
@@ -83,11 +155,14 @@ def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
             _dump_section(buf, item, prefix=header + ".")
 
     for k, v in tables.items():
-        table_name = "{}{}".format(prefix, k)
-        if prefix:
-            table_name = "{}.{}".format(prefix.rstrip("."), k)
-        buf.write("\n[{}]\n".format(table_name))
-        _dump_section(buf, v, prefix=table_name + ".")
+        inline = _inline_form(k, v)
+        if inline is not None:
+            buf.write("{}\n".format(inline))
+            continue
+        header = "{}{}".format(prefix, _dump_key(k))
+        if _needs_scope(v):
+            buf.write("\n[{}]\n".format(header))
+        _dump_section(buf, v, prefix=header + ".")
 
 
 def _toml_dumps(data: Dict[str, Any]) -> str:
