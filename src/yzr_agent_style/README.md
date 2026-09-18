@@ -8,7 +8,7 @@
 三个 agent 各有自己的全局指令文件,但内容往往想共享同一份"个人工作习惯":
 
 | Agent | 全局规则文件 |
-|---|---|
+| --- | --- |
 | Claude Code | `~/.claude/CLAUDE.md` |
 | OpenCode | `~/.config/opencode/AGENTS.md` |
 | Qoder CLI | `~/.qoder/AGENTS.md` |

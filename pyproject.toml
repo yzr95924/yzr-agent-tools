@@ -7,3 +7,8 @@ testpaths = ["tests"]
 # 与 tests.conftest。
 pythonpath = ["src", "tests"]
 addopts = "-ra"
+markers = [
+    # Opt out of tests/conftest.py's autouse isolation fixture — only for tests
+    # that intentionally exercise real path resolution (see test_paths.py).
+    "no_isolation: skip the autouse real-config isolation fixture",
+]
