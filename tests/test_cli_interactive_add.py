@@ -4,7 +4,7 @@ import json
 import pytest
 
 
-from model_switch.store import load_models, load_state
+from model_switch.store import load_models, load_state, save_models
 
 from _cli_runner import invoke_cli as runner
 
@@ -372,3 +372,325 @@ def test_add_bad_token_count_then_enter_skips(yzr_paths):
     )
     assert result.exit_code == 0, result.stdout
     assert load_models(yzr_paths["models"]).models["demo"].context_window is None
+
+
+# --- provider group inheritance ---------------------------------------------
+#
+# The driver groups models into `yzr-<name>` blocks keyed by
+# (declared, base_url, api_key), and declared names beat derived host slugs —
+# so an undeclared model on an upstream that already has a declared group
+# lands in a *second* block (`yzr-<host>-2`). The wizard inherits the group
+# name so the two stay in one block.
+
+DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/apps/anthropic"
+
+
+def _seed_declared_group(provider="dashscope", name="qwen-max"):
+    """Register one model declaring `provider` on the dashscope upstream."""
+    result = runner([
+        "model", "add", name,
+        "--base-url", DASHSCOPE_BASE, "--api-key", "K",
+        "--model-name", name, "--provider", provider,
+    ])
+    assert result.exit_code == 0, result.stdout
+
+
+def _add_second(name, inputs, api_key="K", base_url=DASHSCOPE_BASE):
+    """Add a model with only the upstream flags set, so the prompts left are
+    (provider group, when offered), context window, description, Proceed?."""
+    return runner([
+        "model", "add", name,
+        "--base-url", base_url, "--api-key", api_key, "--model-name", name,
+    ], input="\n".join(inputs) + "\n")
+
+
+def test_add_prompts_provider_when_same_upstream_group_exists(yzr_paths):
+    _seed_declared_group()
+    result = _add_second("deepseek-v4-flash", [
+        "",    # provider group → Enter = inherit 'dashscope'
+        "",    # context window (skip)
+        "",    # description (skip)
+        "y",   # Proceed?
+    ])
+    assert result.exit_code == 0, result.stdout
+    assert "Provider group" in result.stdout
+    m = load_models(yzr_paths["models"]).models["deepseek-v4-flash"]
+    assert m.extra["provider"] == "dashscope"
+
+
+def test_add_provider_prompt_accepts_a_different_name(yzr_paths):
+    _seed_declared_group()
+    result = _add_second("second", ["qwen", "", "", "y"])
+    assert result.exit_code == 0, result.stdout
+    m = load_models(yzr_paths["models"]).models["second"]
+    assert m.extra["provider"] == "qwen"
+
+
+def test_add_no_provider_prompt_when_api_key_differs(yzr_paths):
+    """A different key is a different upstream group: nothing to inherit, and
+    the wizard must not spend a line on the prompt (three lines suffice)."""
+    _seed_declared_group()
+    result = _add_second("second", ["", "", "y"], api_key="K2")
+    assert result.exit_code == 0, result.stdout
+    assert "Provider group" not in result.stdout
+    assert "still has a declared group" not in result.stdout
+    m = load_models(yzr_paths["models"]).models["second"]
+    assert "provider" not in m.extra
+
+
+def test_add_provider_flag_preanswers_the_prompt(yzr_paths):
+    """`--provider` wins over the inherited default, and asks nothing."""
+    _seed_declared_group()
+    result = runner([
+        "model", "add", "second",
+        "--base-url", DASHSCOPE_BASE, "--api-key", "K",
+        "--model-name", "second", "--provider", "other",
+    ], input="\n".join(["", "", "y"]) + "\n")  # ctx, description, Proceed?
+    assert result.exit_code == 0, result.stdout
+    assert "Provider group" not in result.stdout
+    m = load_models(yzr_paths["models"]).models["second"]
+    assert m.extra["provider"] == "other"
+
+
+def test_add_non_interactive_inherits_without_asking(yzr_paths):
+    """No TTY means no prompt, but `_prompt` still applies the default — the
+    script path must not keep splitting one upstream into two blocks."""
+    _seed_declared_group()
+    result = runner([
+        "model", "add", "second",
+        "--base-url", DASHSCOPE_BASE, "--api-key", "K",
+        "--model-name", "second",
+    ])
+    assert result.exit_code == 0, result.stdout
+    assert "Provider group" not in result.stdout
+    m = load_models(yzr_paths["models"]).models["second"]
+    assert m.extra["provider"] == "dashscope"
+
+
+def test_add_provider_prompt_accepts_no_declaration(yzr_paths):
+    """`-` declines the inherited name, which is the only way to *drop* a
+    declaration an entry already had — and the consequence is noted."""
+    _seed_declared_group()
+    result = _add_second("second", ["-", "", "", "y"])
+    assert result.exit_code == 0, result.stdout
+    assert "still has a declared group 'dashscope'" in result.stdout
+    m = load_models(yzr_paths["models"]).models["second"]
+    assert "provider" not in m.extra
+
+
+def test_add_provider_flag_dash_drops_the_declaration(yzr_paths):
+    """The same opt-out has to be expressible from a script."""
+    _seed_declared_group()
+    result = runner([
+        "model", "add", "second",
+        "--base-url", DASHSCOPE_BASE, "--api-key", "K",
+        "--model-name", "second", "--provider", "-",
+    ], input="\n".join(["", "", "y"]) + "\n")  # ctx, description, Proceed?
+    assert result.exit_code == 0, result.stdout
+    assert "still has a declared group 'dashscope'" in result.stdout
+    m = load_models(yzr_paths["models"]).models["second"]
+    assert "provider" not in m.extra
+
+
+def test_add_provider_dash_on_the_only_declarer_is_not_noted(yzr_paths):
+    """Replacing the entry that declares the group itself: the declaration
+    disappears with it, so the note must not claim the group is still there."""
+    _seed_declared_group(name="qwen-max")
+    result = runner([
+        "model", "add", "qwen-max",
+        "--base-url", DASHSCOPE_BASE, "--api-key", "K",
+        "--model-name", "qwen-max", "--provider", "-", "--yes",
+    ])
+    assert result.exit_code == 0, result.stdout
+    assert "still has a declared group" not in result.stdout
+    cfg = load_models(yzr_paths["models"])
+    assert "provider" not in cfg.models["qwen-max"].extra
+
+
+def test_add_dash_excludes_the_entry_named_at_the_prompt(yzr_paths):
+    """Same as above with the local name typed at the prompt: the check runs
+    *after* name resolution, so it excludes the replaced entry either way."""
+    _seed_declared_group(name="qwen-max")
+    result = runner(["model", "add", "--yes"], input="\n".join([
+        DASHSCOPE_BASE, "K",   # base URL, key
+        "-",                   # decline the inherited group 'dashscope'
+        "qwen-max",            # upstream model id
+        "",                    # local name → defaults to the upstream id
+        "", "",                # context window, description
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert "still has a declared group" not in result.stdout
+    assert "provider" not in load_models(yzr_paths["models"]).models["qwen-max"].extra
+
+
+def test_add_non_string_provider_is_a_clean_error(yzr_paths):
+    """A hand-edited `provider = 123` must fail with one line, not a
+    traceback — the grouping rule now raises while the wizard is running."""
+    _seed_declared_group()
+    reg = load_models(yzr_paths["models"])
+    reg.models["qwen-max"].extra["provider"] = 123
+    save_models(yzr_paths["models"], reg)
+
+    result = runner([
+        "model", "add", "second",
+        "--base-url", DASHSCOPE_BASE, "--api-key", "K",
+        "--model-name", "second",
+    ])
+    assert result.exit_code == 1
+    assert "provider must be a string" in result.stderr
+    assert "Traceback" not in result.stdout
+
+
+def test_same_upstream_lands_in_one_provider_block(yzr_paths):
+    """Regression: a second model on an already-declared upstream used to
+    split into `yzr-dashscope` + `yzr-dashscope-2`."""
+    _seed_declared_group()
+    result = runner(["model", "use", "qwen-max", "--driver", "opencode"])
+    assert result.exit_code == 0, result.stdout
+    result = _add_second("deepseek-v4-flash", ["", "", "", "y"])
+    assert result.exit_code == 0, result.stdout
+
+    cfg = json.loads(yzr_paths["opencode"].read_text(encoding="utf-8"))
+    ours = [pid for pid in cfg["provider"] if pid.startswith("yzr-")]
+    assert ours == ["yzr-dashscope"], ours
+    assert sorted(cfg["provider"]["yzr-dashscope"]["models"]) == [
+        "deepseek-v4-flash", "qwen-max"]
+
+
+# --- catalog search scope: the 'all' escape word -----------------------------
+#
+# Searches default to the pasted base_url's host, because the derived fields
+# land in an entry talking to that upstream. `all <term>` widens one search
+# to the whole catalog, ranks host matches first (MENU_MAX would otherwise
+# bury them), tags the foreign rows, and notes a foreign pick.
+
+def test_rank_host_first_partitions_keeping_search_order():
+    from model_switch import catalog
+    from model_switch.cli import _rank_host_first
+
+    rows = [
+        catalog.Row("decoy", "Decoy", "glm-5.3", {}),
+        catalog.Row("zai", "Z.AI", "glm-4.7", {}),
+        catalog.Row("zai", "Z.AI", "glm-5.3", {}),
+    ]
+    ranked = _rank_host_first(rows, {("zai", "glm-4.7"), ("zai", "glm-5.3")})
+    assert [(r.provider, r.model) for r in ranked] == [
+        ("zai", "glm-4.7"), ("zai", "glm-5.3"), ("decoy", "glm-5.3")]
+
+
+def test_catalog_row_renderer_tags_only_foreign_rows():
+    from model_switch import catalog
+    from model_switch.cli import _catalog_row_renderer
+
+    render = _catalog_row_renderer({("zai", "glm-5.3")})
+    assert render(catalog.Row("zai", "Z.AI", "glm-5.3", {"name": "GLM-5.3"})) == \
+        "zai/glm-5.3  GLM-5.3"
+    foreign = render(catalog.Row("decoy", "Decoy", "glm-5.3", {"name": "GLM-5.3"}))
+    assert foreign.endswith("[other host]")
+
+
+def test_wizard_all_widens_to_other_providers(catalog):
+    result = runner(["model", "add", "demo"], input="\n".join([
+        ZAI_BASE, "K",
+        "all glm",   # widen: 2 host matches + 1 foreign
+        "3",         # → decoy/glm-5.3 (last, after the host matches)
+        "", "", "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert "decoy/glm-5.3" in result.stdout
+    assert "[other host]" in result.stdout
+    assert "note: fields come from decoy" in result.stdout
+    m = load_models(catalog["models"]).models["demo"]
+    assert m.name == "glm-5.3"
+    # The entry keeps the pasted upstream — only the derived fields came
+    # from the foreign provider, which is exactly what the note warns about.
+    assert m.base_url == ZAI_BASE
+
+
+def test_wizard_all_ranks_host_matches_first(catalog):
+    result = runner(["model", "add", "demo"], input="\n".join([
+        ZAI_BASE, "K",
+        "all glm",
+        "1",         # zai/glm-4.7 — a host match sorts first
+        "", "", "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    out = result.stdout
+    assert out.index("zai/glm-4.7") < out.index("zai/glm-5.3") \
+        < out.index("decoy/glm-5.3")
+    # Only the foreign row carries the tag, and a host pick is not warned about.
+    assert out.count("[other host]") == 1
+    assert "note: fields come from" not in out
+    assert load_models(catalog["models"]).models["demo"].name == "glm-4.7"
+
+
+def test_wizard_all_without_a_term_reprompts(catalog):
+    result = runner(["model", "add", "demo"], input="\n".join([
+        ZAI_BASE, "K",
+        "all",       # no term — hint, then stay in the loop
+        "glm", "1",  # host-scoped search still works
+        "", "", "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert "'all' needs a search term" in result.stdout
+    assert load_models(catalog["models"]).models["demo"].name == "glm-4.7"
+
+
+def test_wizard_all_no_match_reprompts(catalog):
+    result = runner(["model", "add", "demo"], input="\n".join([
+        ZAI_BASE, "K",
+        "all zzz",
+        "glm", "1",
+        "", "", "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert "no catalog entry matches 'zzz' on any provider" in result.stdout
+    assert load_models(catalog["models"]).models["demo"].name == "glm-4.7"
+
+
+def test_wizard_host_miss_points_at_the_wide_search(catalog):
+    result = runner(["model", "add", "demo"], input="\n".join([
+        ZAI_BASE, "K",
+        "zzz",       # nothing on this host → the hint must offer 'all'
+        "glm", "1",
+        "", "", "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert "no catalog entry on api.z.ai matches 'zzz'" in result.stdout
+    assert "'all <term>'" in result.stdout
+
+
+def test_wizard_unknown_host_can_still_search_every_provider(catalog):
+    """A gateway the catalog has never heard of must not dead-end at
+    'type the id by hand' before the search loop even starts."""
+    result = runner(["model", "add", "demo"], input="\n".join([
+        "https://unknown.example/v1", "K",
+        "",          # Enter at a 0-row host → hint to widen
+        "all glm",
+        "1",         # no host matches → decoy sorts first (decoy < zai)
+        "", "", "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert "0 model(s) on unknown.example" in result.stdout
+    m = load_models(catalog["models"]).models["demo"]
+    assert m.base_url == "https://unknown.example/v1"
+    assert m.name == "glm-5.3"
+
+
+def test_wizard_refuses_a_base_url_without_a_host(catalog):
+    """A schemeless base URL has no host to scope by, and `catalog.search`
+    reads "" as 'no filter' — offering the whole catalog as if it were the
+    user's upstream, with nothing tagged foreign. Refuse the picker instead."""
+    result = runner(["model", "add", "demo"], input="\n".join([
+        "dashscope.aliyuncs.com/apps/anthropic", "K",  # no scheme
+        "m",                                          # model id, typed by hand
+        "", "", "y",
+    ]) + "\n")
+    assert result.exit_code == 0, result.stdout
+    assert "has no host" in result.stdout
+    assert "Search models" not in result.stdout
+    m = load_models(catalog["models"]).models["demo"]
+    assert m.base_url == "dashscope.aliyuncs.com/apps/anthropic"
+    assert m.name == "m"
+
+

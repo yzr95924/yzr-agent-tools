@@ -62,7 +62,7 @@ model-switch model add
 #   Upstream API base URL: https://api.z.ai/api/anthropic
 #   API key: sk-...
 #   catalog: ~/.cache/opencode/models.json (updated 2026-09-18 17:27) — 23 model(s) on api.z.ai
-#   Search models (Enter = list, 'skip' = type the id by hand): glm
+#   Search models (Enter = list, 'all <term>' = every provider, 'skip' = type the id by hand): glm
 #     1) zai/glm-4.7  GLM-4.7  ctx 200K
 #     2) zai/glm-5.3  GLM-5.3  ctx 1M  tiers[low,high,max]  text+image
 #   Pick a number [1] ('b' = back): 2
@@ -143,9 +143,17 @@ model-switch status [--driver NAME] [--all-drivers]
   `modalities` 等 extra 字段),旧的手写字段不保留——想找回字段用 `model align` 重新推导。
   被覆盖的模型恰是当前激活模型时只打印一行提示(去跑 `model use`),`model add` 从不改
   agent 配置。
-- **catalog 选择器**(`model add` 向导):按 base_url 的 host 过滤 catalog 缓存,列出该
-  上游的模型;搜索支持多关键词(全部命中才显示);`b` 返回重搜,`skip`(或 host 无
-  匹配 / 缓存缺失)回落到手打 model id 的旧流程。菜单最多显示 20 行,超出时提示缩小搜索。
+- **catalog 选择器**(`model add` 向导):默认按 base_url 的 host 过滤 catalog 缓存,列出该
+  上游的模型;搜索支持多关键词(全部命中才显示);`b` 返回重搜,`skip`(或缓存缺失)回落到
+  手打 model id 的旧流程。菜单最多显示 20 行,超出时提示缩小搜索。base_url 里没有 host
+  (例如漏写 `https://`)时直接不进入选择器——无 host 可限定,选择器会把整个 catalog 当成你
+  的上游列出来,不如回落到手打。
+- **`all <关键词>` 放宽搜索范围**:在搜索提示处用 `all` 开头即对**全 catalog**搜索,不限
+  host。宽搜结果里 host 匹配的行排在前(菜单只有 20 行,字典序会把你在配的上游挤掉),其
+  余行标 `[other host]`;选中非本上游的行时打印一行 note,提示 context window 与
+  modalities 是那个 provider 的声明、未必适用于你的上游。`all` 后面必须带关键词——全
+  catalog 有几千条,列不完。默认 host 范围搜不到时,提示也会指向 `all <term>`。
+  `skip` / `all` 都只匹配**首个 token**,所以 `skip-connections`、`allam-2-7b` 之类照常搜索。
 
 ## 写进 settings.json 的内容
 
@@ -223,6 +231,16 @@ OpenCode driver 往 OpenCode 的全局配置 `~/.config/opencode/opencode.json`
   `dashscope.aliyuncs.com`→`yzr-dashscope`),不同组撞名时按排序加 `-2`/`-3` 后缀
   (渲染结果稳定;已声明的名字优先占用,派生 slug 让位)。
 
+向导(`model add`)会在**已存在同 `base_url` + 同 `api_key` 且声明了 provider 的模型**时
+多问一行 `Provider group [...]`,回车即继承该组名——这正是同上游裂成 `yzr-<host>` +
+`yzr-<host>-2` 两个块的来源,继承后两条合并进一个块。没有可加入的组时不问,手打流程不变;
+`--provider` 照旧预答。**答 `-` 表示「不声明」**(`--provider -` 同义),这是交互/脚本里
+去掉一个既有声明的唯一途径——否则继承没有退路,只能手改 `models.toml`;此时若同上游仍有
+已声明组,会打印一行 note 说明该模型将另起一个 `yzr-<host>` 块。**非交互路径
+(无 TTY / 脚本)不显示提示,但同样会继承**:同上游同 key 时组名由注册表现状决定,不再由
+host 派生。两条路径都不会猜——同上游同 key 的两个 provider 块逐字节相同,合并没有歧义;
+想强制另起一个组,先改 `api_key`。
+
 **写 `provider` 的价值是 id 稳定**:以后换 `base_url`(换网关/换区域),id 不变,
 外部引用(脚本里的 `opencode run -m yzr-<名字>/...`、项目级 opencode.json、文档)不会断;
 不写则 host 一变 id 就变。声明成与派生值相同的名字,渲染结果**逐字节不变**——旧文件可以
@@ -252,7 +270,7 @@ OpenCode 的模型可以带若干「档位」(variant),用 `ctrl+t`(`variant_cyc
 
 | 字段 | 作用 |
 | --- | --- |
-| `provider = "<名字>"` | 钉住 provider 分组名,id 即 `yzr-<名字>`(缺省按 base_url host 派生;同名字下所有模型必须同 base_url + api_key) |
+| `provider = "<名字>"` | 钉住 provider 分组名,id 即 `yzr-<名字>`(缺省按 base_url host 派生;同名字下所有模型必须同 base_url + api_key;删掉本字段或 `model add` 时答 `-` 即回到派生) |
 | `reasoning = true` | 声明该模型支持推理(OpenCode 的一些行为以此为闸门,如内置档位规则与 picker 上的标注) |
 | `variants_preset = "<名字>"` | 引用顶层 `[variants_presets.<名字>]` 定义的档位表(推荐) |
 | `variants = { ... }` | 直接内联档位表(逃生舱;与 preset 同时存在时,逐字段覆盖 preset) |
@@ -388,7 +406,9 @@ model-switch model align
 选择哪条 catalog 条目的规则：先按 base_url 的 **host** 收敛（同名模型常挂在几十个
 provider 下且声明互相冲突）；host 匹配剩多条时，只有**推导结果逐字相同**才取字典序第一，
 否则**拒绝并列出候选**，要求用 `--catalog-provider <id>` 钉选——绝不自动猜（猜错会静默
-配错档位）。看候选、手工核对时的原命令仍然可用：
+配错档位）。向导里的 `all <关键词>` 是这条规则唯一的放宽口子，且由你**主动**输入：工具自己
+从不挑一个 host 不匹配的 provider，宽搜选中时还会打印 note 提醒字段来源。看候选、手工核对
+时的原命令仍然可用：
 
 ```bash
 jq -r 'to_entries[] | .value.models["qwen3.8-max"] as $m | select($m)

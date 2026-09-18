@@ -180,6 +180,13 @@ OpenCode 遇到标量会拒载整份配置),payload 内容不校验。`variants.
 `remove`/`import replace` 删到 active 时 `clear()`(清四个自有键 + 顶层 `model`,同时清
 `active_main`)。`yzr-*` 命名空间归 model-switch 管,用户别在之前缀自建 provider。
 
+**Provider 分组规则单一真源**:分组键 `(声明名, base_url, api_key)` 由 `store.provider_group_key`
+定义(`upstream_key` 给出其中 `(base_url, api_key)` 半边),OpenCode driver 渲染 `yzr-*` 块与 CLI
+的 `model add` 继承组名都走它——改规则只改这一处,否则两边会漂移成「继承了一个不再合并的名字」。
+`model add` 在**已存在同上游同 key 且声明了 provider 的模型**时提示继承(回车继承;`-` 表示不
+声明,并在本地名确定后打印 note——排除掉本次要覆盖的条目,避免把即将消失的声明说成还在)。
+非 TTY 同样继承(`_prompt` 非 TTY 取默认值),所以脚本路径不会裂出 `yzr-<host>-2`。
+
 ### `mcp_plugin_mgr` 的形态
 
 CLI(`mcp-plugin-mgr`),与 model-switch 同构:一份规范注册表(`~/.config/mcp-plugin-mgr/servers.toml`)+ 每 agent 一个 driver 负责翻译。三个 driver:

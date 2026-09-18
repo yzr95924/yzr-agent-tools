@@ -95,6 +95,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from model_switch import paths
 from model_switch.drivers._atomic import atomic_write_json
 from model_switch.store import ModelEntry as Model
+from model_switch.store import provider_group_key
 
 
 PROVIDER_ID = "yzr"
@@ -259,23 +260,12 @@ def _upstream_slug(base_url: str) -> str:
     return slug or "upstream"
 
 
-# Group key: (declared provider name or None, base_url, api_key). A provider
-# block is shareable exactly when all three match.
+# Group key: (declared provider name or None, base_url, api_key) — the shape
+# `store.provider_group_key` returns. A provider block is shareable exactly
+# when all three match.
 _GroupKey = Tuple[Optional[str], str, str]
 
 _PROVIDER_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
-
-
-def _declared_provider(m: Model) -> Optional[str]:
-    """The model's ``provider = "<name>"`` declaration, if any."""
-    value = m.extra.get("provider")
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(
-            "model {!r}: provider must be a string, got {}".format(
-                m.model_id, type(value).__name__))
-    return value
 
 
 def _validate_provider_names(groups: Dict[_GroupKey, List[Model]]) -> None:
@@ -318,20 +308,19 @@ def _group_assignments(models: List[Model]) -> Tuple[Dict[_GroupKey, List[Model]
     Returns ``(groups, pid_by_key)``. A model may pin its id with
     ``provider = "<name>"`` → ``yzr-<name>``; without it the id is derived
     from the base_url host (``yzr-<host-slug>``), so a pinned name outlives
-    base_url changes. Groups are keyed by ``(declared, base_url, api_key)`` —
-    baseURL/apiKey are provider-level, so a block is shareable exactly when
-    both match. Declared names win collisions with derived slugs; leftovers
-    get ``-2``/``-3`` suffixes in sorted order, so repeated renders are
-    byte-stable. All models declaring one name must share one upstream — a
-    partial key rotation fails loudly instead of silently splitting the
-    group in two. Duplicate model names within a group would overwrite each
-    other in the provider's ``models`` map — rejected loudly too.
+    base_url changes. Groups are keyed by ``(declared, base_url, api_key)``
+    (``store.provider_group_key``) — baseURL/apiKey are provider-level, so a
+    block is shareable exactly when both match. Declared names win collisions
+    with derived slugs; leftovers get ``-2``/``-3`` suffixes in sorted order,
+    so repeated renders are byte-stable. All models declaring one name must
+    share one upstream — a partial key rotation fails loudly instead of
+    silently splitting the group in two. Duplicate model names within a group
+    would overwrite each other in the provider's ``models`` map — rejected
+    loudly too.
     """
     groups: Dict[_GroupKey, List[Model]] = {}
     for m in models:
-        groups.setdefault(
-            (_declared_provider(m), m.base_url, m.api_key or ""), []
-        ).append(m)
+        groups.setdefault(provider_group_key(m), []).append(m)
     _validate_provider_names(groups)
 
     pid_by_key: Dict[_GroupKey, str] = {}

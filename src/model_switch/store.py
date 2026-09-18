@@ -13,7 +13,7 @@ per-model keys survive a load/save cycle.
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from model_switch._compat import toml_dump, toml_loads
 
@@ -95,6 +95,48 @@ class Registry:
 class State:
     active_main: Optional[str] = None
     last_updated: Optional[str] = None
+
+
+# ---- provider grouping -------------------------------------------------------
+#
+# One agent-side provider block carries one baseURL and one apiKey, so a block
+# is shareable exactly when those two match. The declared `provider` name (when
+# present) is the group's identity: it names the block and outlives base_url
+# changes. This rule is shared by the CLI — which inherits a group name when a
+# model is added to an upstream that already declares one, see
+# `model_switch.cli._resolve_provider` — and by the agent drivers that render
+# the blocks. Keep it here so both read the same definition.
+#
+# Error type: these functions raise `ValueError`, not the `StoreError` family
+# above. That family covers *load-time structure* (a malformed models.toml,
+# raised by `load_models` before any command runs). These predicates are
+# evaluated while a command is already running, at the same boundaries as the
+# drivers' own render-time validation, and both are surfaced by the CLI's
+# `except ValueError` handlers — so they fail one line cleanly instead of
+# escaping as a traceback.
+
+def upstream_key(model: ModelEntry) -> Tuple[str, str]:
+    """``(base_url, api_key)`` — what a shareable provider block must agree on."""
+    return (model.base_url, model.api_key or "")
+
+
+def provider_group_key(model: ModelEntry) -> Tuple[Optional[str], str, str]:
+    """``(declared name, base_url, api_key)`` — one provider block per key.
+
+    ``extra["provider"]`` is the declaration; a value that is neither absent
+    nor a string is rejected loudly rather than silently treated as undeclared
+    (it would render an unusable provider id).
+    """
+    value = model.extra.get("provider")
+    if value is None:
+        name = None
+    elif isinstance(value, str):
+        name = value
+    else:
+        raise ValueError(
+            "model {!r}: provider must be a string, got {}".format(
+                model.model_id, type(value).__name__))
+    return (name,) + upstream_key(model)
 
 
 # ---- models.toml -------------------------------------------------------------

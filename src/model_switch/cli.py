@@ -18,7 +18,7 @@ import argparse
 import datetime
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, NoReturn, Optional
+from typing import Any, Callable, Dict, List, NoReturn, Optional, Tuple
 
 from model_switch import catalog, paths, ui
 from model_switch.drivers.base import registry
@@ -28,8 +28,10 @@ from model_switch.store import (
     State,
     load_models,
     load_state,
+    provider_group_key,
     save_models,
     save_state,
+    upstream_key,
 )
 from model_switch.variants import (
     PRESET_REF_KEY,
@@ -309,7 +311,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider", default=None,
         help="Pin the provider group name (id becomes yzr-<name>); defaults "
              "to a slug derived from base_url. Models sharing a name must "
-             "share base_url and api_key.",
+             "share base_url and api_key. When omitted and an existing model "
+             "on the same base_url + api_key already declares one, the "
+             "wizard offers to join that group; pass '-' to leave this model "
+             "undeclared instead.",
     )
     p_add.add_argument(
         "--context-window", type=int, default=None,
@@ -418,11 +423,15 @@ def _do_model_add(args: argparse.Namespace) -> None:
     Fields the cache can supply (context window, reasoning, variant tiers,
     modalities) are derived from it; `--no-catalog` opts out,
     `--catalog-provider` pins the provider entry when several match.
+
+    The provider group is asked about only when an existing model on the
+    same base_url + api_key already declares one — see `_resolve_provider`.
     """
     reg = load_models(paths.models_file())
 
     base_url = args.base_url or _prompt("Upstream API base URL")
     api_key = args.api_key or _prompt_secret("API key")
+    provider = _resolve_provider(args, reg, base_url, api_key)
 
     # An explicit `--model-name` / `--catalog-provider` means the model is
     # already determined: keep the pre-wizard derivation path untouched.
@@ -432,6 +441,8 @@ def _do_model_add(args: argparse.Namespace) -> None:
         picked = _pick_catalog_model(base_url)
     model_name, derived = _choose_upstream(args, base_url, picked)
     name, replacing = _choose_local_name(args, reg, picked, model_name)
+    if provider is None:
+        _note_declined_group(reg, base_url, api_key, name)
     context_window, description = _collect_optional_fields(args, derived)
 
     # Build the entry before asking: the summary then *is* what gets written,
@@ -443,7 +454,7 @@ def _do_model_add(args: argparse.Namespace) -> None:
         api_key=api_key,
         context_window=context_window,
         description=description,
-        extra=_build_extra(derived, args.provider),
+        extra=_build_extra(derived, provider),
     )
 
     if _interactive(args):
@@ -499,6 +510,97 @@ def _collect_optional_fields(args: argparse.Namespace, derived: Dict[str, Any]):
     return context_window, description
 
 
+# Typed at the provider prompt (or passed to --provider) to mean "no
+# declaration". It is not a legal `_PROVIDER_NAME_RE` name, so intercepting it
+# is what makes *dropping* an inherited group reachable.
+_NO_DECLARATION = "-"
+
+
+def _matching_provider(reg: Registry, base_url: str, api_key: Optional[str],
+                       exclude: Optional[str] = None) -> Optional[str]:
+    """The declared provider of an existing model on the same upstream.
+
+    Adding an undeclared model to an upstream that already declares a group
+    would put it in a *second* block named after the host with a ``-2``
+    suffix — same upstream, same key, two provider blocks. Inheriting the
+    group's name is what keeps them together.
+
+    ``exclude`` skips one model_id: a replacing `model add` must not mistake
+    the entry it is about to overwrite for a group the new model could join.
+
+    The rule itself lives in `store.provider_group_key` so this query and the
+    drivers that render the blocks cannot drift apart. The inherited name is
+    the alphabetically first one, so a registry where several names somehow
+    share one upstream still answers the same way every run.
+    """
+    want = (base_url, api_key or "")
+    names = []
+    for m in reg.models.values():
+        if m.model_id == exclude:
+            continue
+        # Check the upstream first: `provider_group_key` validates the
+        # declaration, and an unrelated malformed entry must not fail an add
+        # that has nothing to do with it.
+        if upstream_key(m) != want:
+            continue
+        name = provider_group_key(m)[0]
+        if name is not None:
+            names.append(name)
+    return min(names) if names else None
+
+
+def _matching_provider_or_die(reg: Registry, base_url: str,
+                              api_key: Optional[str],
+                              exclude: Optional[str] = None) -> Optional[str]:
+    """`_matching_provider`, with its validation error surfaced cleanly."""
+    try:
+        return _matching_provider(reg, base_url, api_key, exclude)
+    except ValueError as e:
+        _die(e)
+
+
+def _resolve_provider(args: argparse.Namespace, reg: Registry, base_url: str,
+                      api_key: Optional[str]) -> Optional[str]:
+    """Resolve the provider group name for the model being added.
+
+    ``--provider`` pre-answers the prompt. Otherwise we only ask when an
+    existing group is joinable: with no same-upstream model to group with
+    there is nothing to decide, and staying quiet keeps the wizard's prompt
+    sequence stable for scripts and piped input. Pressing Enter takes the
+    inherited name; ``-`` declines it, which is the only way to *drop* a
+    declaration the entry already had. Declining is noted separately, once
+    the local name is known — see `_note_declined_group`.
+    """
+    if args.provider is not None and args.provider != _NO_DECLARATION:
+        return args.provider
+    group = _matching_provider_or_die(reg, base_url, api_key)
+    if args.provider is None and group is not None:
+        value = _prompt(
+            f"Provider group (joins {group!r}; "
+            f"{_NO_DECLARATION!r} = no declaration)",
+            default=group, optional=True,
+        )
+        if value != _NO_DECLARATION:
+            return value
+    return None
+
+
+def _note_declined_group(reg: Registry, base_url: str, api_key: Optional[str],
+                         name: str) -> None:
+    """Warn that an undeclared model lands in its own provider block.
+
+    Runs *after* the local name is resolved so the entry this add replaces is
+    excluded: when replacing a model that declared the group itself, that
+    declaration disappears with it and there is nothing to warn about.
+    """
+    group = _matching_provider_or_die(reg, base_url, api_key, exclude=name)
+    if group is None:
+        return
+    print(f"  note: this upstream still has a declared group {group!r} — "
+          f"left undeclared, this model renders as a separate yzr-<host> "
+          f"provider block")
+
+
 def _save_and_report(reg: Registry, entry: ModelEntry, replacing: bool) -> None:
     """Persist the entry, mirror the catalog and report what happened."""
     reg.models[entry.model_id] = entry
@@ -550,11 +652,85 @@ def _resolve_add_name(name: str, reg: Registry, assume_yes: bool):
         name = _prompt("Local name")
 
 
+# Reserved first tokens at the search prompt. Both are matched on the first
+# token only, so `skip-connections` or `allam-2-7b` still search normally.
+_SEARCH_SKIP = "skip"
+_SEARCH_ALL = "all"
+
+
+def _split_search(raw: str) -> Tuple[str, str]:
+    """Split a search line into ``(first token lowercased, the rest)``.
+
+    The first token may be a reserved word (`skip`, `all`), and it is matched
+    here only — so `skip-connections` or `allam-2-7b` still search normally.
+    """
+    parts = raw.split(None, 1)
+    head = parts[0].lower() if parts else ""
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    return head, rest
+
+
+def _catalog_row_key(row: catalog.Row) -> Tuple[str, str]:
+    """What identifies a catalog row: ``(provider, model)``.
+
+    `host_keys` and every trust check go through this, so the notion of row
+    identity has one definition.
+    """
+    return (row.provider, row.model)
+
+
+def _print_no_catalog_rows(host: str, raw: str, query: str, wide: bool) -> None:
+    """Explain an empty result and how to widen or leave the search."""
+    if wide:
+        print(f"  no catalog entry matches {query!r} on any provider — try "
+              f"again or {_SEARCH_SKIP!r}")
+    elif raw == "":
+        print(f"  no catalog entry on {host} — search every provider with "
+              f"'{_SEARCH_ALL} <term>', or {_SEARCH_SKIP!r}")
+    else:
+        print(f"  no catalog entry on {host} matches {raw!r} — try again, "
+              f"'{_SEARCH_ALL} <term>' or {_SEARCH_SKIP!r}")
+
+
+def _rank_host_first(rows: List[catalog.Row],
+                     host_keys: set) -> List[catalog.Row]:
+    """Host-matching rows first, then the rest — each kept in search order.
+
+    `ui.MENU_MAX` caps the menu at 20 rows, so an alphabetical catalog-wide
+    result would spend the whole menu on whichever provider sorts first and
+    hide the upstream actually being configured.
+    """
+    return sorted(rows, key=lambda r: (_catalog_row_key(r) not in host_keys,
+                                       r.provider, r.model))
+
+
+def _catalog_row_renderer(host_keys: set) -> Callable[[catalog.Row], str]:
+    """Build the `ui.pick_one` render fn, tagging foreign-provider rows.
+
+    Only foreign rows are marked: within the default host scope every row
+    matches, so leaving those untouched keeps the familiar menu byte-equal.
+    """
+    def render(row: catalog.Row) -> str:
+        line = _render_catalog_row(row)
+        if _catalog_row_key(row) not in host_keys:
+            line += "  [other host]"
+        return line
+    return render
+
+
 def _pick_catalog_model(base_url: str) -> Optional[catalog.Row]:
     """Pick the upstream model from the catalog cache (TTY only).
 
     Returns the picked `catalog.Row`, or None to fall back to typing the id
-    by hand: no cache, no entries for this upstream's host, or 'skip'.
+    by hand: no cache, no host in the base URL, or 'skip'.
+
+    Searches are scoped to the pasted base_url's host. That scope is what
+    makes the derived fields trustworthy: they are written into an entry that
+    talks to *that* upstream, so another provider's declarations can be wrong
+    for it (a `modalities` claim the upstream rejects turns OpenCode's silent
+    fallback into a hard request error). `all <term>` widens one search to
+    the whole catalog for a deliberate look-up — those rows rank after the
+    host matches, are tagged `[other host]`, and print a note when picked.
     """
     if not sys.stdin.isatty():
         return None
@@ -563,31 +739,54 @@ def _pick_catalog_model(base_url: str) -> Optional[catalog.Row]:
         print(f"catalog: {desc} — skipping auto-fill")
         return None
     host = catalog.host_of(base_url)
-    host_rows = catalog.search(data, "", host=host)
-    if not host_rows:
-        print(f"catalog: no entries for host {host or '?'} — type the model "
-              f"id by hand")
+    if not host:
+        # Without a host there is no scope at all: `catalog.search` would
+        # treat "" as "no filter" and offer the whole catalog as if it were
+        # the user's upstream, with nothing tagged foreign. Refuse instead —
+        # a base URL without a host is broken and must be fixed anyway.
+        print(f"catalog: {base_url!r} has no host — cannot tell which "
+              f"upstream it is; skipping auto-fill")
         return None
+    # Empty query = list everything on this host, so this scan doubles as the
+    # header count and the host-match index.
+    host_rows = catalog.search(data, "", host=host)
+    host_keys = {_catalog_row_key(r) for r in host_rows}
     print(f"catalog: {desc} — {len(host_rows)} model(s) on {host}")
     while True:
-        raw = ui.ask("Search models (Enter = list, 'skip' = type the id by "
-                     "hand): ").strip()
-        if raw.lower() == "skip":
+        raw = ui.ask(f"Search models (Enter = list, '{_SEARCH_ALL} <term>' = "
+                     f"every provider, '{_SEARCH_SKIP}' = type the id by "
+                     f"hand): ").strip()
+        head, rest = _split_search(raw)
+        if head == _SEARCH_SKIP:
             return None
-        # Empty query = list everything on this host — reuse the scan already
-        # done for the header instead of filtering the cache again.
-        rows = host_rows if raw == "" else catalog.search(data, raw, host=host)
-        if not rows:
-            print(f"  no catalog entry on {host} matches {raw!r} — try again "
-                  f"or 'skip'")
+        wide = head == _SEARCH_ALL
+        query = rest if wide else raw
+        if wide and not query:
+            print(f"  '{_SEARCH_ALL}' needs a search term — the full catalog "
+                  f"is too long to list (e.g. '{_SEARCH_ALL} qwen')")
             continue
-        idx = ui.pick_one(
-            f"  {len(rows)} match(es):", rows, _render_catalog_row,
-            default=0, allow_back=True,
-        )
+        if raw == "":
+            rows = host_rows
+        else:
+            rows = _rank_host_first(
+                catalog.search(data, query, host=None if wide else host),
+                host_keys)
+        if not rows:
+            _print_no_catalog_rows(host, raw, query, wide)
+            continue
+        title = f"  {len(rows)} match(es):"
+        if wide:
+            title += f"  (host {host} first, then every provider)"
+        idx = ui.pick_one(title, rows, _catalog_row_renderer(host_keys),
+                          default=0, allow_back=True)
         if idx is None:
             continue  # 'b' — refine the search
-        return rows[idx]
+        row = rows[idx]
+        if _catalog_row_key(row) not in host_keys:
+            print(f"  note: fields come from {row.provider}'s catalog entry, "
+                  f"not {host}'s — verify the context window and modalities "
+                  f"against your upstream")
+        return row
 
 
 def _render_catalog_row(row: catalog.Row) -> str:
