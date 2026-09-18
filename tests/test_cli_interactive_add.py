@@ -616,9 +616,9 @@ def test_rank_host_first_partitions_keeping_search_order():
     from model_switch.cli import _rank_host_first
 
     rows = [
-        catalog.Row("decoy", "Decoy", "glm-5.3", {}),
-        catalog.Row("zai", "Z.AI", "glm-4.7", {}),
-        catalog.Row("zai", "Z.AI", "glm-5.3", {}),
+        catalog.Row("decoy", "glm-5.3", {}),
+        catalog.Row("zai", "glm-4.7", {}),
+        catalog.Row("zai", "glm-5.3", {}),
     ]
     ranked = _rank_host_first(rows, {("zai", "glm-4.7"), ("zai", "glm-5.3")})
     assert [(r.provider, r.model) for r in ranked] == [
@@ -630,9 +630,9 @@ def test_catalog_row_renderer_tags_only_foreign_rows():
     from model_switch.cli import _catalog_row_renderer
 
     render = _catalog_row_renderer({("zai", "glm-5.3")})
-    assert render(catalog.Row("zai", "Z.AI", "glm-5.3", {"name": "GLM-5.3"})) == \
+    assert render(catalog.Row("zai", "glm-5.3", {"name": "GLM-5.3"})) == \
         "zai/glm-5.3  GLM-5.3"
-    foreign = render(catalog.Row("decoy", "Decoy", "glm-5.3", {"name": "GLM-5.3"}))
+    foreign = render(catalog.Row("decoy", "glm-5.3", {"name": "GLM-5.3"}))
     assert foreign.endswith("[other host]")
 
 

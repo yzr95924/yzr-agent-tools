@@ -65,11 +65,9 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 
 
 def _check_shape(where: str, variants: Any) -> None:
-    """Reject a `variants` declaration that OpenCode would reject wholesale.
+    """Reject a tier declaration whose *shape* OpenCode would refuse wholesale.
 
-    Tiers must map to tables; a scalar body makes OpenCode refuse the entire
-    config file, so fail here where the message can name the model/preset.
-    Payload *content* is passed through untouched (OpenCode validates it).
+    Payload content is passed through untouched (OpenCode validates it).
     """
     if not isinstance(variants, dict):
         raise VariantsError(

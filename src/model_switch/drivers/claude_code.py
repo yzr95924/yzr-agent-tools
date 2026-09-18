@@ -31,10 +31,7 @@ _OWNED_KEYS = (
     "ANTHROPIC_MODEL",
 )
 
-# Claude Code model tiers. Auxiliary calls resolve through these slots, so we
-# pin every one to our model id — otherwise they fall back to hardcoded Claude
-# ids (e.g. claude-sonnet-5[1m]) the upstream can't serve, which is the root
-# cause of "auto mode temporarily unavailable" on custom upstreams.
+# Claude Code model tiers; pinned to our id — see the module docstring.
 _TIER_MODEL_KEYS = (
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -83,9 +80,6 @@ class ClaudeCodeDriver:
         env["ANTHROPIC_BASE_URL"] = active.base_url
         env["ANTHROPIC_AUTH_TOKEN"] = active.api_key
         env["ANTHROPIC_MODEL"] = model_id
-        # Pin every Claude Code model tier to our id so auxiliary calls (the
-        # Bash safety classifier, title/conversation generation, ...) ride the
-        # same upstream instead of a hardcoded Claude id the gateway lacks.
         for k in _TIER_MODEL_KEYS:
             env[k] = model_id
         config["env"] = env

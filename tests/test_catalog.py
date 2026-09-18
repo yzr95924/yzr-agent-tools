@@ -249,7 +249,6 @@ def test_search_returns_everything_sorted_without_query():
         ("zai", "glm-5.3"),
         ("zai", "text-only"),
     ]
-    assert rows[0].provider_name == "Decoy"
     assert rows[0].entry is data["decoy"]["models"]["glm-5.3"]
 
 

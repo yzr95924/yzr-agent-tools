@@ -100,56 +100,30 @@ from model_switch.store import provider_group_key
 
 PROVIDER_ID = "yzr"
 
-# The provider namespace model-switch owns. Models are grouped by upstream
-# (baseURL/apiKey are provider-level, so a block is shareable exactly when
-# both match) and each group renders as `yzr-<host-slug>` — see
-# `_upstream_slug` — or as `yzr-<name>` when the model pins one with
-# `provider = "<name>"`. The bare `yzr` id is the legacy single-slot form and
-# per-model `yzr-<model_id>` ids are the pre-grouping form; both stay
-# reclaimable so upgrades migrate automatically.
+# The provider namespace model-switch owns (grouped `yzr-<slug>` blocks plus
+# the legacy forms `_is_owned_provider` reclaims).
 PROVIDER_PREFIX = "yzr-"
 
-# Anthropic-compatible upstreams (model-switch's only supported protocol) load
-# the @ai-sdk/anthropic adapter. Without `npm`, OpenCode reports
-# "Provider not found" and silently falls back to its default model.
+# Without `npm`, OpenCode reports "Provider not found" and silently falls back
+# to its default model.
 NPM_ADAPTER = "@ai-sdk/anthropic"
 
-# @ai-sdk/anthropic appends only `/messages` to baseURL, treating it as a
-# prefix that already includes the API version. base_url is stored WITHOUT /v1
-# (the form the claude-code driver wants — Claude Code appends /v1 itself), so
-# here we ensure a version segment is present. Without it opencode requests
-# `.../anthropic/messages`, which upstreams answer with a 404 wrapped in HTTP
-# 200; ai-sdk's SSE parser drops the non-event body silently and you get a
-# zero-token empty reply with no error event.
+# baseURL must carry a version segment; see the module docstring.
 _VERSION_SEGMENT = re.compile(r"/v\d+$")
 
-# Default max-output cap paired with every emitted ``limit.context``. OpenCode's
-# schema forces ``context`` and ``output`` to appear together
-# (``limit.required == [context, output]``); model-switch tracks only context,
-# so output takes a habit-level default rather than a per-model registry field.
-# Value aligns with OpenCode's bundled models.dev MiniMax-M3 (output 131072);
-# real Anthropic-compatible gateways (glm/kimi/qwen/minimax) tolerate it (the
-# same constant is end-to-end verified in llmw's opencode overlay). Upgrade to a
-# per-model field when output needs to vary by model.
+# Default max-output cap paired with every emitted ``limit.context``, because
+# OpenCode's schema forces ``context`` and ``output`` to appear together while
+# model-switch tracks only context. Aligns with OpenCode's bundled
+# models.dev MiniMax-M3; upgrade to a per-model field when output must vary.
 _DEFAULT_MAX_OUTPUT = 131_072
 
-# OpenCode's modality enum for the model block's `modalities` (config schema).
-# OpenCode gates every non-text message part on `capabilities.input[<modality>]`:
-# a part whose modality isn't declared is replaced by an ERROR text prompt
-# before the request — the model never sees the attachment. Omitted keys
-# default to false, so declaring is opt-in and must be truthful (a declared-
-# but-unsupported modality turns that silent fallback into a hard upstream
-# error). Values are echoed in the user's order; this tuple orders messages.
+# OpenCode's modality enum for the model block; this tuple also orders the
+# values in rendered messages.
 _MODALITY_VALUES = ("text", "audio", "image", "video", "pdf")
 
 
 def _base_url_for_ai_sdk(base_url):
-    """Render ``model.base_url`` into the baseURL ``@ai-sdk/anthropic`` expects.
-
-    ai-sdk appends only ``/messages``, so baseURL must already contain the
-    version segment. Stored base_url values lack ``/v1`` (Claude Code's form),
-    so append it unless a ``/v<N>`` segment is already present.
-    """
+    """Render ``model.base_url`` into the baseURL ``@ai-sdk/anthropic`` expects."""
     base = base_url.rstrip("/")
     if not _VERSION_SEGMENT.search(base):
         base += "/v1"
@@ -199,29 +173,11 @@ def _render_modalities(model: Model) -> Optional[Dict[str, List[str]]]:
 def _render_model_entry(model: Model) -> Dict[str, Any]:
     """Render the per-model object stored under ``provider.<id>.models``.
 
-    ``reasoning`` and ``variants`` are passed through verbatim from
-    ``models.toml`` when present: ``reasoning = true`` marks the model as
-    reasoning-capable, and ``variants`` declares the effort tiers OpenCode's
-    variant cycle (ctrl+t) offers. Tier payloads are opaque — OpenCode merges
-    them into the request options, so model-switch never inspects, rewrites
-    or varies them by model. ``variants`` may arrive materialized from a
-    preset (see `model_switch.variants.expand`); this driver only ever sees
-    the plain dict.
-
-    ``modalities`` (``{ input = [...], output = [...] }``) is validated and
-    passed through; see `_render_modalities`. It is what lets an image/PDF
-    reach the model at all — OpenCode swaps undeclared modalities for an
-    ERROR text prompt before the request.
-
-    When ``model.context_window`` is known, emit a ``limit`` block so OpenCode
-    manages the real context budget (a custom provider isn't on models.dev, so
-    OpenCode otherwise can't infer it). OpenCode's schema requires ``context``
-    and ``output`` together, so context is paired with ``_DEFAULT_MAX_OUTPUT``.
-    When context is unknown, omit ``limit`` entirely — a partial block would
-    fail validation and make the model unavailable.
-
-    With neither optional field set and no context_window this returns ``{}``
-    — the same output as before those fields existed.
+    ``reasoning`` and ``variants`` pass through verbatim (a ``variants`` value
+    may have been materialized from a preset upstream of here); ``modalities``
+    is validated by `_render_modalities`; ``limit`` appears only when
+    ``context_window`` is known. With nothing set this returns ``{}`` — the
+    same shape as before those fields existed.
     """
     entry: Dict[str, Any] = {}
     if model.extra.get("reasoning") is True:
@@ -398,16 +354,7 @@ class OpenCodeDriver:
         return json.loads(text)
 
     def apply(self, models: List[Model], active: Model) -> None:
-        """Write the full catalog into the OpenCode config, defaulting to `active`.
-
-        The resolved `api_key` is written verbatim into each provider's
-        `options.apiKey` (matching the claude-code driver). model-switch does
-        not use OpenCode's `{env:VAR}` placeholder, so keys are stored in the
-        config file.
-
-        `baseURL` is /v1-adapted via `_base_url_for_ai_sdk` — see the module
-        docstring for why this differs from the claude-code driver.
-        """
+        """Write the full catalog into the OpenCode config, defaulting to `active`."""
         if not active.api_key:
             raise ValueError(
                 "model {!r} has no api_key in models.toml.".format(active.model_id)
@@ -418,23 +365,9 @@ class OpenCodeDriver:
                      create: bool = False) -> None:
         """Mirror `models` into the ``yzr-*`` provider namespace.
 
-        Reconciles the whole namespace: models are grouped into upstreams
-        (``(declared provider, base_url, api_key)``; see
-        `_group_assignments`) and each group renders as one
-        ``yzr-<host-slug>`` or ``yzr-<name>`` provider; any ``yzr-*`` provider
-        not produced by that grouping (including per-model ``yzr-<model_id>``
-        blocks from the pre-grouping scheme, and the legacy single-slot
-        ``yzr``) is deleted with its plaintext key. Foreign providers and
-        top-level keys are preserved.
-
-        The default pointer (`config["model"]`) is kept when it still names a
-        synced provider; otherwise it falls to `active_id`, then the first
-        remaining model, then the key is dropped. Models without an api_key are
-        skipped (they'd render an unusable provider).
-
+        Reconciliation, deletion and pointer rules are the module docstring's;
         `create=False` (the catalog-sync path from add/remove/import) leaves a
-        missing config file alone — no file is created out of thin air; only a
-        targeted `apply()` (`create=True`) does.
+        missing config file alone — no file is created out of thin air.
         """
         if not create and not self.settings_path.exists():
             return
@@ -444,8 +377,8 @@ class OpenCodeDriver:
             k: v for k, v in config.get("provider", {}).items()
             if not _is_owned_provider(k)
         }
-        keyed = [m for m in models if m.api_key]
-        pid_by_key, groups, _refs = _provider_layout(keyed)
+        keyed = [m for m in models if m.api_key]  # no key → unusable block
+        pid_by_key, groups, refs = _provider_layout(keyed)
         for key in sorted(groups, key=lambda k: pid_by_key[k]):
             _declared, base_url, api_key = key
             members = sorted(groups[key], key=lambda m: m.name)
@@ -456,17 +389,12 @@ class OpenCodeDriver:
                     "baseURL": _base_url_for_ai_sdk(base_url),
                     "apiKey": api_key,
                 },
-                # Per-model object: `reasoning`/`variants` passed through from
-                # models.toml (tier declarations for the variant cycle),
-                # `modalities` when declared (non-text input gating), plus a
-                # `limit` block when context_window is known (a custom provider
-                # isn't on models.dev, so OpenCode needs it told). See
-                # _render_model_entry for the schema constraint.
                 "models": {m.name: _render_model_entry(m) for m in members},
             }
 
         config["provider"] = providers
-        default = self._resolve_default(config.get("model"), keyed, active_id)
+        default = self._resolve_default(config.get("model"), keyed, refs,
+                                        active_id)
         if default is None:
             config.pop("model", None)
         else:
@@ -475,25 +403,29 @@ class OpenCodeDriver:
         atomic_write_json(self.settings_path, config)
 
     def _resolve_default(self, current: Optional[str], models: List[Model],
+                         refs: Dict[str, str],
                          active_id: Optional[str]) -> Optional[str]:
         """Pick `config["model"]`: active_id wins, else the current pointer
         stays if it's ours (`yzr-*`) and still names a synced provider; ours
         but vanished falls to the first remaining model, then None (drop the
         key). A foreign pointer (or an absent key) is never touched — moving
         the default is the `model use` path's job, and sync_catalog must not
-        hijack a default the user set themselves."""
+        hijack a default the user set themselves.
+
+        ``refs`` is the caller's `_provider_layout` result, passed in so the
+        grouping runs once per sync.
+        """
         if not models:
             return None
-        _pid_by_key, _groups, ref_by_model_id = _provider_layout(models)
-        if active_id is not None and active_id in ref_by_model_id:
-            return ref_by_model_id[active_id]
+        if active_id is not None and active_id in refs:
+            return refs[active_id]
         if current:
-            if current in ref_by_model_id.values():
+            if current in refs.values():
                 return current
             if _is_owned_provider(current.split("/", 1)[0]):
                 # Ours but vanished — fall to the first remaining model.
                 for m in models:
-                    return ref_by_model_id[m.model_id]
+                    return refs[m.model_id]
                 return None
             # Foreign reference — not ours to move.
             return current

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from model_switch._compat import toml_dump, toml_loads
+from model_switch._compat import toml_dumps, toml_loads
 
 
 # Fields model-switch understands on a `[[models]]` entry. Anything else on
@@ -139,6 +139,21 @@ def provider_group_key(model: ModelEntry) -> Tuple[Optional[str], str, str]:
     return (name,) + upstream_key(model)
 
 
+# ---- atomic io ---------------------------------------------------------------
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write `text` via `<path>.tmp` + `os.replace` — never a half-written file.
+
+    Shared by this store and the drivers' JSON writer (`drivers._atomic`), so
+    the atomicity rule has one implementation.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
 # ---- models.toml -------------------------------------------------------------
 
 def load_models(path: Path) -> Registry:
@@ -212,12 +227,7 @@ def load_models(path: Path) -> Registry:
 
 def save_models(path: Path, reg: Registry) -> None:
     """Atomic write of `models.toml`. Preserves unknown top-level + per-model keys."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    raw = reg.to_toml_dict()
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        toml_dump(raw, f)
-    os.replace(tmp, path)
+    atomic_write_text(path, toml_dumps(reg.to_toml_dict()))
 
 
 # ---- state.toml --------------------------------------------------------------
@@ -237,13 +247,9 @@ def load_state(path: Path) -> State:
 
 def save_state(path: Path, state: State) -> None:
     """Atomic write of `state.toml`."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     raw: Dict[str, Any] = {}
     if state.active_main is not None:
         raw["active_main"] = state.active_main
     if state.last_updated is not None:
         raw["last_updated"] = state.last_updated
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        toml_dump(raw, f)
-    os.replace(tmp, path)
+    atomic_write_text(path, toml_dumps(raw))

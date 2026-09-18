@@ -211,9 +211,8 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
     input, CI, tests), if the option is missing AND required, we exit with
     a clear error. If optional, return `None` (or `default`).
 
-    Do NOT pass secrets here — input is echoed. We only prompt for model
-    identifiers and descriptions. For the API key, use `_prompt_secret`
-    (which does not echo).
+    Do NOT pass secrets here — input is echoed. For the API key, use
+    `_prompt_secret` (which does not echo).
     """
     suffix = ""
     if default is not None:
@@ -636,9 +635,6 @@ def _save_and_report(reg: Registry, entry: ModelEntry, replacing: bool) -> None:
     """Persist the entry, mirror the catalog and report what happened."""
     reg.models[entry.model_id] = entry
     save_models(paths.models_file(), reg)
-    # Mirror the catalog so the new model is immediately available in agents
-    # that hold one (OpenCode's picker). Single-slot agents (claude-code) are
-    # untouched until the next `model use`.
     _sync_catalog(reg)
     print(f"{'Replaced' if replacing else 'Added'} model {entry.model_id!r}.")
     if replacing and load_state(paths.state_file()).active_main == entry.model_id:
@@ -683,8 +679,7 @@ def _resolve_add_name(name: str, reg: Registry, assume_yes: bool):
         name = _prompt("Local name")
 
 
-# Reserved first tokens at the search prompt. Both are matched on the first
-# token only, so `skip-connections` or `allam-2-7b` still search normally.
+# Reserved first tokens at the search prompt (matched on the first token only).
 _SEARCH_SKIP = "skip"
 _SEARCH_ALL = "all"
 
@@ -692,8 +687,8 @@ _SEARCH_ALL = "all"
 def _split_search(raw: str) -> Tuple[str, str]:
     """Split a search line into ``(first token lowercased, the rest)``.
 
-    The first token may be a reserved word (`skip`, `all`), and it is matched
-    here only — so `skip-connections` or `allam-2-7b` still search normally.
+    A reserved word is matched here only, so `skip-connections` or
+    `allam-2-7b` still search normally.
     """
     parts = raw.split(None, 1)
     head = parts[0].lower() if parts else ""
@@ -710,16 +705,16 @@ def _catalog_row_key(row: catalog.Row) -> Tuple[str, str]:
     return (row.provider, row.model)
 
 
-def _print_no_catalog_rows(host: str, raw: str, query: str, wide: bool) -> None:
+def _print_no_catalog_rows(host: str, query: str, wide: bool) -> None:
     """Explain an empty result and how to widen or leave the search."""
     if wide:
         print(f"  no catalog entry matches {query!r} on any provider — try "
               f"again or {_SEARCH_SKIP!r}")
-    elif raw == "":
+    elif query == "":
         print(f"  no catalog entry on {host} — search every provider with "
               f"'{_SEARCH_ALL} <term>', or {_SEARCH_SKIP!r}")
     else:
-        print(f"  no catalog entry on {host} matches {raw!r} — try again, "
+        print(f"  no catalog entry on {host} matches {query!r} — try again, "
               f"'{_SEARCH_ALL} <term>' or {_SEARCH_SKIP!r}")
 
 
@@ -803,7 +798,7 @@ def _pick_catalog_model(base_url: str) -> Optional[catalog.Row]:
                 catalog.search(data, query, host=None if wide else host),
                 host_keys)
         if not rows:
-            _print_no_catalog_rows(host, raw, query, wide)
+            _print_no_catalog_rows(host, query, wide)
             continue
         title = f"  {len(rows)} match(es):"
         if wide:
@@ -1031,15 +1026,13 @@ def _do_model_list() -> None:
             n == state.active_main,
         ))
 
-    names = [r[0] for r in rows]
-    models_col = [r[1] for r in rows]
-    contexts = [r[2] for r in rows]
-    urls = [r[3] for r in rows]
+    def col_w(index, header):
+        return max(max(len(r[index]) for r in rows), len(header))
 
-    name_w = max(max(len(s) for s in names), len("NAME"))
-    model_w = max(max(len(s) for s in models_col), len("MODEL"))
-    context_w = max(max(len(s) for s in contexts), len("CONTEXT"))
-    url_w = max(max(len(s) for s in urls), len("BASE_URL"))
+    name_w = col_w(0, "NAME")
+    model_w = col_w(1, "MODEL")
+    context_w = col_w(2, "CONTEXT")
+    url_w = col_w(3, "BASE_URL")
 
     print(
         "  "
@@ -1103,10 +1096,10 @@ def _do_model_show(args: argparse.Namespace) -> None:
     ref = m.extra.get(PRESET_REF_KEY)
     variants = _expand_or_die(reg, only=m)[0].extra.get(VARIANTS_KEY)
 
-    print(f"name:           {name}")
+    print(f"local name:     {name}")
     print(f"base_url:       {m.base_url}")
     print(f"api_key:        {'<set>' if m.api_key else '<missing>'}")
-    print(f"model_name:     {m.name}")
+    print(f"upstream id:    {m.name}")
     if isinstance(m.extra.get("provider"), str):
         print(f"provider:       {m.extra['provider']}")
     if m.context_window is not None:
@@ -1188,13 +1181,8 @@ def _do_model_use(args: argparse.Namespace) -> None:
 def _do_model_import(args: argparse.Namespace) -> None:
     """Import model definitions from an llmw-format TOML file.
 
-    Conversion rules (see `model_switch.importer`):
-    - `api_key` is persisted verbatim into models.toml (treated as a local-only
-      config file, same trust model as llmw's workspace_models.toml).
-    - `context_window` is read only if present as an int field. We do NOT
-      reverse-engineer it from a `[1m]` suffix in `name`.
-    - Unknown top-level keys and per-model keys (e.g. `is_default`,
-      `schema_version`) flow into `extra` buckets and round-trip untouched.
+    Conversion rules live in `model_switch.importer`; `--merge` layers the
+    incoming entries onto the existing registry, the default replaces it.
     """
     from model_switch.importer import ImportError_ as _ImportError, import_from_path
 

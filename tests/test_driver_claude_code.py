@@ -40,21 +40,22 @@ def test_apply_is_atomic_no_partial_file_on_failure(driver, glm_main, monkeypatc
     original = json.dumps({"env": {"FOO": "preserve-me"}})
     driver.settings_path.write_text(original)
 
-    # Simulate failure during write of the temp file by patching json.dump
-    # (the driver uses json.dump, not json.dumps).
-    import model_switch.drivers.claude_code as cc_module
-    orig_dump = cc_module.json.dump
+    # Simulate the failure at serialization: atomic_write_json renders in
+    # memory before opening the temp file, so nothing is half-written.
+    import model_switch.drivers._atomic as atomic_module
+    orig_dumps = atomic_module.json.dumps
     def boom(*args, **kwargs):
         raise IOError("simulated disk full")
-    cc_module.json.dump = boom
+    atomic_module.json.dumps = boom
     try:
         with pytest.raises(IOError):
             driver.apply(models=[glm_main], active=glm_main)
     finally:
-        cc_module.json.dump = orig_dump
+        atomic_module.json.dumps = orig_dumps
 
-    # Original file content must be unchanged.
+    # Original file content must be unchanged, with no temp file left behind.
     assert driver.settings_path.read_text() == original
+    assert not driver.settings_path.with_suffix(".json.tmp").exists()
 
 
 # --- current ------------------------------------------------------------------

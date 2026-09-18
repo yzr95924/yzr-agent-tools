@@ -97,7 +97,7 @@ src/
 │   ├── paths.py                 XDG 路径解析
 │   ├── store.py                 TOML I/O + 透传未知字段 (ModelEntry / Registry / State)
 │   ├── importer.py              llmw workspace_models.toml → models.toml 纯转换(无 I/O)
-│   ├── _compat.py               TOML loader (tomllib/tomli)
+│   ├── _compat.py               TOML loader (tomllib/tomli) + 手写 dumper
 │   ├── drivers/
 │   │   ├── base.py              AgentDriver Protocol + Registry
 │   │   ├── _atomic.py           atomic JSON write (driver 共享)

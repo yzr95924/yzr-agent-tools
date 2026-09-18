@@ -74,7 +74,6 @@ class Row:
     """One catalog model, flattened for the interactive picker."""
 
     provider: str
-    provider_name: str
     model: str
     entry: Dict[str, Any]
 
@@ -173,7 +172,7 @@ def search(data: Dict[str, Any], query: str = "",
                 )).lower()
                 if not all(t in haystack for t in tokens):
                     continue
-            out.append(Row(provider, provider_name, model_id, entry))
+            out.append(Row(provider, model_id, entry))
     return out
 
 
@@ -254,7 +253,8 @@ def pick(cands: List[Candidate], pin: Optional[str] = None) -> Pick:
     if len(matches) == 1:
         return Pick(matches[0], "host match")
     first = matches[0]
-    if all(derive(c.entry) == derive(first.entry) for c in matches[1:]):
+    first_fields = derive(first.entry)
+    if all(derive(c.entry) == first_fields for c in matches[1:]):
         return Pick(first, "host match, {} candidates agree".format(len(matches)),
                     matches[1:])
     return Pick(None,

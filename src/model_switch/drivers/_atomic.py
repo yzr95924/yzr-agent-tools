@@ -1,18 +1,10 @@
-"""Shared driver helpers: atomic JSON write."""
+"""Shared driver helper: atomic JSON write."""
 import json
-import os
 from pathlib import Path
+
+from model_switch.store import atomic_write_text
 
 
 def atomic_write_json(path: Path, data: dict) -> None:
-    """Write JSON atomically: write to `<path>.tmp`, then `os.replace`.
-
-    Used by every driver for its `apply()`. Atomicity prevents users from
-    ever seeing a half-written agent config file.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    """Serialize `data` and write it via `store.atomic_write_text`."""
+    atomic_write_text(path, json.dumps(data, indent=2) + "\n")
