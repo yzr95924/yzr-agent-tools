@@ -159,6 +159,21 @@ def test_add_force_overwrites():
     assert cj["mcpServers"]["outline"]["url"] == "https://y"
 
 
+def test_add_force_warns_on_drift_before_overwriting():
+    run(["add", "outline", "--url", "https://x", "--token", "t", "--driver", "claude-code"])
+    cj = paths.claude_json_file()
+    data = json.loads(cj.read_text())
+    data["mcpServers"]["outline"]["timeout"] = 30000
+    cj.write_text(json.dumps(data, indent=2) + "\n")
+
+    r = run(["add", "outline", "--url", "https://y", "--token", "u",
+             "--force", "--driver", "claude-code"])
+    assert r.exit_code == 0, r.stdout
+    assert "drift" in r.stdout
+    assert "timeout" in r.stdout
+    assert "timeout" not in json.loads(cj.read_text())["mcpServers"]["outline"]
+
+
 # ---- list / remove / presets / status --------------------------------------
 
 def test_list_empty_prints_hint():
@@ -201,6 +216,159 @@ def test_status_runs():
     r = run(["status", "--all-drivers"])
     assert r.exit_code == 0
     assert "mcp-plugin-mgr status" in r.stdout
+
+
+# ---- disable / enable -------------------------------------------------------
+
+def _snapshot(*paths_):
+    return {str(p): p.read_bytes() for p in paths_ if p.exists()}
+
+
+def test_disable_then_enable_roundtrips_without_reconfig():
+    run(["add", "memos", "--url", "https://memos.example.com/mcp",
+         "--token", "memos_tok", "--all-drivers"])
+    cj, oc, qd = (paths.claude_json_file(), paths.opencode_config_file(),
+                  paths.qoder_settings_file())
+    before = _snapshot(cj, oc, qd)
+    assert before  # sanity: all three agents were written
+
+    r = run(["disable", "memos", "--all-drivers"])
+    assert r.exit_code == 0, r.stdout
+    assert load_servers(paths.servers_file()).servers["memos"].enabled is False
+    # Per-agent vocabulary is named in the output.
+    assert "enabled=false" in r.stdout      # opencode
+    assert "disabled=true" in r.stdout      # qodercli
+
+    # opencode: native flag, entry and its other keys stay in place.
+    assert json.loads(oc.read_text())["mcp"]["memos"]["enabled"] is False
+    assert json.loads(oc.read_text())["mcp"]["memos"]["url"] == "https://memos.example.com/mcp"
+    # claude-code / qodercli: no native global flag (claude) or disabled marker.
+    assert "memos" not in json.loads(cj.read_text()).get("mcpServers", {})
+    assert json.loads(qd.read_text())["mcpServers"]["memos"]["disabled"] is True
+
+    # Re-enable from the registry alone — no --url/--token needed.
+    r = run(["enable", "memos", "--all-drivers"])
+    assert r.exit_code == 0, r.stdout
+    assert _snapshot(cj, oc, qd) == before
+    assert "enabled" not in paths.servers_file().read_text()
+
+
+def test_disable_unknown_server_errors():
+    r = run(["disable", "ghost", "--all-drivers"])
+    assert r.exit_code == 1
+    assert "not found" in r.stdout
+
+
+def test_enable_unknown_server_errors():
+    r = run(["enable", "ghost", "--all-drivers"])
+    assert r.exit_code == 1
+    assert "not found" in r.stdout
+
+
+def test_disable_no_apply_only_touches_registry():
+    run(["add", "outline", "--url", "https://x", "--token", "t", "--all-drivers"])
+    before = _snapshot(paths.claude_json_file())
+    r = run(["disable", "outline", "--no-apply"])
+    assert r.exit_code == 0, r.stdout
+    assert load_servers(paths.servers_file()).servers["outline"].enabled is False
+    assert _snapshot(paths.claude_json_file()) == before
+
+
+def test_disable_without_tty_writes_only_default_driver():
+    run(["add", "outline", "--url", "https://x", "--token", "t", "--all-drivers"])
+    r = run(["disable", "outline"])  # no --driver/--all-drivers, no TTY
+    assert r.exit_code == 0, r.stdout
+    cj = json.loads(paths.claude_json_file().read_text())
+    assert "outline" not in cj.get("mcpServers", {})
+    # Other drivers untouched: still enabled.
+    oc = json.loads(paths.opencode_config_file().read_text())
+    assert oc["mcp"]["outline"]["enabled"] is True
+
+
+def test_disable_warns_on_drift_but_continues():
+    run(["add", "memos", "--url", "https://memos.example.com/mcp",
+         "--token", "t", "--all-drivers"])
+    cj = paths.claude_json_file()
+    data = json.loads(cj.read_text())
+    # Simulate a hand edit that only exists in the agent config.
+    data["mcpServers"]["memos"]["timeout"] = 60000
+    cj.write_text(json.dumps(data, indent=2) + "\n")
+
+    r = run(["disable", "memos", "--all-drivers"])
+    assert r.exit_code == 0, r.stdout
+    assert "drift" in r.stdout
+    assert "timeout" in r.stdout
+    # Warning is not a blocker: the disable still happened everywhere.
+    assert "memos" not in json.loads(cj.read_text()).get("mcpServers", {})
+    assert json.loads(paths.opencode_config_file().read_text())["mcp"]["memos"]["enabled"] is False
+
+
+def test_enable_warns_on_drift_then_overwrites():
+    run(["add", "memos", "--url", "https://memos.example.com/mcp",
+         "--token", "t", "--all-drivers"])
+    cj = paths.claude_json_file()
+    data = json.loads(cj.read_text())
+    data["mcpServers"]["memos"]["timeout"] = 60000
+    cj.write_text(json.dumps(data, indent=2) + "\n")
+
+    r = run(["enable", "memos", "--all-drivers"])  # registry says enabled already
+    assert r.exit_code == 0, r.stdout
+    assert "drift" in r.stdout
+    # Warning came first, then the entry was re-rendered without the extra key.
+    assert "timeout" not in json.loads(cj.read_text())["mcpServers"]["memos"]
+
+
+def test_disable_does_not_warn_for_foreign_keys_on_flag_flip_drivers():
+    run(["add", "outline", "--url", "https://x", "--token", "t", "--driver", "opencode"])
+    oc = paths.opencode_config_file()
+    data = json.loads(oc.read_text())
+    data["mcp"]["outline"]["timeout"] = 30000
+    oc.write_text(json.dumps(data, indent=2) + "\n")
+
+    r = run(["disable", "outline", "--driver", "opencode"])
+    assert r.exit_code == 0, r.stdout
+    assert "drift" not in r.stdout
+    # In-place flag flip keeps the hand-added key.
+    assert json.loads(oc.read_text())["mcp"]["outline"]["timeout"] == 30000
+
+
+def test_list_shows_disabled_state():
+    run(["add", "outline", "--url", "https://x", "--token", "t", "--all-drivers"])
+    run(["disable", "outline", "--all-drivers"])
+    r = run(["list"])
+    assert r.exit_code == 0
+    assert "outline" in r.stdout
+    assert "DISABLED" in r.stdout
+
+
+def test_status_counts_enabled_and_disabled():
+    run(["add", "outline", "--url", "https://x", "--token", "t", "--no-apply"])
+    run(["disable", "outline", "--no-apply"])
+    r = run(["status", "--all-drivers"])
+    assert r.exit_code == 0
+    assert "1 disabled" in r.stdout
+
+
+# ---- test: disabled-server note (offline via probe stub) --------------------
+
+def test_test_notes_disabled_server(monkeypatch):
+    from types import SimpleNamespace
+
+    from mcp_plugin_mgr import probe
+
+    monkeypatch.setattr(probe, "probe_stdio", lambda *a, **k: SimpleNamespace(
+        ok=True, summary="stdio ok", server_info=None, detail="", remediation=""))
+    run(["add", "bogus", "--stdio", "--command", "bogus-cmd", "--no-apply"])
+
+    r = run(["test", "bogus"])  # enabled: no note
+    assert r.exit_code == 0, r.stdout
+    assert "DISABLED" not in r.stdout
+
+    run(["disable", "bogus", "--no-apply"])
+    r = run(["test", "bogus"])
+    assert r.exit_code == 0, r.stdout
+    assert "DISABLED" in r.stdout
+    assert "mcp-plugin-mgr enable bogus" in r.stdout
 
 
 # ---- _complete plumbing ----------------------------------------------------

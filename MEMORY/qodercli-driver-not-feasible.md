@@ -14,7 +14,6 @@ metadata:
 > mcp-plugin-mgr 已加 `qodercli` driver（2026-08-13），render 对齐 `qodercli mcp add` 产出
 > （http 带 `type:"http"`；stdio **不写 `type`**、空 env 省略）。**不要把本记忆的「不可行」误用到 MCP。**
 
-
 **Why（三层实证，均用 `--config-dir` 重定向到 tmp 验证，未碰真实配置）：**
 
 1. **没有客户端直连路径**。所有推理请求（含 BYOK 自定义模型）都发到

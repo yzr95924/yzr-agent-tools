@@ -42,6 +42,7 @@ class InvalidTransport(StoreError):
 # on an entry is preserved in `ServerEntry.extra` and round-tripped verbatim.
 _SERVER_FIELDS = (
     "transport",
+    "enabled",
     "url",
     "headers",
     "command",
@@ -56,6 +57,9 @@ class ServerEntry:
     """One MCP server in canonical form, plus any fields we don't own."""
     name: str
     transport: str
+    # Whether the server should be active in the agents. Disabled entries stay
+    # in the registry with all their credentials so `enable` needs no re-config.
+    enabled: bool = True
     # http
     url: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
@@ -87,9 +91,15 @@ class ServerEntry:
                 )
 
     def to_toml_dict(self) -> Dict[str, Any]:
-        """Serialize as a dict, with extras first then known fields."""
+        """Serialize as a dict, with extras first then known fields.
+
+        `enabled` is only emitted when False (True is the implicit default), so
+        writes stay minimal for entries that were never disabled.
+        """
         out: Dict[str, Any] = dict(self.extra)
         out["transport"] = self.transport
+        if not self.enabled:
+            out["enabled"] = False
         if self.transport == TRANSPORT_HTTP:
             out["url"] = self.url
             if self.headers:
@@ -159,6 +169,16 @@ def load_servers(path: Path) -> ServerRegistry:
 
         transport = str(entry.get("transport", ""))
         e = ServerEntry(name=str(name), transport=transport)
+        raw_enabled = entry.get("enabled")
+        if raw_enabled is not None and not isinstance(raw_enabled, bool):
+            # A typo like `enabled = "false"` would otherwise read as True and
+            # silently leave the server connected.
+            raise StoreError(
+                "[servers.{}] enabled must be a boolean, got {!r}".format(
+                    name, raw_enabled
+                )
+            )
+        e.enabled = True if raw_enabled is None else raw_enabled
 
         e.url = str(entry["url"]) if entry.get("url") else None
         if isinstance(entry.get("headers"), dict):

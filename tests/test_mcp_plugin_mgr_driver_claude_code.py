@@ -107,3 +107,42 @@ def test_remove_preserves_other_keys(driver):
 
 def test_driver_name(driver):
     assert driver.name == "claude-code"
+
+
+# --- set_enabled (no native disable -> entry removed) ------------------------
+
+def test_set_enabled_false_removes_entry_and_preserves_rest(driver):
+    cp = driver.config_path
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_text(json.dumps({
+        "userID": "u123",
+        "mcpServers": {
+            "outline": {"type": "http", "url": "https://x/mcp"},
+            "other": {"type": "http", "url": "https://other"},
+        },
+    }))
+    assert driver.set_enabled("outline", _http(), False) == "removed"
+    data = json.loads(cp.read_text())
+    assert "outline" not in data["mcpServers"]
+    assert data["mcpServers"]["other"]["url"] == "https://other"
+    assert data["userID"] == "u123"
+
+
+def test_set_enabled_false_is_idempotent(driver):
+    driver.add_server("outline", _http())
+    driver.set_enabled("outline", _http(), False)
+    before = driver.config_path.read_text()
+    assert driver.set_enabled("outline", _http(), False) == "absent"
+    assert driver.config_path.read_text() == before
+
+
+def test_set_enabled_true_renders_same_shape_as_add(driver):
+    assert driver.set_enabled("outline", _http(), True) == "written"
+    added = driver.config_path.read_text()
+    driver.remove_server("outline")
+    driver.add_server("outline", _http())
+    assert driver.config_path.read_text() == added
+
+
+def test_native_disable_flag(driver):
+    assert driver.native_disable is False

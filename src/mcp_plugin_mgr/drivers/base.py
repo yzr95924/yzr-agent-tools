@@ -33,6 +33,7 @@ class McpDriver(Protocol):
     """Structural type every concrete driver satisfies."""
     name: str
     config_path: Path
+    native_disable: bool
 
     def list_servers(self) -> Dict[str, dict]: ...
 
@@ -41,6 +42,8 @@ class McpDriver(Protocol):
     def add_server(self, name: str, entry: ServerEntry) -> None: ...
 
     def remove_server(self, name: str) -> bool: ...
+
+    def set_enabled(self, name: str, entry: ServerEntry, enabled: bool) -> str: ...
 
     def render(self, entry: ServerEntry) -> dict: ...
 
@@ -53,6 +56,10 @@ class BaseMcpDriver:
     name: str = ""
     _KEY: str = ""
     config_path: Optional[Path] = None
+    # True when the agent has a native disabled flag (OpenCode: `enabled`,
+    # Qoder CLI: `disabled`) that can be flipped in place; False when the only
+    # way to switch a server off is to remove it from the map.
+    native_disable: bool = False
 
     def __init__(self, config_path: Optional[Path] = None) -> None:
         if config_path is not None:
@@ -98,8 +105,73 @@ class BaseMcpDriver:
         atomic_write_json(self.config_path, config)  # type: ignore[arg-type]
         return True
 
+    def set_enabled(self, name: str, entry: ServerEntry, enabled: bool) -> str:
+        """Turn a server on/off for this agent; returns the action taken.
+
+        Drivers without a native flag fall back to presence/absence: enable
+        re-renders the registry entry, disable removes it. The registry keeps
+        the full entry (url, token, ...), so `enable` needs no re-configuration.
+        Drivers with one only supply the vocabulary (`_flag_mutation`); the
+        control flow here flips the flag in place, preserving every other key.
+
+        Returns one of: "written" (entry rendered), "flagged" (native flag
+        flipped), "removed" (entry deleted), "absent" (already off / not there).
+        """
+        if not self.native_disable:
+            if enabled:
+                self.add_server(name, entry)
+                return "written"
+            return "removed" if self.remove_server(name) else "absent"
+        # Native flag: patched in place (file rewritten only on a real change).
+        if self._update_server(name, self._flag_mutation(enabled)) != "missing":
+            return "flagged"
+        if not enabled:
+            return "absent"
+        self.add_server(name, entry)
+        return "written"
+
+    def _flag_mutation(self, enabled: bool):
+        """`mutate(obj) -> changed` for the agent's native disable flag.
+
+        Only drivers with `native_disable = True` implement this; it is where
+        each agent's vocabulary lives (OpenCode: `enabled`; Qoder CLI:
+        `disabled`).
+        """
+        raise NotImplementedError
+
+    def _update_server(self, name: str, mutate) -> str:
+        """Patch one stored server object in place.
+
+        `mutate(obj)` returns True when it changed the object. Returns
+        "changed" (file rewritten), "unchanged" (no write) or "missing"
+        (this agent has no such server).
+        """
+        from mcp_plugin_mgr.drivers._atomic import atomic_write_json
+
+        config = self._read()
+        servers = config.get(self._KEY, {})
+        if not isinstance(servers, dict):
+            return "missing"
+        obj = servers.get(name)
+        if not isinstance(obj, dict):
+            return "missing"
+        if not mutate(obj):
+            return "unchanged"
+        servers[name] = obj
+        config[self._KEY] = servers
+        atomic_write_json(self.config_path, config)  # type: ignore[arg-type]
+        return "changed"
+
     def render(self, entry: ServerEntry) -> dict:  # pragma: no cover - abstract
         raise NotImplementedError
+
+    def flag_state(self, enabled: bool) -> str:
+        """Native disable flag as the agent spells it, for CLI messages.
+
+        Empty for drivers without one. Overridden by flag-flipping drivers
+        (OpenCode: enabled=true/false; Qoder CLI: disabled=false/true).
+        """
+        return ""
 
 
 def _json_loads(text: str) -> dict:

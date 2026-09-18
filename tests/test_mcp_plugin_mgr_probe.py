@@ -146,6 +146,55 @@ def test_http_auth_401():
     assert not r.ok and r.code == "auth"
 
 
+def test_http_403_cloudflare_block_is_not_reported_as_auth():
+    # Real body served by Cloudflare error 1010 (a WAF block, not a bad token):
+    # telling the user to regenerate their token would be wrong.
+    cf_body = (
+        b'{"type":"https://developers.cloudflare.com/support/troubleshooting/'
+        b'http-status-codes/cloudflare-1xxx-errors/error-1010/",'
+        b'"title":"Error 1010: Access denied","status":403}'
+    )
+    r = probe.probe_http("https://h/mcp", {}, poster=_poster_const((403, "application/json", cf_body)))
+    assert not r.ok and r.code == "waf_blocked"
+    assert "token" not in r.remediation
+
+
+def test_http_403_without_waf_signature_still_reads_as_auth():
+    r = probe.probe_http("https://h/mcp", {}, poster=_poster_const((403, "application/json", b'{"error":"forbidden"}')))
+    assert not r.ok and r.code == "auth"
+
+
+def test_default_poster_sends_explicit_user_agent(monkeypatch):
+    # Cloudflare rejects urllib's default UA with 403; the poster must identify
+    # itself or every CF-fronted endpoint looks like an auth failure.
+    captured = {}
+
+    class _Resp:
+        headers = {}
+
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["ua"] = req.get_header("User-agent")
+        return _Resp()
+
+    monkeypatch.setattr(probe.urlrequest, "urlopen", fake_urlopen)
+    probe._default_http_poster("https://h/mcp", {}, {"jsonrpc": "2.0"}, 5)
+
+    assert captured["ua"] == probe._USER_AGENT
+    assert "urllib" not in captured["ua"].lower()
+
+
 def test_http_404():
     r = probe.probe_http("https://h", {}, poster=_poster_const((404, "text/plain", b"nope")))
     assert not r.ok and r.code == "notfound"

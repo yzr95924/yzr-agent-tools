@@ -10,7 +10,9 @@ https://opencode.ai/config.json):
   - type tokens are "remote"/"local" (not http/stdio);
   - there is no separate args field — `command` is an ARRAY of [cmd, ...args];
   - env vars live under `environment`, not `env`;
-  - servers carry an `enabled` flag; we set it true on add.
+  - servers carry an "enabled" flag; `opencode mcp` has no enable/disable
+    subcommand, so the flag is flipped here (set_enabled), in place, which
+    preserves keys the user added by hand (timeout, oauth, ...).
 
 Shapes we write:
   http:  {"type": "remote", "url": <url>, "enabled": true, "headers": {...}}
@@ -26,6 +28,7 @@ from mcp_plugin_mgr.store import ServerEntry, TRANSPORT_HTTP
 class OpenCodeMcpDriver(BaseMcpDriver):
     name = "opencode"
     _KEY = "mcp"
+    native_disable = True
 
     def __init__(self, config_path: Path = None) -> None:
         if config_path is None:
@@ -34,7 +37,7 @@ class OpenCodeMcpDriver(BaseMcpDriver):
 
     def render(self, entry: ServerEntry) -> dict:
         if entry.transport == TRANSPORT_HTTP:
-            out = {"type": "remote", "url": entry.url, "enabled": True}
+            out = {"type": "remote", "url": entry.url, "enabled": bool(entry.enabled)}
             if entry.headers:
                 out["headers"] = dict(entry.headers)
             return out
@@ -42,11 +45,22 @@ class OpenCodeMcpDriver(BaseMcpDriver):
         out = {
             "type": "local",
             "command": [entry.command] + list(entry.args),
-            "enabled": True,
+            "enabled": bool(entry.enabled),
         }
         if entry.env:
             out["environment"] = dict(entry.env)
         return out
+
+    def _flag_mutation(self, enabled: bool):
+        def mutate(obj):
+            changed = obj.get("enabled") is not enabled
+            obj["enabled"] = enabled
+            return changed
+
+        return mutate
+
+    def flag_state(self, enabled: bool) -> str:
+        return "enabled={}".format("true" if enabled else "false")
 
 
 # NOTE: Do NOT auto-register at import time — see `cli._ensure_default_registered`.

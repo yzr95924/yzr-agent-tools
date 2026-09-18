@@ -292,6 +292,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also remove the server's pre-approved tools from Claude Code permissions.allow.",
     )
 
+    # enable / disable — one parser shape each, same flags as add/remove.
+    toggle_help = {
+        "disable": "Disable a server (kept in the registry with its credentials, "
+                   "so `enable` later needs no re-config).",
+        "enable": "Enable a disabled server (restored from the registry; no "
+                  "re-config needed).",
+    }
+    for verb in ("enable", "disable"):
+        p_toggle = sub.add_parser(verb, help=toggle_help[verb])
+        p_toggle.add_argument("name", help="Server name to {}.".format(verb))
+        p_toggle.add_argument("--driver", default=None, dest="driver_name")
+        p_toggle.add_argument("--all-drivers", action="store_true", dest="all_drivers")
+        p_toggle.add_argument(
+            "--no-apply", action="store_true", dest="no_apply",
+            help="Update servers.toml only; don't touch agent configs yet.",
+        )
+
     # presets
     p_pre = sub.add_parser("presets", help="List built-in presets.")
     p_pre.add_argument("action", nargs="?", default="list", choices=["list"])
@@ -415,6 +432,7 @@ def _do_add(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    replacing = args.name in reg.servers
     reg.servers[args.name] = entry
     save_servers(paths.servers_file(), reg)
 
@@ -427,6 +445,10 @@ def _do_add(args: argparse.Namespace) -> None:
 
     applied = []
     for driver in _resolve_drivers(args):
+        if replacing:
+            # --force overwrites whatever the agent config holds; tell the user
+            # what that loses (same guard as disable/enable).
+            _warn_drift(driver, args.name, entry)
         driver.add_server(args.name, entry)
         applied.append(driver)
     for d in applied:
@@ -451,15 +473,19 @@ def _do_list() -> None:
     rows = []
     for n, e in reg.servers.items():
         present = [d.name for d in drivers if d.has_server(n)]
-        rows.append((n, e.transport, _truncate(e.detail(), 48), ",".join(present) or "-"))
+        state = "enabled" if e.enabled else "DISABLED"
+        rows.append((n, e.transport, _truncate(e.detail(), 48), state,
+                     ",".join(present) or "-"))
 
     names = [r[0] for r in rows]
     transports = [r[1] for r in rows]
     details = [r[2] for r in rows]
-    agents = [r[3] for r in rows]
+    states = [r[3] for r in rows]
+    agents = [r[4] for r in rows]
     name_w = max(max(len(s) for s in names), len("NAME"))
     trans_w = max(max(len(s) for s in transports), len("TRANSPORT"))
     detail_w = max(max(len(s) for s in details), len("DETAIL"))
+    state_w = max(max(len(s) for s in states), len("STATE"))
     agents_w = max(max(len(s) for s in agents), len("AGENTS"))
 
     print(
@@ -467,14 +493,16 @@ def _do_list() -> None:
         + "NAME".ljust(name_w) + "  "
         + "TRANSPORT".ljust(trans_w) + "  "
         + "DETAIL".ljust(detail_w) + "  "
+        + "STATE".ljust(state_w) + "  "
         + "AGENTS".ljust(agents_w)
     )
-    for n, t, detail, agent in rows:
+    for n, t, detail, state, agent in rows:
         print(
             "  "
             + n.ljust(name_w) + "  "
             + t.ljust(trans_w) + "  "
             + detail.ljust(detail_w) + "  "
+            + state.ljust(state_w) + "  "
             + agent
         )
 
@@ -503,6 +531,95 @@ def _do_remove(args: argparse.Namespace) -> None:
         _apply_auto_allow(args.name, add=False)
 
 
+def _drift_report(live: dict, expected: dict) -> List[str]:
+    """Differences the registry render would lose/overwrite in a live entry.
+
+    Reports only keys the agent config has (or has different) — a key the
+    registry would merely add is not a loss, and mentioning it would mislead on
+    the disable path, where the whole entry is removed. Container values are
+    never echoed: `headers` / `env` carry credentials and this prints to the
+    terminal (and into agent logs).
+    """
+    lines = []
+    for key in sorted(live):
+        if key not in expected:
+            lines.append("    + {} (only in agent config; lost after this change)".format(key))
+        elif live[key] != expected[key]:
+            if isinstance(live[key], (dict, list)) or isinstance(expected[key], (dict, list)):
+                lines.append("    ~ {}: values differ (registry wins)".format(key))
+            else:
+                lines.append(
+                    "    ~ {}: {!r} -> {!r} (registry wins)".format(
+                        key, live[key], expected[key])
+                )
+    return lines
+
+
+def _warn_drift(driver, name: str, entry: ServerEntry) -> None:
+    """Warn (non-blocking) about agent-side differences this write will drop."""
+    if driver.native_disable:
+        return
+    live = driver.list_servers().get(name)
+    if not isinstance(live, dict):
+        return
+    differences = _drift_report(live, driver.render(entry))
+    if not differences:
+        return
+    print(
+        "  ! {}: {!r} in {} drifted from the registry — this change overwrites/removes:".format(
+            driver.name, name, driver.config_path
+        )
+    )
+    for line in differences:
+        print(line)
+    print(
+        "    Continuing (drift is not a blocker). Note: {} entries are re-rendered "
+        "from the registry's canonical fields, so agent-only keys are not "
+        "restored.".format(driver.name)
+    )
+
+
+def _do_set_enabled(args: argparse.Namespace, enabled: bool) -> None:
+    verb = "Enabled" if enabled else "Disabled"
+    reg = load_servers(paths.servers_file())
+    if args.name not in reg.servers:
+        print(
+            "Error: server {!r} not found in {}.".format(args.name, paths.servers_file()),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    entry = reg.servers[args.name]
+    entry.enabled = enabled
+    save_servers(paths.servers_file(), reg)
+    print("{} server {!r} in registry.".format(verb, args.name))
+    print("  {}".format(paths.servers_file()))
+
+    if args.no_apply:
+        print("  (--no-apply: not written to agent configs)")
+        return
+
+    for driver in _resolve_drivers(args):
+        _warn_drift(driver, args.name, entry)
+        action = driver.set_enabled(args.name, entry, enabled)
+        if action == "written":
+            print("  Wrote {} ({})".format(driver.config_path, driver.name))
+        elif action == "flagged":
+            print("  Flagged {} ({}: {})".format(
+                driver.config_path, driver.name, driver.flag_state(enabled)))
+        elif action == "removed":
+            print("  Removed from {} ({}: no native disable — the registry keeps "
+                  "the entry, so `enable` restores it)".format(driver.config_path, driver.name))
+        else:  # absent
+            print("  Skipped {} ({}: no such server in this agent)".format(
+                driver.config_path, driver.name))
+    print(
+        "  Restart your agent to apply "
+        "(Claude Code: Ctrl+D then `claude`; OpenCode: restart the CLI; "
+        "Qoder CLI: restart `qodercli`)."
+    )
+
+
 def _do_presets() -> None:
     if not PRESETS:
         print("(no built-in presets)")
@@ -526,9 +643,11 @@ def _do_presets() -> None:
 def _do_status(args: argparse.Namespace) -> None:
     _ensure_default_registered()
     reg = load_servers(paths.servers_file())
+    disabled = sum(1 for e in reg.servers.values() if not e.enabled)
     print("mcp-plugin-mgr status")
     print("----------------------")
-    print("registry: {}  ({} server(s))".format(paths.servers_file(), len(reg.servers)))
+    print("registry: {}  ({} server(s): {} enabled, {} disabled)".format(
+        paths.servers_file(), len(reg.servers), len(reg.servers) - disabled, disabled))
     if args.all_drivers:
         drivers = [_resolve_driver(n) for n in registry.list()]
     else:
@@ -570,6 +689,11 @@ def _do_test(args: argparse.Namespace) -> int:
             )
             return 1
         entry = reg.servers[args.name]
+        if not entry.enabled:
+            print(
+                "  note: {!r} is DISABLED in the registry — agents won't load it "
+                "until `mcp-plugin-mgr enable {}`.".format(args.name, args.name)
+            )
         if entry.transport == TRANSPORT_HTTP:
             print("Testing {} (http): {}".format(args.name, entry.url))
             result = probe.probe_http(entry.url, dict(entry.headers), timeout=timeout)
@@ -638,6 +762,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if args.cmd == "remove":
         _do_remove(args)
+        return 0
+    if args.cmd == "enable":
+        _do_set_enabled(args, True)
+        return 0
+    if args.cmd == "disable":
+        _do_set_enabled(args, False)
         return 0
     if args.cmd == "presets":
         _do_presets()

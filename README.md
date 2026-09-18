@@ -6,12 +6,12 @@
 
 ## 本仓库目前包含的工具
 
-| 工具             | 简介                                                                            | 状态     |
-| ---------------- | ------------------------------------------------------------------------------- | -------- |
-| [`model-switch`](src/model_switch/README.md) | CLI;切换 AI coding agent 使用的 Anthropic 兼容模型 | 已发布   |
+| 工具 | 简介 | 状态 |
+| --- | --- | --- |
+| [`model-switch`](src/model_switch/README.md) | CLI;切换 AI coding agent 使用的 Anthropic 兼容模型 | 已发布 |
 | [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI;管理 Claude Code / OpenCode / Qoder CLI 的自定义 MCP 服务(起点:Outline wiki),一份注册表翻译到各 agent | 已发布 |
 | [`yzr-agent-style`](src/yzr_agent_style/README.md) | 脚本;把一份全局指令模板以 marker 块形式安装/卸载到 Claude Code / OpenCode / Qoder CLI 的全局规则文件,不覆盖用户手写内容 | 新增 |
-|  [`llmw-connect-mgr`](src/llmw_connect_mgr/README.md) | CLI;llmw-connect daemon（cc-connect llmw fork） 的首装/配置/升级/卸载(npm 制品 + systemd 看门狗,secrets 走 env 文件) | 新增 |
+| [`llmw-connect-mgr`](src/llmw_connect_mgr/README.md) | CLI;llmw-connect daemon（cc-connect llmw fork） 的首装/配置/升级/卸载(npm 制品 + systemd 看门狗,secrets 走 env 文件) | 新增 |
 
 > 新工具按需添加;同一份仓库规约对所有工具生效。完整仓库规约、目录结构、跨工具注意事项
 > 见 [`AGENTS.md`](AGENTS.md)。
@@ -24,7 +24,8 @@
 - **`mcp-plugin-mgr`** — 一份 `servers.toml` 注册表管你的自定义 MCP 服务(以 Outline wiki 为
   起点),`add <name>` 翻译成 Claude Code(`~/.claude.json` 的 `mcpServers`)、OpenCode
   (`opencode.json` 的 `mcp`)与 Qoder CLI(`~/.qoder/settings.json` 的 `mcpServers`)各自的
-  位置/字段/type 词表,只改自己那一段、其余原样保留,重启即生效。
+  位置/字段/type 词表,只改自己那一段、其余原样保留,重启即生效;`enable`/`disable` 做启停,
+  停用保留凭据、恢复无需重配。
 - **`yzr-agent-style`** — 把仓内一份指令模板以 marker 块的形式安装/卸载到各 agent 的全局
   规则文件(Claude Code `~/.claude/CLAUDE.md`、OpenCode `~/.config/opencode/AGENTS.md`、
   Qoder CLI `~/.qoder/AGENTS.md`),块外手写内容原样保留、重跑幂等同步。
@@ -66,6 +67,7 @@ model-switch model list
 model-switch model use glm-z1-plus
 mcp-plugin-mgr add outline --url https://your-outline/mcp --token ol_api_xxx --all-drivers
 mcp-plugin-mgr list
+mcp-plugin-mgr disable outline --all-drivers   # 停用但保留凭据;enable 一键恢复,无需重配
 ```
 
 ## 许可证

@@ -77,6 +77,8 @@ mcp-plugin-mgr init                      # 初始化 ~/.config/mcp-plugin-mgr/
 mcp-plugin-mgr add outline --url ... --token ol_api_... --all-drivers   # 加服务(preset 名或显式 flag)
 mcp-plugin-mgr list                      # 列已注册服务(+ 每 agent 是否已写入)
 mcp-plugin-mgr remove outline --all-drivers
+mcp-plugin-mgr disable outline --all-drivers   # 停用(保留凭据;enable 从注册表还原,无需重配)
+mcp-plugin-mgr enable outline --all-drivers    # 恢复;STATE/DISABLED 见 `list` 的 STATE 列
 mcp-plugin-mgr presets                   # 列内置 preset(outline / memos / agent-html-drop)
 mcp-plugin-mgr status
 mcp-plugin-mgr test outline              # 探活:发 initialize 握手,诊断连不通根因(含 ddnsto middlebox)
@@ -104,7 +106,7 @@ src/
 │   └── README.md                详细用户文档
 │
 ├── mcp_plugin_mgr/              # CLI;管理 agent 的自定义 MCP 服务
-    ├── cli.py                   argparse (init/add/list/remove/presets/status)
+    ├── cli.py                   argparse (init/add/list/remove/enable/disable/presets/status)
     ├── __main__.py              python -m mcp_plugin_mgr 入口
     ├── paths.py                 XDG 路径(config_dir / servers_file / claude_json_file / opencode_config_file / qoder_settings_file)
     ├── _compat.py               TOML loader (tomllib/tomli) + 手写 dumper(自包含副本)
@@ -133,6 +135,7 @@ src/
 
 每个 agent 一个 driver 类,实现 `read() / apply(model, api_key) / current()`。当前内置 `claude-code`
 与 `opencode`:
+
 - `claude-code` 写 `~/.claude/settings.json` 的 `env` 块(`ANTHROPIC_AUTH_TOKEN` /
   `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`)+ 顶层 `model` 字段。
 - `opencode` 写 OpenCode 全局配置 `$XDG_CONFIG_HOME/opencode/opencode.json`(默认
@@ -154,6 +157,7 @@ src/
 
 **Per-driver 语义——单槽 vs catalog**:`model use <name>` 把所选 driver 的配置写到
 激活的模型。driver 语义由 `supports_catalog` 区分:
+
 - `claude-code`(单槽,`supports_catalog=False`):`apply(models, active)` 只渲染 `active`,
   写 `env` 块 + 顶层 `model`。
 - `opencode`(catalog,`supports_catalog=True`):`apply` = 全量 reconcile——把 `models.toml`
@@ -178,8 +182,8 @@ OpenCode 遇到标量会拒载整份配置),payload 内容不校验。`variants.
 
 ### `mcp_plugin_mgr` 的形态
 
-CLI(`mcp-plugin-mgr`),与 model-switch 同构:一份规范注册表(`~/.config/mcp-plugin-mgr/servers.toml`)
-+ 每 agent 一个 driver 负责翻译。三个 driver:
+CLI(`mcp-plugin-mgr`),与 model-switch 同构:一份规范注册表(`~/.config/mcp-plugin-mgr/servers.toml`)+ 每 agent 一个 driver 负责翻译。三个 driver:
+
 - `claude-code` 写 `~/.claude.json` 的 `mcpServers`(**不是** `~/.claude/settings.json`——后者归
   model-switch;两者是不同文件)。http→`{type:http,url,headers?}`,stdio→`{type:stdio,command,args,env}`。
 - `opencode` 写 `opencode.json` 的 `mcp`。词表不同:http→`{type:remote,url,enabled:true,headers?}`,
@@ -191,10 +195,12 @@ CLI(`mcp-plugin-mgr`),与 model-switch 同构:一份规范注册表(`~/.config/m
   省略 `env` 键**(Claude Code 则恒写 `type:"stdio"` 与 `env` 对象)。Qoder CLI 的 MCP 功能是纯客户端配置(与
   [[qodercli-driver-not-feasible]] 记的 model-switch 云转发不可行是两回事——那个针对推理上游,这个针对 MCP 服务注册)。
 
-`BaseMcpDriver` 实现通用 read/list/add/remove(只动 `self._KEY` 那段,保留文件里其它键——Claude Code 的
-userID/onboarding、OpenCode 的 provider/model/$schema、Qoder CLI 的 model/ui/permissions);子类只设 `_KEY` + `render(entry)`。V1 命令面
-**增删查 + test 探活**(add/list/remove/test/presets/status),不做 enable/disable:各 agent 的 enable 语义不对称
-(Claude Code 无原生 disable;OpenCode 有 `enabled` 字段;Qoder CLI 有 `qodercli mcp enable/disable` 但落盘形式又不同),V1 回避。内置 preset:`outline` + `memos` + `agent-html-drop`(均 http,需 --url/--token);
+`BaseMcpDriver` 实现通用 read/list/add/remove/set_enabled(只动 `self._KEY` 那段,保留文件里其它键——Claude Code 的
+userID/onboarding、OpenCode 的 provider/model/$schema、Qoder CLI 的 model/ui/permissions);子类只设 `_KEY` + `render(entry)`(有原生启停 flag 的再加 `native_disable=True` + `_flag_mutation` + `flag_state`)。V2 命令面
+**增删查 + 启停 + test 探活**(init/add/list/remove/enable/disable/test/presets/status)。启停统一为「registry 记 `enabled`(缺省 true,false 才落盘)+ driver 翻译」:
+OpenCode 翻 `enabled` 原地、Qoder CLI 加/删 `disabled` 原地(均 `native_disable=True`,外来键全保),Claude Code 无全局 flag
+故**删条目**(registry 留全量 → `enable` 无需重配);写前对无原生 flag 的 driver 做 drift 比对,列出 `+仅 agent 侧有`/`~值不同` 并**警告不阻断**。
+`add` 固定为「显式启用」(`--force` 覆盖时 `enabled` 复位 true)。不做 per-project 停用与 sync 全量重投影。内置 preset:`outline` + `memos` + `agent-html-drop`(均 http,需 --url/--token);
 任意 http/stdio MCP 不在 preset 里也能用 flag 配。`test` 命令(`probe.py`)对**每种传输一套流程**:
 http 发 `initialize` 握手按状态分类(ok/auth/404/conn/middlebox-empty),stdio spawn + 握手;专门诊断
 `*.ddnsto.com` 那类反代盒(http 返空 200 → 自动探 https 变体并给修复)。**协议握手共享,根因解读 per-plugin**:

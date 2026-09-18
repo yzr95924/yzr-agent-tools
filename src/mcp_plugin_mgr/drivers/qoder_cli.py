@@ -22,6 +22,11 @@ Shapes we write (match ``qodercli mcp add`` exactly):
   stdio: {"command": <cmd>, "args": [...], "env": {...}}   # env only if non-empty; NO type
   http:  {"url": <url>, "type": "http", "headers": {...}}   # headers only if non-empty
 
+Enable/disable mirrors ``qodercli mcp disable/enable`` (verified against
+qodercli 1.1.21 with a temp --config-dir): disable adds ``"disabled": true``
+to the server object in place, enable removes that key again. Both preserve
+every other key, so foreign fields survive flag flips.
+
 Note: qodercli also supports ``sse``/``ws`` transports and OAuth fields, but
 mcp-plugin-mgr's canonical ServerEntry only models http/stdio, so we render
 those two.
@@ -36,6 +41,7 @@ from mcp_plugin_mgr.store import ServerEntry, TRANSPORT_HTTP
 class QoderCliMcpDriver(BaseMcpDriver):
     name = "qodercli"
     _KEY = "mcpServers"
+    native_disable = True
 
     def __init__(self, config_path: Path = None) -> None:
         if config_path is None:
@@ -54,6 +60,21 @@ class QoderCliMcpDriver(BaseMcpDriver):
         if entry.env:
             out["env"] = dict(entry.env)
         return out
+
+    def _flag_mutation(self, enabled: bool):
+        def mutate(obj):
+            if enabled:
+                changed = "disabled" in obj
+                obj.pop("disabled", None)
+                return changed
+            changed = obj.get("disabled") is not True
+            obj["disabled"] = True
+            return changed
+
+        return mutate
+
+    def flag_state(self, enabled: bool) -> str:
+        return "disabled={}".format("false" if enabled else "true")
 
 
 # NOTE: Do NOT auto-register at import time — see `cli._ensure_default_registered`.

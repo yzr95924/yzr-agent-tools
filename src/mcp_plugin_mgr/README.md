@@ -72,6 +72,8 @@ mcp-plugin-mgr init                      # 初始化 ~/.config/mcp-plugin-mgr/
 mcp-plugin-mgr add <name> [opts]         # 加服务(preset 名或显式 flag)
 mcp-plugin-mgr list                      # 列出已注册服务(+ 每个 agent 是否已写入)
 mcp-plugin-mgr remove <name> [opts]      # 从注册表与 agent 配置移除
+mcp-plugin-mgr disable <name> [opts]     # 停用:保留凭据,agent 侧关掉连接
+mcp-plugin-mgr enable <name> [opts]      # 重新启用:从注册表还原,无需重配
 mcp-plugin-mgr test <name> | --url URL   # 探活:真的发 initialize 握手,诊断连不通的根因
 mcp-plugin-mgr presets                   # 列出内置 preset
 mcp-plugin-mgr status                    # 路径 / 计数概览
@@ -140,6 +142,39 @@ mcp-plugin-mgr add agent-html-drop \
   --auto-allow   # upload_html 写大 HTML(默认上限 50MB),预批 6 个工具避免 auto-mode 误拦
 ```
 
+## 启用 / 停用
+
+`disable` 与 `remove` 的区别:**`disable` 不删注册表条目**——`servers.toml` 里只多一行
+`enabled = false`,url / token / headers 全部保留,所以 `enable` 直接还原,**不需要重新配**。
+暂时不用的服务(或某些 agent 里噪声大的服务)应该 `disable` 而不是 `remove`。
+
+```bash
+mcp-plugin-mgr disable memos --all-drivers    # 三个 agent 一起停
+mcp-plugin-mgr enable memos --all-drivers     # 一键恢复(不用再给 --url/--token)
+mcp-plugin-mgr disable memos --driver opencode
+mcp-plugin-mgr disable memos --no-apply       # 只改 servers.toml,暂不动 agent 配置
+```
+
+停用方式按各 agent 的原生能力翻译(`list` 的 STATE 列显示 `enabled` / `DISABLED`):
+
+| agent | disable 落盘 | 说明 |
+| --- | --- | --- |
+| OpenCode | `mcp.<name>.enabled: false`(原地翻) | 条目保留;你手加的 `timeout` / `oauth` 等键不动 |
+| Qoder CLI | `mcpServers.<name>.disabled: true`(原地加) | 对齐 `qodercli mcp disable` 自己的产出,其余键不动 |
+| Claude Code | 删掉 `mcpServers.<name>` | 它没有全局 disable flag(`/mcp` 面板的停用只按项目记进 `disabledMcpServers`) |
+
+Claude Code 走"删条目 + enable 时重渲染",所以 `disable` / `enable` 前会**比对 agent 侧现有配置与
+注册表要渲染的内容**;若有不一致会打印 **drift 警告**(`+ 仅 agent 侧有`、`~ 值不同`),**警告不阻断**:
+操作照常执行、退出码仍 0。注意注册表只承载 canonical 字段(transport/url/headers/command/args/env/
+description),所以 agent 侧独有的键(如手加的 `timeout`)无法从注册表还原——要长期保留就得让
+driver 的 `render()` 支持该字段。OpenCode / Qoder CLI 因为是原地翻 flag,不存在这个问题。
+
+停用期间要改 URL / token,用 `add <name> --force` 重新给全参数(它会重新启用);`disable` 本身
+不动凭据,`enable` 也不看参数。
+
+`disable` / `enable` **不联动** Claude Code 的 `permissions.allow`(`--auto-allow` 是 `add`/`remove`
+的选项):停用不会撤销已预批的工具名——服务缺席时这些条目无害;要清掉就 `remove --auto-allow`。
+
 ## 诊断:`test` 探活
 
 `add` 只保证配置写进去了,不保证端点真能用。`test` 真的向 MCP server 发一次
@@ -162,7 +197,9 @@ mcp-plugin-mgr test my-stdio-tool     # stdio → spawn + 握手
 mcp-plugin-mgr test --url https://your-outline/mcp --token ol_api_xxx
 ```
 
-能识别的典型故障:`✓` 正常(附 serverInfo / protocolVersion)、`401/403` 认证、`404` 路径错、
+能识别的典型故障:`✓` 正常(附 serverInfo / protocolVersion)、`401/403` 认证、`403` 但被
+Cloudflare 等边缘 WAF 拦截(报 `waf_blocked` 而不是让你去换 token——探针自带具名 User-Agent,
+否则 CF 会把默认的 `Python-urllib` UA 当成机器人返 Error 1010)、`404` 路径错、
 `405` 不支持 POST、连不上 / DNS / 超时、`200 但非 JSON-RPC`。
 
 **ddnsto / 内网穿透陷阱**(专门诊断):若 `http://` 端点返 `200` 但响应体为空
@@ -198,12 +235,17 @@ args = ["--from", "git+https://example/some-mcp", "run"]
 
 ## 设计要点 / 局限
 
-- **只做增删查**(V1):`add` / `list` / `remove`,不做 enable/disable / 连通性探测。各 agent 的
-  enable 语义不对称(Claude Code 无原生 disable;OpenCode 有 `enabled` 字段;Qoder CLI 有
-  `qodercli mcp enable/disable` 但落盘形式又不同),V1 暂不碰。
+- **命令面**:`add` / `list` / `remove` / `enable` / `disable` / `test` / `presets` / `status`。
+  启停语义按各 agent 翻译(见上「启用 / 停用」):OpenCode 与 Qoder CLI 有原生 flag 可原地翻,
+  Claude Code 无全局 flag 只能删条目(注册表留底,`enable` 还原)。不做 per-project 停用
+  (Claude Code 的 `/mcp` 面板 / 项目级 `.mcp.json` 场景)。
 - **写 agent 配置 = 原子写 + 字段透传**:读全 JSON → 只改自己的那段(`mcpServers` / `mcp`)→
   写 `.tmp` 再 `os.replace`,绝不半写;文件里其它字段(userID、onboarding、provider/model、$schema、
   model/ui/permissions)一字不动。
+- **停用的两个边界**:Claude Code 侧 agent 独有的手加字段不会从注册表还原(操作前有 drift 警告,
+  见上「启用 / 停用」);OAuth 型 MCP 在 Claude Code 上被 `remove` 时其 OAuth token / client
+  registration 会一并删除(官方行为),这类服务停用后再启用需要重新授权——本工具的三个 preset
+  都是 Bearer 头,不受影响。
 - **明文 token**:token 写进 `servers.toml` 与 agent 配置(同 model-switch 的本地信任模型,
   注意文件权限)。
 - **测试隔离**:tests 绝不碰真实的 `~/.claude.json` / `opencode.json` / `~/.qoder/settings.json`;

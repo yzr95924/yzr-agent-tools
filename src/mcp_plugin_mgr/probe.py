@@ -33,6 +33,16 @@ from urllib.parse import urlsplit, urlunsplit
 _PROTOCOL_VERSION = "2025-06-18"
 _CLIENT_INFO = {"name": "mcp-plugin-mgr", "version": "1.0"}
 
+# Cloudflare (and other WAFs) reject urllib's default "Python-urllib/3.x"
+# User-Agent with a 403, which would be misread as an auth failure. Verified on
+# a CF-fronted Memos instance: the default UA gets 403 "Error 1010", any named
+# UA gets 200. We identify ourselves with the same name/version we advertise in
+# the handshake.
+_USER_AGENT = "{}/{}".format(_CLIENT_INFO["name"], _CLIENT_INFO["version"])
+
+# Bodies served by an edge WAF page rather than by the MCP server itself.
+_WAF_BODY_SIGNATURES = ("error-1010", "error 1010", "cloudflare")
+
 
 class _ConnError(Exception):
     """Wraps any network-level failure (DNS / refused / timeout / TLS)."""
@@ -150,6 +160,7 @@ def _default_http_poster(url, headers, payload, timeout):
     req = urlrequest.Request(url, data=data, method="POST", headers={
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
+        "User-Agent": _USER_AGENT,
     })
     for k, v in headers.items():
         req.add_header(k, v)
@@ -204,6 +215,16 @@ def _classify_http_200(ctype: str, body) -> ProbeResult:
     return _classify_message(msg)
 
 
+def _looks_like_waf_block(body) -> bool:
+    """True when the 401/403 body is an edge-WAF page, not an auth rejection."""
+    if isinstance(body, (bytes, bytearray)):
+        text = body.decode("utf-8", "replace")
+    else:
+        text = body or ""
+    lowered = text.lower()
+    return any(sig in lowered for sig in _WAF_BODY_SIGNATURES)
+
+
 def probe_http(url, headers, timeout=10, poster=_default_http_poster):
     # type: (str, Dict[str,str], int, Poster) -> ProbeResult
     try:
@@ -222,6 +243,15 @@ def probe_http(url, headers, timeout=10, poster=_default_http_poster):
         return r
 
     if status in (401, 403):
+        if _looks_like_waf_block(body):
+            return ProbeResult(
+                ok=False, code="waf_blocked",
+                summary="HTTP {} (被边缘 WAF 拦截,不是鉴权失败)".format(status),
+                detail=_snippet(body),
+                remediation="WAF / CDN(如 Cloudflare Error 1010)按客户端指纹拦了这个请求;"
+                            "MCP 客户端本身通常不受影响 —— 核对防护规则是否该放行此来源,"
+                            "或换个网络重试",
+            )
         return ProbeResult(
             ok=False, code="auth",
             summary="HTTP {} (认证被拒)".format(status),

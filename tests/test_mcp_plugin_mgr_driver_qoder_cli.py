@@ -99,3 +99,67 @@ def test_remove_is_idempotent(driver):
 
 def test_driver_name(driver):
     assert driver.name == "qodercli"
+
+
+# --- set_enabled (native "disabled": true, mirrors `qodercli mcp disable`) ---
+
+def _write_config(driver):
+    cp = driver.config_path
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_text(json.dumps({
+        "model": {"name": "q35model_preview"},
+        "mcpServers": {
+            "outline": {
+                "url": "https://x/mcp", "type": "http",
+                "headers": {"Authorization": "Bearer t"},
+                # Foreign key added by hand: must survive flag flips.
+                "timeout": 60000,
+            },
+            "other": {"url": "https://other", "type": "http"},
+        },
+    }))
+    return cp
+
+
+def test_set_enabled_false_writes_disabled_true_in_place(driver):
+    cp = _write_config(driver)
+    action = driver.set_enabled("outline", _http(), False)
+    data = json.loads(cp.read_text())
+
+    assert action == "flagged"
+    assert data["mcpServers"]["outline"]["disabled"] is True
+    assert data["mcpServers"]["outline"]["timeout"] == 60000
+    assert data["mcpServers"]["outline"]["headers"] == {"Authorization": "Bearer t"}
+    assert "disabled" not in data["mcpServers"]["other"]
+    assert data["model"] == {"name": "q35model_preview"}
+
+
+def test_set_enabled_true_removes_disabled_key_in_place(driver):
+    cp = _write_config(driver)
+    driver.set_enabled("outline", _http(), False)
+    action = driver.set_enabled("outline", _http(), True)
+    data = json.loads(cp.read_text())
+
+    assert action == "flagged"
+    assert "disabled" not in data["mcpServers"]["outline"]
+    assert data["mcpServers"]["outline"]["timeout"] == 60000
+
+
+def test_set_enabled_false_on_absent_server_is_noop(driver):
+    cp = _write_config(driver)
+    before = cp.read_text()
+    assert driver.set_enabled("ghost", _http(), False) == "absent"
+    assert cp.read_text() == before
+
+
+def test_set_enabled_true_on_absent_server_renders_entry(driver):
+    assert driver.set_enabled("outline", _http(), True) == "written"
+    data = json.loads(driver.config_path.read_text())
+    assert data["mcpServers"]["outline"] == {
+        "url": "https://x/mcp", "type": "http",
+        "headers": {"Authorization": "Bearer t"},
+    }
+
+
+def test_native_disable_flag(driver):
+    assert driver.native_disable is True

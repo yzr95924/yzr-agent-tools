@@ -27,10 +27,11 @@ function __fish_mcp_plugin_mgr_using_command
     test (count $cmd) -ge 2; and contains -- $cmd[2] $argv
 end
 
-# True while the server-name positional after `add`/`remove`/`test` is unfilled.
+# True while the server-name positional after `add`/`remove`/`enable`/`disable`/`test`
+# is unfilled.
 function __fish_mcp_plugin_mgr_needs_name
     set -l cmd (commandline -opc)
-    __fish_mcp_plugin_mgr_using_command add remove test; or return 1
+    __fish_mcp_plugin_mgr_using_command add remove enable disable test; or return 1
     test "$cmd[-1]" = --driver; and return 1
     # No negative range bounds ($cmd[3..-1]) here — fish 3.0+ only; on
     # fish 2.x a negative or descending range is an "Array index out of
@@ -60,6 +61,8 @@ complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a init -d 
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a add -d 'Add an MCP server'
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a list -d 'List servers (with per-agent presence)'
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a remove -d 'Remove a server'
+complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a enable -d 'Enable a server (credentials are kept)'
+complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a disable -d 'Disable a server (credentials are kept)'
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a presets -d 'List built-in presets'
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a status -d 'Show config paths and counts'
 complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a test -d 'Test whether an MCP server responds (connectivity diagnosis)'
@@ -68,6 +71,7 @@ complete -c mcp-plugin-mgr -n __fish_mcp_plugin_mgr_needs_command -f -a test -d 
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_needs_name; and __fish_mcp_plugin_mgr_using_command add' -f -a '(__fish_mcp_plugin_mgr_presets)' -d 'preset'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_needs_name; and __fish_mcp_plugin_mgr_using_command add' -f -a '(__fish_mcp_plugin_mgr_servers)' -d 'server'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_needs_name; and __fish_mcp_plugin_mgr_using_command remove' -f -a '(__fish_mcp_plugin_mgr_servers)' -d 'server'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_needs_name; and __fish_mcp_plugin_mgr_using_command enable disable' -f -a '(__fish_mcp_plugin_mgr_servers)' -d 'server'
 
 # --- flags: add ---------------------------------------------------------------
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command add' -l url -r -f -d 'HTTP server URL'
@@ -89,6 +93,12 @@ complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l dr
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l all-drivers -f -d 'Apply to every registered driver'
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -l auto-allow -f -d "Also remove the server's pre-approved tools from Claude Code permissions.allow"
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command remove' -s h -l help -f -d 'Show help'
+
+# --- flags: enable / disable --------------------------------------------------
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command enable disable' -l driver -r -f -a '(__fish_mcp_plugin_mgr_drivers)' -d 'Target a single agent driver'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command enable disable' -l all-drivers -f -d 'Apply to every registered driver'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command enable disable' -l no-apply -f -d 'Update servers.toml only; do not write agent configs'
+complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command enable disable' -s h -l help -f -d 'Show help'
 
 # --- flags: test --------------------------------------------------------------
 complete -c mcp-plugin-mgr -n '__fish_mcp_plugin_mgr_using_command test' -l url -r -f -d 'Ad-hoc: test this HTTP URL instead of a registered server'

@@ -1,6 +1,6 @@
 # mcp-plugin-mgr 设计
 
-> 状态:V1(增删查)。配套任务书 `docs/mcp-plugin-mgr-tasks.md`(如需)可后续补;本文档与代码同源。
+> 状态:V2(增删查 + 启停 + test 探活)。配套任务书 `docs/mcp-plugin-mgr-tasks.md`(如需)可后续补;本文档与代码同源。
 
 ## 1. 定位
 
@@ -11,15 +11,15 @@ Outline wiki。
 
 要解决的具体不一致:
 
-| | Claude Code | OpenCode |
-| --- | --- | --- |
-| 文件 | `~/.claude.json` | `$XDG/opencode/opencode.json` |
-| 键 | `mcpServers` | `mcp` |
-| http type | `http` | `remote` |
-| stdio type | `stdio` | `local` |
-| stdio 命令 | `command`(str) + `args`(list) 分开 | `command`(list,cmd+args 合并) |
-| env 字段 | `env` | `environment` |
-| 启停 | 在/不在 map 里 | 显式 `enabled` 字段 |
+| | Claude Code | OpenCode | Qoder CLI |
+| --- | --- | --- | --- |
+| 文件 | `~/.claude.json` | `$XDG/opencode/opencode.json` | `~/.qoder/settings.json` |
+| 键 | `mcpServers` | `mcp` | `mcpServers` |
+| http type | `http` | `remote` | `http` |
+| stdio type | `stdio` | `local` | (不写) |
+| stdio 命令 | `command`(str) + `args`(list) 分开 | `command`(list,cmd+args 合并) | `command` + `args` 分开 |
+| env 字段 | `env` | `environment` | `env` |
+| 启停 | 无原生 flag:在/不在 map 里 | 显式 `enabled` 字段 | 显式 `disabled` 字段 |
 
 且这两个文件都还承载别的关键状态(Claude Code 的 onboarding/projects/telemetry;OpenCode 的
 `provider`/`model`/`$schema`),driver 必须**只改自己那一段,其余原样保留**。
@@ -28,7 +28,7 @@ Outline wiki。
 
 ```
 src/mcp_plugin_mgr/
-├── cli.py               argparse(add/list/remove/test/presets/status + --auto-allow/_complete),lazy 注册 driver
+├── cli.py               argparse(init/add/list/remove/enable/disable/test/presets/status + --auto-allow/_complete),lazy 注册 driver
 ├── __main__.py          python -m 入口
 ├── paths.py             XDG: config_dir / servers_file / claude_json_file / opencode_config_file
 ├── _compat.py           TOML loader(tomllib/tomli)+ 手写 dumper(自包含副本)
@@ -37,23 +37,35 @@ src/mcp_plugin_mgr/
 ├── probe.py             test 命令:MCP initialize 握手探活 + 故障分类(http middlebox / stdio)
 ├── allow.py             --auto-allow:写 Claude Code permissions.allow(只动 permissions 键,保留 env/model)
 ├── drivers/
-│   ├── base.py          McpDriver Protocol + BaseMcpDriver(通用 read/list/add/remove)+ DriverRegistry
+│   ├── base.py          McpDriver Protocol + BaseMcpDriver(通用 read/list/add/remove/set_enabled)+ DriverRegistry
 │   ├── _atomic.py       atomic_write_json(自包含副本)
-│   ├── claude_code.py   ~/.claude.json -> mcpServers
-│   └── opencode.py      opencode.json -> mcp
+│   ├── claude_code.py   ~/.claude.json -> mcpServers(无原生 flag,disable=删条目)
+│   ├── opencode.py      opencode.json -> mcp(native_disable: enabled 原地翻)
+│   └── qoder_cli.py     ~/.qoder/settings.json -> mcpServers(native_disable: disabled 原地加/删)
 └── README.md            用户文档
 ```
 
 **翻译表**(driver 的核心职责,代码即此表的真源):
 
-| 规范(ServerEntry) | Claude Code `mcpServers` | OpenCode `mcp` |
-| --- | --- | --- |
-| `transport=http`, url, headers | `{type:http, url, headers?}` | `{type:remote, url, enabled:true, headers?}` |
-| `transport=stdio`, command, args[], env{} | `{type:stdio, command, args, env}` | `{type:local, command:[cmd]+args, enabled:true, environment?}` |
+| 规范(ServerEntry) | Claude Code `mcpServers` | OpenCode `mcp` | Qoder CLI `mcpServers` |
+| --- | --- | --- | --- |
+| `transport=http`, url, headers | `{type:http, url, headers?}` | `{type:remote, url, enabled:true, headers?}` | `{url, type:http, headers?}` |
+| `transport=stdio`, command, args[], env{} | `{type:stdio, command, args, env}` | `{type:local, command:[cmd]+args, enabled:true, environment?}` | `{command, args, env?}`(无 `type`) |
+| `enabled=false` | 删掉该键(无原生 flag) | `enabled:false` 原地翻 | `disabled:true` 原地加 |
+| `enabled=true` | 用 registry 重渲染写回 | `enabled:true` 原地翻 | `disabled` 键删掉 |
 
-`BaseMcpDriver` 实现通用的 read/list/has/add/remove(只动 `self._KEY` 那段,保留其它键);子类只
-设 `name` / `_KEY` / 默认 `config_path` 并实现 `render(entry)`。与 model-switch 不同:model-switch
-的 `apply()` 每个 driver 差异大,所以各自独立;这里的 add/remove 逻辑对两个 agent 完全一致,故抽出共享基类,只在 render 上分叉。
+启停的**控制流在 base**(`set_enabled`:先查 `native_disable`,再摆 `flagged`/`absent`/`written`
+三态;`_update_server` 只在 flag 真变时落盘),**词表在 driver**(`_flag_mutation` 返回 mutate 闭包:
+OpenCode 翻 `enabled`,Qoder CLI 加/删 `disabled`——后者 1.1.21 实测对齐 `qodercli mcp disable/enable`
+的产出)。Claude Code 无原生 flag(其 `/mcp` 面板的停用是按项目写 `disabledMcpServers`),故删条目;
+只有它需要在写前做 drift 比对(`_drift_report`:列出 `+ 仅 agent 侧有` / `~ 值不同`,容器值不打印
+以免回显 token,非阻断)。
+
+`BaseMcpDriver` 实现通用的 read/list/has/add/remove/set_enabled(只动 `self._KEY` 那段,保留其它键);子类只
+设 `name` / `_KEY` / 默认 `config_path`,并实现 `render(entry)`(有原生启停 flag 的再加
+`native_disable = True` + `_flag_mutation` + `flag_state`)。与 model-switch 不同:model-switch
+的 `apply()` 每个 driver 差异大,所以各自独立;这里的增删查与启停控制流对三个 agent 完全一致,
+故抽出共享基类,只在词表(render / flag)上分叉。
 
 ## 3. 数据模型
 
@@ -62,6 +74,7 @@ src/mcp_plugin_mgr/
 ```toml
 [servers.<name>]
 transport = "http" | "stdio"
+enabled = false            # 仅停用时出现;缺省(true)不落盘
 # http
 url = "..."
 [servers.<name>.headers]
@@ -103,10 +116,19 @@ description = "..."
 - `opencode.json` 的 tmp 路径与 model-switch 共用:model-switch 写 `provider`/`model`,本工具写 `mcp`,
   键不冲突。
 
-## 6. V1 范围 / 取舍
+## 6. 范围 / 取舍
 
-- **增删查 + test 探活;不做 enable/disable**。enable 语义两 agent 不对称(Claude Code 无原生 disable),
-  V1 回避。OpenCode 写入时仍带 `enabled:true`(add 的固有语义,非独立 disable 命令)。
+- **增删查 + 启停 + test 探活**:`init/add/list/remove/enable/disable/presets/status/test`。
+  V1 曾回避 enable/disable(各 agent 语义不对称),V2 统一为「registry 记 `enabled`(缺省 true,
+  false 才落盘)+ driver 翻译」:
+  - OpenCode:`enabled` 原地翻(实测 `opencode mcp` 无 enable/disable 子命令,只能改配置);
+  - Qoder CLI:`disabled` 原地加/删(1.1.21 实测 `qodercli mcp disable/enable` 的落盘形式,逐字节对齐);
+  - Claude Code:无全局 flag(`/mcp` 面板的停用是按项目写 `disabledMcpServers`),故删条目;
+    registry 留全量 → `enable` 无需重配。启用前做 **drift 比对**(live vs `render(entry)`),
+    列出 `+仅 agent 侧有` / `~值不同` 并**警告但不阻断**(退出码仍 0)——agent 侧手加字段无法从
+    registry 还原,这点在警告里明说。
+  - 不做 per-project 停用(`--scope project` 之类)与 `sync` 全量重投影;`add` 语义固定为
+    「显式启用」(`--force` 覆盖时 `enabled` 复位 true)。
 - **明文 token**:同 model-switch 本地信任模型;注意 `servers.toml` 与 agent 配置文件权限。
 - **install/uninstall**:`TOOLS` 数组各加一行;wrapper / 补全 symlink 逻辑通用,无需改。
 
@@ -116,7 +138,8 @@ description = "..."
 **每种传输一套基本流程**(`probe_http` / `probe_stdio`),可注入 `poster`/`spawner` 离线测全部分类。
 
 - **http**(`probe_http`):POST JSON-RPC `initialize`,按状态/响应体分类:
-  `ok` / `auth`(401/403)/ `notfound`(404)/ `method`(405)/ `conn`(DNS/拒绝/超时/TLS)/
+  `ok` / `auth`(401/403)/ `waf_blocked`(403 且响应体带边缘 WAF 特征,如 Cloudflare
+  Error 1010 —— 与鉴权无关,别误导用户换 token)/ `notfound`(404)/ `method`(405)/ `conn`(DNS/拒绝/超时/TLS)/
   `not_mcp`(200 但非 JSON-RPC)/ `mcp_error`(端点会 MCP 但返 error)。
 - **stdio**(`probe_stdio`):`Popen` + `communicate(initialize, timeout)`,分类
   `ok` / `no_command` / `no_response`(超时)/ `not_mcp` / `spawn_error`。

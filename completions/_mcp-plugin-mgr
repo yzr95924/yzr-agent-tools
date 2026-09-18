@@ -19,6 +19,8 @@ commands=(
   'add:Add an MCP server'
   'list:List servers (with per-agent presence)'
   'remove:Remove a server'
+  'enable:Enable a server (credentials are kept)'
+  'disable:Disable a server (credentials are kept)'
   'presets:List built-in presets'
   'status:Show config paths and counts'
   'test:Test whether an MCP server responds (connectivity diagnosis)'
@@ -73,6 +75,14 @@ case $state in
           '--driver[Target a single agent driver]:driver:($_mpm_drivers)' \
           '--all-drivers[Apply to every registered driver]' \
           '--auto-allow[Also remove the server'"'"'s pre-approved tools from permissions.allow]' \
+          '(-h --help)'{-h,--help}'[Show help]' \
+          ':name:($_mpm_servers)'
+        ;;
+      enable|disable)
+        _arguments \
+          '--driver[Target a single agent driver]:driver:($_mpm_drivers)' \
+          '--all-drivers[Apply to every registered driver]' \
+          '--no-apply[Update servers.toml only; do not write agent configs]' \
           '(-h --help)'{-h,--help}'[Show help]' \
           ':name:($_mpm_servers)'
         ;;
