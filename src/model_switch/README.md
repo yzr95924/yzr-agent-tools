@@ -94,21 +94,18 @@ model-switch init                              # 创建 ~/.config/model-switch/
 model-switch model add <name> \
      --base-url <url> \
      --api-key <KEY> \
-     --model-name <id> \
+     [--model-name <id>] \
      [--description <text>] \
      [--context-window <tokens>] \
-     [--provider <group-name>]
+     [--provider <group-name>] \
+     [--catalog-provider <id>] [--no-catalog]
 
 model-switch model list                        # 列出所有模型 + 激活标记
 model-switch model show <name>
 model-switch model remove <name>
+model-switch model align [<name>] [--catalog-provider <id>]   # 无 name = 全部;按 OpenCode catalog 对齐
 
 model-switch model use <name> [--driver NAME] [--all-drivers]   # 交互式默认 = 全部 driver;非 TTY / CI = 仅 claude-code
-
-model-switch model probe <name> \
-     [--budgets 1024,4096,8192,32768] \
-     [--json] [--out <file.md>] [--apply]
-                                               # 探测上游 thinking 形状接受度(默认只读;--apply 只写 probe-* preset)
 
 model-switch status [--driver NAME] [--all-drivers]
 ```
@@ -286,40 +283,84 @@ provider.<id>.models.<name>.variants.<tier>`)。档位**内容**不校验(原样
 避免已删除模型的 key 残留,同时清空 state.toml 的 active_main。非 active 模型的删除对
 Claude Code 无影响(单槽天然无残留)。
 
-### 探针(`model probe`)
+### 输入模态(modalities)
 
-`model-switch model probe <model_id>` 向上游发一轮**小请求**,输出「接受矩阵」:哪些
-thinking 形状过、哪些被拒、响应里有没有 thinking 块。默认只读;`--apply` 才写配置,而且只写
-它自己的 `variants_presets["probe-<model_id>"]`(原子写 + `models.toml.bak` 备份),绝不碰
-你的 preset。
+OpenCode 发请求前会给消息里的**非文本部分**过一道闸门:按 model 块的
+`capabilities.input[<模态>]` 判断该 part 能不能发。**没声明的模态会被替换成一条文本**
+(`ERROR: Cannot read "x.png" (this model does not support image input). Inform the user.`)——
+粘贴图片不报错,但模型看到的不是图;要真的能用图片/PDF,得显式声明:
 
-**矩阵由 catalog 驱动**:探测前先取 models.dev 里同名模型的 `reasoning_options`(数据源
-`--catalog-source auto|live|cache`,默认 auto = 先拉 `https://models.opencode.ai/api.json`、失败回落
-OpenCode 本地缓存 `~/.cache/opencode/models.json`;OpenCode 自己每 60 分钟刷新该缓存),
-据此生成候选行——声明的每个 effort 值一行(自动覆盖 `medium`/`xhigh` 这类固定矩阵探不到的
-档)、budget 按 min/max 夹出梯度、toggle 则探 `disabled`;没有 catalog 条目时退回固定矩阵
-(control / disabled / adaptive / effort low+high / budget 4 档)。
+```toml
+[[models]]
+model_id = "qwen3.8-max"
+# ...
+modalities = { input = ["text", "image", "pdf"], output = ["text"] }
+```
 
-- 同名模型在 models.dev 下可能有几十个 provider、`reasoning_options` 互相冲突;默认排序
-  取「host 匹配 + 声明了 effort/budget 的富条目」优先,不确定时用
-  `--catalog-provider <id>` 钉死(报告列出全部候选)
-- 报告的 Catalog 节带 caveat:catalog 描述的是 provider **声明**的端点(通常是其 OpenAI
-  兼容 API),而我们走 Anthropic 兼容路径——档位名是家族级的,那条对照是推断,probe 行才是
-  我们端点的证据
-- 接受边界 ≠ 有效预算——上游可能收了 32768 再静默 clamp,那只能靠供应商文档 + 实测观察
+渲染进 model 块:
+
+```json
+"qwen3.8-max": {
+  "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+}
+```
+
+取值限 OpenCode schema 的枚举:`text` / `audio` / `image` / `video` / `pdf`;`input`、`output`
+两个键都可选,列表不可为空。非法值(未知键、未知模态、空列表)在 `model use` / `model add`
+时就报错退出、不写任何配置——这类错会让 OpenCode 整份拒载。
+
+声明必须**真实**:上游不接受的模态不会在这里报错,而是每次带该附件时请求直接 400;不声明
+则只是静默降级成上面那句 ERROR 文本。所以先用真实附件请求验证过再写。
+
+三个**不**透传的字段(都有具体原因,别当成缺口):
+
+| 字段 | 为什么不用 |
+| --- | --- |
+| `attachment` | OpenCode 二进制里只出现在配置归一化/合并处,没有消费点;真正起门禁作用的是 `modalities` |
+| `temperature` | 省略时 OpenCode 按"不支持"处理(不发 `temperature` 参数,用上游默认);只有要让 agent 的温度设置生效才需要声明 |
+| `interleaved` | 它声明"从响应哪个字段取 reasoning 文本",是 OpenAI 兼容端点的形状(`reasoning_content`);我们走 Anthropic 协议、reasoning 是标准 thinking 块,照抄可能反而取不到 |
+
+另外 `video` / `audio`:models.dev 条目里可能有,但 Anthropic messages 格式没有这两种 part,
+声明只会让闸门放行、上游报错,所以不声明。
+
+### 与 OpenCode 内置对齐（自动）
+
+OpenCode 自己维护一份 models.dev 快照（`~/.cache/opencode/models.json`，约每小时刷新），
+它也是 OpenCode 推导内置模型字段的同一份数据。model-switch **只读这份缓存、不联网**，
+从中导出 context window、reasoning、档位（variants）和 modalities：
 
 ```bash
-# 只探测,打印报告(矩阵大小取决于 catalog 声明,通常 5~7 次小请求)
-model-switch model probe glm-5_3-1m
+# 新增：只要本地名 + base_url + api_key;--model-name 默认 = 本地名
+model-switch model add qwen3.8-max --base-url https://dashscope.aliyuncs.com/apps/anthropic --api-key <KEY>
 
-# 报告另存文件 + 推荐 preset 落盘(probe- 命名空间)
-model-switch model probe glm-5_3-1m --out /tmp/probe-glm53.md --apply
-
-# 同名模型多 provider 时钉死对照条目 / 自定义 budget 梯度 / 只用本地缓存 / JSON 输出
-model-switch model probe qwen-3_7-max-1m --catalog-provider alibaba-cn
-model-switch model probe qwen-3_7-max-1m --budgets 8192,32768,131072
-model-switch model probe kimi-k3-1m --catalog-source cache --json
+# 已有模型重新对齐（无 name = 全部;幂等,已一致时零改动）
+model-switch model align
 ```
+
+导出规则（与 OpenCode 内置推导同源）：
+
+| catalog 字段 | models.toml |
+| --- | --- |
+| `reasoning_options` 的 `toggle` | 一档 `off = { thinking = { type = "disabled" } }` |
+| `reasoning_options` 的 `effort.values` | 每值一档 `<v> = { effort = "<v>", thinking = { type = "adaptive" } }`（跳过 `none`/`minimal`） |
+| `limit.context` | `context_window` |
+| `modalities.input` | `modalities`，剔掉 `video`/`audio`（Anthropic messages 无这两种 part） |
+| 只有 `budget_tokens` 声明 | 不造档位（打印提示，需要就手写） |
+
+选择哪条 catalog 条目的规则：先按 base_url 的 **host** 收敛（同名模型常挂在几十个
+provider 下且声明互相冲突）；host 匹配剩多条时，只有**推导结果逐字相同**才取字典序第一，
+否则**拒绝并列出候选**，要求用 `--catalog-provider <id>` 钉选——绝不自动猜（猜错会静默
+配错档位）。看候选、手工核对时的原命令仍然可用：
+
+```bash
+jq -r 'to_entries[] | .value.models["qwen3.8-max"] as $m | select($m)
+       | "\(.key)  api=\(.value.api)  reasoning=\($m.reasoning_options|tostring)  limit=\($m.limit|tostring)"' \
+  ~/.cache/opencode/models.json
+```
+
+已知限制（设计如此）：catalog 描述的是各 provider **声明**的端点（通常是其 OpenAI 兼容
+API），我们走 Anthropic 兼容路径——档位**名**是家族级的，wire 形状由 driver 翻译；接受 ≠
+生效（上游可能静默 clamp）；缓存过期不自动刷新，`align` 会打印其 mtime。
 
 ## 跑测试
 

@@ -101,11 +101,13 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     state_p = cfg_dir / "state.toml"
     settings_p = tmp_path / ".claude" / "settings.json"
     opencode_p = tmp_path / ".config" / "opencode" / "opencode.json"
+    catalog_p = tmp_path / ".cache" / "opencode" / "models.json"
 
     monkeypatch.setattr(paths, "config_dir", lambda: cfg_dir)
     monkeypatch.setattr(paths, "models_file", lambda: models_p)
     monkeypatch.setattr(paths, "state_file", lambda: state_p)
     monkeypatch.setattr(paths, "opencode_config_file", lambda: opencode_p)
+    monkeypatch.setattr(paths, "catalog_cache_file", lambda: catalog_p)
 
     # Replace any pre-existing claude-code driver in the registry with
     # one pointing at the tmp settings path. (Earlier auto-registration
@@ -176,6 +178,7 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
         "state": state_p,
         "settings": settings_p,
         "opencode": opencode_p,
+        "catalog": catalog_p,
         "mcp_cfg_dir": mcp_cfg_dir,
         "mcp_servers": mcp_servers_p,
         "claude_json": claude_json_p,

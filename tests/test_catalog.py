@@ -1,0 +1,236 @@
+"""Unit tests for catalog-derivation from OpenCode's models.dev cache.
+
+Pure functions with injected data — no file I/O except `load_cache`, no
+network anywhere (asserted). The mapping rules decide what model-switch
+writes into models.toml, so each rule gets an explicit case.
+"""
+import json
+import socket
+
+import pytest
+
+from model_switch import catalog
+
+
+def _entry(name=None, options=None, limit=None, modalities=None):
+    entry = {}
+    if options is not None:
+        entry["reasoning_options"] = options
+    if limit is not None:
+        entry["limit"] = limit
+    if modalities is not None:
+        entry["modalities"] = modalities
+    return entry
+
+
+def _full_options():
+    return [
+        {"type": "toggle"},
+        {"type": "effort", "values": ["low", "medium", "xhigh"]},
+        {"type": "budget_tokens", "min": 0, "max": 262144},
+    ]
+
+
+def _cache(providers):
+    return {p: {"api": api, "models": models}
+            for p, (api, models) in providers.items()}
+
+
+# --- host_of -------------------------------------------------------------------
+
+def test_host_of_strips_scheme_and_path():
+    assert catalog.host_of("https://api.z.ai/api/anthropic") == "api.z.ai"
+    assert catalog.host_of("HTTPS://API.Z.AI/x") == "api.z.ai"
+    assert catalog.host_of("") == ""
+    assert catalog.host_of(None) == ""
+
+
+# --- load_cache ----------------------------------------------------------------
+
+def test_load_cache_missing_file_reports_reason(tmp_path):
+    data, desc = catalog.load_cache(tmp_path / "nope.json")
+    assert data is None
+    assert "no catalog cache" in desc
+
+
+def test_load_cache_broken_json_reports_reason(tmp_path):
+    p = tmp_path / "models.json"
+    p.write_text("{ not json", encoding="utf-8")
+    data, desc = catalog.load_cache(p)
+    assert data is None
+    assert "unreadable" in desc
+
+
+def test_load_cache_returns_data_and_mtime_description(tmp_path):
+    p = tmp_path / "models.json"
+    p.write_text(json.dumps({"a": {"api": "https://a", "models": {}}}),
+                 encoding="utf-8")
+    data, desc = catalog.load_cache(p)
+    assert data == {"a": {"api": "https://a", "models": {}}}
+    assert "updated" in desc and str(p) in desc
+
+
+# --- candidates / pick ---------------------------------------------------------
+
+def test_candidates_marks_host_match_and_sorts():
+    data = _cache({
+        "zzz-other": ("https://other.example.com/v1", {"m": _entry()}),
+        "aaa-ours": ("https://ours.example.com/v1", {"m": _entry()}),
+        "no-model": ("https://ours.example.com/v1", {}),
+    })
+    cands = catalog.candidates(data, "m", "https://ours.example.com/anthropic")
+    assert [c.provider for c in cands] == ["aaa-ours", "zzz-other"]
+    assert [c.host_match for c in cands] == [True, False]
+
+
+def test_pick_single_host_match_wins_over_non_matching():
+    data = _cache({
+        "aaa-trap": ("https://other.example.com/v1", {"m": _entry()}),
+        "zzz-ours": ("https://ours.example.com/v1", {"m": _entry()}),
+    })
+    picked = catalog.pick(catalog.candidates(data, "m", "https://ours.example.com"))
+    assert picked.candidate.provider == "zzz-ours"
+    assert "host match" in picked.reason
+
+
+def test_pick_accepts_identical_host_matches_deterministically():
+    entry = _entry(options=_full_options())
+    data = _cache({
+        "b-plan": ("https://z.example.com/v1", {"m": entry}),
+        "a-plan": ("https://z.example.com/v2", {"m": entry}),
+    })
+    picked = catalog.pick(catalog.candidates(data, "m", "https://z.example.com"))
+    assert picked.candidate.provider == "a-plan"  # alphabetical, stable
+    assert [c.provider for c in picked.alternatives] == ["b-plan"]
+    assert "agree" in picked.reason
+
+
+def test_pick_refuses_conflicting_host_matches():
+    data = _cache({
+        "a": ("https://z.example.com/v1",
+              {"m": _entry(options=[{"type": "effort", "values": ["low"]}])}),
+        "b": ("https://z.example.com/v2",
+              {"m": _entry(options=[{"type": "effort", "values": ["high"]}])}),
+    })
+    picked = catalog.pick(catalog.candidates(data, "m", "https://z.example.com"))
+    assert picked.candidate is None
+    assert "conflicting" in picked.reason
+    assert len(picked.alternatives) == 2
+
+
+@pytest.mark.parametrize("data, base_url, pin, reason_substr, alternatives", [
+    pytest.param(
+        _cache({"a": ("https://other.example.com/v1", {"m": _entry()})}),
+        "https://ours.example.com", None, "no candidate api host", ["a"],
+        id="no-host-match"),
+    pytest.param(
+        _cache({"a": ("https://z.example.com/v1", {"m": _entry()})}),
+        "https://z.example.com", "nope", "nope", ["a"],
+        id="unknown-pin"),
+    pytest.param({}, "https://ours.example.com", None, "no entry", [],
+                 id="no-candidates"),
+])
+def test_pick_refusals(data, base_url, pin, reason_substr, alternatives):
+    kwargs = {"pin": pin} if pin is not None else {}
+    picked = catalog.pick(catalog.candidates(data, "m", base_url), **kwargs)
+    assert picked.candidate is None
+    assert reason_substr in picked.reason
+    assert [c.provider for c in picked.alternatives] == alternatives
+
+
+def test_pick_pin_wins_even_with_conflicts():
+    data = _cache({
+        "a": ("https://z.example.com/v1",
+              {"m": _entry(options=[{"type": "effort", "values": ["low"]}])}),
+        "b": ("https://z.example.com/v2",
+              {"m": _entry(options=[{"type": "effort", "values": ["high"]}])}),
+    })
+    picked = catalog.pick(catalog.candidates(data, "m", "https://z.example.com"),
+                          pin="b")
+    assert picked.candidate.provider == "b"
+    assert "pinned" in picked.reason
+
+
+# --- derive --------------------------------------------------------------------
+
+def test_derive_toggle_and_effort_tiers():
+    fields = catalog.derive(_entry(
+        options=_full_options(),
+        limit={"context": 1000000, "output": 131072},
+        modalities={"input": ["text", "image", "video", "pdf"], "output": ["text"]},
+    ))
+    assert fields["context_window"] == 1000000
+    assert fields["reasoning"] is True
+    assert fields["variants"] == {
+        "off": {"thinking": {"type": "disabled"}},
+        "low": {"effort": "low", "thinking": {"type": "adaptive"}},
+        "medium": {"effort": "medium", "thinking": {"type": "adaptive"}},
+        "xhigh": {"effort": "xhigh", "thinking": {"type": "adaptive"}},
+    }
+    # video is dropped: the Anthropic wire format has no such part.
+    assert fields["modalities"] == {"input": ["text", "image", "pdf"],
+                                    "output": ["text"]}
+
+
+def test_derive_effort_only_has_no_off_tier():
+    fields = catalog.derive(_entry(
+        options=[{"type": "effort", "values": ["low", "high", "max"]}]))
+    assert list(fields["variants"]) == ["low", "high", "max"]
+
+
+def test_derive_skips_none_and_minimal_effort_values():
+    fields = catalog.derive(_entry(
+        options=[{"type": "effort", "values": ["none", "minimal", "low"]}]))
+    assert list(fields["variants"]) == ["low"]
+
+
+def test_derive_budget_only_gets_no_tiers():
+    entry = _entry(options=[{"type": "budget_tokens", "min": 0, "max": 32768}])
+    fields = catalog.derive(entry)
+    assert fields["variants"] == {}
+    assert fields["reasoning"] is True
+    assert catalog.budget_only(entry) is True
+
+
+def test_derive_without_options_is_not_reasoning():
+    fields = catalog.derive(_entry(limit={"context": 8192}))
+    assert fields["reasoning"] is False
+    assert fields["variants"] == {}
+    assert catalog.budget_only({}) is False
+
+
+def test_derive_text_only_modalities_stay_undeclared():
+    fields = catalog.derive(_entry(modalities={"input": ["text"], "output": ["text"]}))
+    assert fields["modalities"] is None
+
+
+def test_derive_missing_or_invalid_context_is_none():
+    assert catalog.derive(_entry())["context_window"] is None
+    assert catalog.derive(_entry(limit={"context": 0}))["context_window"] is None
+    assert catalog.derive(_entry(limit={"output": 100}))["context_window"] is None
+
+
+def test_derive_modalities_without_text_input_is_none():
+    fields = catalog.derive(_entry(modalities={"input": ["video"], "output": ["text"]}))
+    assert fields["modalities"] is None
+
+
+# --- no network, ever ----------------------------------------------------------
+
+def test_catalog_never_opens_a_socket(tmp_path, monkeypatch):
+    cache = tmp_path / "models.json"
+    cache.write_text(json.dumps(_cache({
+        "ours": ("https://ours.example.com/v1", {"m": _entry(
+            options=_full_options(),
+            limit={"context": 1000},
+            modalities={"input": ["text", "image"], "output": ["text"]},
+        )}),
+    })), encoding="utf-8")
+
+    def _boom(*_a, **_k):
+        raise AssertionError("catalog code must never touch the network")
+
+    monkeypatch.setattr(socket, "socket", _boom)
+    data, _desc = catalog.load_cache(cache)
+    picked = catalog.pick(catalog.candidates(data, "m", "https://ours.example.com"))
+    assert catalog.derive(picked.candidate.entry)["context_window"] == 1000

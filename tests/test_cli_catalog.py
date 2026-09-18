@@ -137,6 +137,45 @@ def test_model_use_opencode_writes_all_models(yzr_paths):
     assert cfg["model"] == "yzr-kimi/kimi-k2"
 
 
+def test_model_use_writes_declared_modalities(yzr_paths):
+    """End-to-end: models.toml → opencode.json modalities (the non-text input
+    gate OpenCode applies before sending a message part)."""
+    yzr_paths["models"].write_text(
+        "[[models]]\n"
+        'model_id = "m"\nname = "glm-5.2"\n'
+        'base_url = "https://api.z.ai/api/anthropic"\napi_key = "K"\n'
+        'modalities = { input = ["text", "image"], output = ["text"] }\n',
+        encoding="utf-8",
+    )
+    result = runner(["model", "use", "m", "--driver", "opencode"])
+
+    assert result.exit_code == 0, result.stdout
+    cfg = json.loads(yzr_paths["opencode"].read_text())
+    entry = cfg["provider"]["yzr-zai"]["models"]["glm-5.2"]
+    assert entry["modalities"] == {"input": ["text", "image"],
+                                   "output": ["text"]}
+
+
+def test_model_use_rejects_bad_modalities_without_writing(yzr_paths):
+    """A schema-invalid modalities value fails locally (one-line error, no
+    traceback) and must leave the agent config untouched — OpenCode rejects
+    the whole file on a schema violation, which would lose every model."""
+    yzr_paths["models"].write_text(
+        "[[models]]\n"
+        'model_id = "m"\nname = "glm-5.2"\n'
+        'base_url = "https://api.z.ai/api/anthropic"\napi_key = "K"\n'
+        'modalities = { input = ["text", "gif"] }\n',
+        encoding="utf-8",
+    )
+    result = runner(["model", "use", "m", "--driver", "opencode"])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "modalities" in result.stderr
+    assert not yzr_paths["opencode"].exists()
+    assert load_state(yzr_paths["state"]).active_main is None
+
+
 # --- model import --------------------------------------------------------------
 
 def test_model_import_replace_reconciles_catalog(yzr_paths):

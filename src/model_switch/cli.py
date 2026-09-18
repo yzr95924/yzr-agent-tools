@@ -16,12 +16,11 @@ Output goes to stdout; errors to stderr. Exit codes:
 """
 import argparse
 import datetime
-import json
 import sys
 from pathlib import Path
-from typing import List, NoReturn, Optional
+from typing import Any, Dict, List, NoReturn, Optional
 
-from model_switch import paths
+from model_switch import catalog, paths
 from model_switch.drivers.base import registry
 from model_switch.store import (
     ModelEntry,
@@ -296,6 +295,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--context-window", type=int, default=None,
         help="Max input tokens (e.g. 200000 or 1000000 for 1M-context variants).",
     )
+    p_add.add_argument(
+        "--catalog-provider", default=None,
+        help="Pin the OpenCode-catalog provider entry used to fill fields "
+             "(disambiguates the same model under many providers).",
+    )
+    p_add.add_argument(
+        "--no-catalog", action="store_true",
+        help="Skip deriving fields from OpenCode's catalog cache.",
+    )
 
     model_sub.add_parser("list", help="List all configured models.")
 
@@ -327,37 +335,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Merge into existing models.toml (default: replace).",
     )
 
-    p_probe = model_sub.add_parser(
-        "probe",
-        help="Probe upstream reasoning-shape acceptance (read-only unless --apply).",
+    p_align = model_sub.add_parser(
+        "align",
+        help="Align model fields with OpenCode's catalog cache (all models, "
+             "or one).",
     )
-    p_probe.add_argument("name")
-    p_probe.add_argument(
-        "--budgets", default=None,
-        help="Comma-separated budget ladder (overrides catalog-derived rungs).",
+    p_align.add_argument(
+        "name", nargs="?", default=None,
+        help="Model to align; omit to align every model in models.toml.",
     )
-    p_probe.add_argument(
-        "--catalog-source", default="auto",
-        choices=["auto", "live", "cache"],
-        help="models.dev catalog source (default: live, fall back to cache).",
-    )
-    p_probe.add_argument(
+    p_align.add_argument(
         "--catalog-provider", default=None,
-        help="Pin the models.dev provider entry used to build the matrix "
-             "(disambiguates the same model under many providers).",
-    )
-    p_probe.add_argument(
-        "--json", action="store_true", dest="as_json",
-        help="Machine-readable JSON output.",
-    )
-    p_probe.add_argument(
-        "--out", default=None,
-        help="Also write the markdown report to this path.",
-    )
-    p_probe.add_argument(
-        "--apply", action="store_true",
-        help="Write the suggested tiers into a probe-<model_id> preset "
-             "(models.toml, atomic + .bak; never touches user presets).",
+        help="Pin the OpenCode-catalog provider entry (single model only).",
     )
 
     # status
@@ -394,19 +383,26 @@ def _do_model_add(args: argparse.Namespace) -> None:
 
     Any required option omitted from the CLI is prompted for interactively,
     so you can run `model-switch model add mymodel` and answer the prompts.
+    Fields OpenCode's catalog cache can supply (context window, reasoning,
+    variant tiers, modalities) are derived from it; `--no-catalog` opts out,
+    `--catalog-provider` pins the provider entry when several match.
     """
     base_url = args.base_url or _prompt("Upstream API base URL")
     api_key = args.api_key or _prompt_secret("API key")
     model_name = args.model_name or _prompt(
-        "Model identifier (bare id, no context suffix)"
+        "Model identifier (bare id, no context suffix)", default=args.name,
     )
-    if args.context_window is None:
+    derived = _derive_or_report(model_name, base_url,
+                                args.catalog_provider, args.no_catalog)
+    if args.context_window is not None:
+        context_window = args.context_window
+    elif derived.get("context_window"):
+        context_window = derived["context_window"]
+    else:
         context_window = _prompt(
             "Context window in tokens (press Enter to skip)",
             optional=True, type_=int,
         )
-    else:
-        context_window = args.context_window
     description = args.description
     if not description:
         description = _prompt("Description", optional=True)
@@ -417,6 +413,12 @@ def _do_model_add(args: argparse.Namespace) -> None:
     extra = {}
     if args.provider:
         extra["provider"] = args.provider
+    if derived.get("reasoning"):
+        extra["reasoning"] = True
+    if derived.get("variants"):
+        extra["variants"] = derived["variants"]
+    if derived.get("modalities"):
+        extra["modalities"] = derived["modalities"]
     reg.models[args.name] = ModelEntry(
         model_id=args.name,
         name=model_name,
@@ -432,6 +434,137 @@ def _do_model_add(args: argparse.Namespace) -> None:
     # untouched until the next `model use`.
     _sync_catalog(reg)
     print(f"Added model {args.name!r}.")
+
+
+def _derive_or_report(model_name: str, base_url: str,
+                      pin: Optional[str], no_catalog: bool) -> Dict[str, Any]:
+    """Catalog-derive fields for one model, reporting what happened.
+
+    Never fails the caller: an absent cache, an unknown model name or an
+    unresolved ambiguity print a short explanation (with the candidates to
+    pin) and return ``{}``, leaving manual values in charge.
+    """
+    if no_catalog:
+        return {}
+    data, desc = catalog.load_cache()
+    if data is None:
+        print(f"catalog: {desc} — skipping auto-fill")
+        return {}
+    picked = catalog.pick(catalog.candidates(data, model_name, base_url), pin)
+    if picked.candidate is None:
+        print(f"catalog: {picked.reason} — skipping auto-fill")
+        for c in (picked.alternatives or [])[:5]:
+            print(f"  {c.provider}  api={c.api or '-'}")
+        if picked.alternatives:
+            print("  pin one with --catalog-provider <id>")
+        return {}
+    fields = catalog.derive(picked.candidate.entry)
+    print("catalog: {} ({}) — filled {}".format(
+        picked.candidate.provider, desc, _describe_fields(fields)))
+    if catalog.budget_only(picked.candidate.entry):
+        print("  note: only budget_tokens declared — no tiers derived; "
+              "write them by hand if needed")
+    return fields
+
+
+def _describe_fields(fields: Dict[str, Any]) -> str:
+    """One-line summary of the fields `catalog.derive` produced."""
+    bits = []
+    if fields.get("context_window"):
+        bits.append("context_window={}".format(fields["context_window"]))
+    if fields.get("reasoning"):
+        bits.append("reasoning")
+    if fields.get("variants"):
+        bits.append("variants[{}]".format(",".join(fields["variants"])))
+    if fields.get("modalities"):
+        bits.append("modalities[{}]".format(
+            ",".join(fields["modalities"]["input"])))
+    return ", ".join(bits) or "nothing derivable"
+
+
+def _do_model_align(args: argparse.Namespace) -> int:
+    """Reconcile models.toml with OpenCode's catalog cache.
+
+    Aligns one model, or every model when no name is given. Scalar fields
+    (context_window, reasoning, modalities) are updated in place; variant
+    tiers are replaced only when declared inline — a model backed by a shared
+    `variants_preset` is reported as `skip` instead, because rewriting that
+    preset could silently change every model referencing it. Returns a
+    nonzero exit code when any model stayed unresolved, so scripts notice.
+    """
+    reg = load_models(paths.models_file())
+    if args.name is not None and args.name not in reg.models:
+        _die(f"model {args.name!r} not found.")
+    targets = [args.name] if args.name is not None else list(reg.models)
+    if not targets:
+        _die("models.toml declares no models.")
+    if args.catalog_provider is not None and len(targets) != 1:
+        _die("--catalog-provider needs a single model name.")
+
+    data, desc = catalog.load_cache()
+    if data is None:
+        _die(f"{desc}; cannot align without it.")
+
+    width = max(len(m) for m in targets)
+    changed = 0
+    skipped = 0
+    for model_id in targets:
+        model = reg.models[model_id]
+        picked = catalog.pick(
+            catalog.candidates(data, model.name, model.base_url),
+            args.catalog_provider,
+        )
+        if picked.candidate is None:
+            skipped += 1
+            detail = picked.reason
+            names = ", ".join(c.provider for c in (picked.alternatives or [])[:5])
+            if names:
+                detail += " (candidates: {})".format(names)
+            print("{:<{w}}  skip     -  {}".format(model_id, detail, w=width))
+            continue
+
+        fields = catalog.derive(picked.candidate.entry)
+        changes: List[str] = []
+        notes: List[str] = []
+        if fields["context_window"] and model.context_window != fields["context_window"]:
+            changes.append("context_window {}→{}".format(
+                model.context_window, fields["context_window"]))
+            model.context_window = fields["context_window"]
+        if fields["reasoning"] and model.extra.get("reasoning") is not True:
+            changes.append("+reasoning")
+            model.extra["reasoning"] = True
+        if fields["modalities"] and model.extra.get("modalities") != fields["modalities"]:
+            changes.append("modalities→[{}]".format(
+                ",".join(fields["modalities"]["input"])))
+            model.extra["modalities"] = fields["modalities"]
+        if fields["variants"]:
+            if PRESET_REF_KEY in model.extra:
+                skipped += 1
+                notes.append("variants from preset {!r} left alone".format(
+                    model.extra[PRESET_REF_KEY]))
+            elif model.extra.get(VARIANTS_KEY) != fields["variants"]:
+                changes.append("variants[{}]".format(",".join(fields["variants"])))
+                model.extra[VARIANTS_KEY] = fields["variants"]
+        elif catalog.budget_only(picked.candidate.entry):
+            notes.append("only budget_tokens declared — no tiers derived")
+
+        if changes:
+            changed += 1
+        print("{:<{w}}  {:<7}  {}  {}".format(
+            model_id, "aligned" if changes else "ok",
+            picked.candidate.provider,
+            "; ".join(changes + notes) or "no change",
+            w=width,
+        ))
+
+    if changed:
+        save_models(paths.models_file(), reg)
+        _sync_catalog(reg)
+    print("align: {} updated, {} skipped (of {}) via {}".format(
+        changed, skipped, len(targets), desc))
+    if skipped:
+        print("align: pin the skipped model(s) with --catalog-provider and re-run")
+    return 1 if skipped else 0
 
 
 def _format_context(n) -> str:
@@ -637,66 +770,6 @@ def _do_model_import(args: argparse.Namespace) -> None:
     print(f"Imported {len(incoming.models)} model(s) from {src_path}.")
 
 
-def _do_model_probe(args: argparse.Namespace) -> None:
-    """Probe the upstream for reasoning-shape acceptance.
-
-    Read-only by default (a handful of small requests against the model's own
-    endpoint). ``--apply`` additionally writes the evidence-derived tiers into
-    a probe-owned preset — never a user preset.
-    """
-    from model_switch import probe as probe_mod
-
-    reg = load_models(paths.models_file())
-    if args.name not in reg.models:
-        _die(f"model {args.name!r} not found.")
-    model = reg.models[args.name]
-
-    budgets = None
-    if args.budgets:
-        try:
-            budgets = tuple(
-                int(x) for x in args.budgets.split(",") if x.strip()
-            )
-        except ValueError:
-            _die("--budgets must be comma-separated integers.")
-
-    data, source_desc = probe_mod.load_catalog(args.catalog_source)
-    catalog = probe_mod.lookup_catalog(
-        model, catalog_data=data, provider=args.catalog_provider)
-    entry = catalog[0] if catalog else None
-
-    results = probe_mod.probe(model, budgets=budgets, entry=entry)
-    report = probe_mod.render_report(model, results, catalog, meta={"source": source_desc})
-    suggestion = probe_mod.suggest_variants(results)
-
-    if args.as_json:
-        print(json.dumps({
-            "model": model.model_id,
-            "results": [r.__dict__ for r in results],
-            "catalog_source": source_desc,
-            "catalog_entry": entry,
-            "suggested": suggestion,
-        }, ensure_ascii=False, indent=2))
-    else:
-        print(report)
-
-    if args.out:
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(report, encoding="utf-8")
-        print(f"Report written to {out_path}")
-
-    if args.apply:
-        if not suggestion:
-            _die("no accepted thinking shape — refusing to apply an empty preset.")
-        key = probe_mod.apply_preset(paths.models_file(), model.model_id, suggestion)
-        print(f"Wrote preset {key!r} (backup: {paths.models_file()}.bak).")
-        print(
-            "  Point the model at it with variants_preset = \"{}\" in models.toml, "
-            "then `model-switch model use {}`.".format(key, model.model_id)
-        )
-
-
 def _do_complete_models() -> None:
     """Print configured model names, one per line (completion plumbing)."""
     reg = load_models(paths.models_file())
@@ -760,8 +833,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             _do_model_use(args)
         elif args.model_action == "import":
             _do_model_import(args)
-        elif args.model_action == "probe":
-            _do_model_probe(args)
+        elif args.model_action == "align":
+            return _do_model_align(args)
         return 0
     if args.cmd == "status":
         _do_status(args)

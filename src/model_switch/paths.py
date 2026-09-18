@@ -31,3 +31,14 @@ def opencode_config_file() -> Path:
     OpenCode starts on its default model.
     """
     return _config_base() / "opencode" / "opencode.json"
+
+
+def catalog_cache_file() -> Path:
+    """OpenCode's local models.dev snapshot, maintained by OpenCode itself.
+
+    Read-only for model-switch: we derive catalog-aligned fields from it but
+    never write it and never fetch the catalog over the network.
+    """
+    cache_base = os.environ.get("XDG_CACHE_HOME")
+    base = Path(cache_base) if cache_base else Path.home() / ".cache"
+    return base / "opencode" / "models.json"

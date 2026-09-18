@@ -36,6 +36,20 @@ def test_add_with_all_flags_does_not_prompt(yzr_paths):
     assert cfg.models["glm"].context_window == 1000000
 
 
+def test_add_defaults_model_name_to_local_id(yzr_paths):
+    """Without --model-name the upstream id defaults to the local id, so
+    scripts can add a model with just base_url + api_key (catalog fill-in
+    looks the id up itself)."""
+    result = runner([
+        "model", "add", "MiniMax-M3",
+        "--base-url", "https://api.minimaxi.com/anthropic",
+        "--api-key", "KEY",
+    ])
+    assert result.exit_code == 0, result.stdout
+    cfg = load_models(yzr_paths["models"])
+    assert cfg.models["MiniMax-M3"].name == "MiniMax-M3"
+
+
 # --- interactive prompts -----------------------------------------------------
 
 def test_add_prompts_for_missing_base_url(yzr_paths):

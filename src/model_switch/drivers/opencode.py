@@ -78,6 +78,14 @@ the tiers are and which shapes an upstream accepts is user data in models.toml
 (optionally via ``[variants_presets]``, expanded by
 `model_switch.variants.expand`); this driver holds no per-model or per-gateway
 knowledge, so adding a model or an upstream never touches it.
+
+``modalities`` from a model entry declares which non-text message parts
+OpenCode is allowed to send (``input``) — an undeclared image/PDF part is
+replaced by an ERROR text prompt before the request, so the model never sees
+the attachment. Values use the config schema's modality enum and are validated
+locally (a bad value makes OpenCode reject the whole file). Declaring a
+modality the upstream doesn't actually accept turns that silent fallback into
+a hard request error, so entries opt in per model.
 """
 import json
 import re
@@ -124,6 +132,15 @@ _VERSION_SEGMENT = re.compile(r"/v\d+$")
 # per-model field when output needs to vary by model.
 _DEFAULT_MAX_OUTPUT = 131_072
 
+# OpenCode's modality enum for the model block's `modalities` (config schema).
+# OpenCode gates every non-text message part on `capabilities.input[<modality>]`:
+# a part whose modality isn't declared is replaced by an ERROR text prompt
+# before the request — the model never sees the attachment. Omitted keys
+# default to false, so declaring is opt-in and must be truthful (a declared-
+# but-unsupported modality turns that silent fallback into a hard upstream
+# error). Values are echoed in the user's order; this tuple orders messages.
+_MODALITY_VALUES = ("text", "audio", "image", "video", "pdf")
+
 
 def _base_url_for_ai_sdk(base_url):
     """Render ``model.base_url`` into the baseURL ``@ai-sdk/anthropic`` expects.
@@ -138,6 +155,46 @@ def _base_url_for_ai_sdk(base_url):
     return base
 
 
+def _render_modalities(model: Model) -> Optional[Dict[str, List[str]]]:
+    """Validate and render ``model.extra['modalities']``, or None when unset.
+
+    Shaped like the config schema: ``{ input = [...], output = [...] }`` with
+    values from `_MODALITY_VALUES`. Unknown keys, unknown modality names and
+    empty lists fail locally — OpenCode rejects the whole config file on a
+    schema violation, which would take every model down, not just this one.
+    """
+    value = model.extra.get("modalities")
+    if value is None:
+        return None
+    where = "model {!r}".format(model.model_id)
+    if not isinstance(value, dict):
+        raise ValueError(
+            "{}: modalities must be a table like "
+            '{{ input = ["text"], output = ["text"] }}, got {}.'.format(
+                where, type(value).__name__))
+    out: Dict[str, List[str]] = {}
+    for key, items in value.items():
+        if key not in ("input", "output"):
+            raise ValueError(
+                "{}: modalities.{!r} is not a known key (allowed: input, "
+                "output).".format(where, key))
+        if not isinstance(items, list) or not items:
+            raise ValueError(
+                "{}: modalities.{} must be a non-empty list (omit the key "
+                "instead).".format(where, key))
+        for item in items:
+            if item not in _MODALITY_VALUES:
+                raise ValueError(
+                    "{}: modalities.{} contains {!r} (allowed: {}).".format(
+                        where, key, item, ", ".join(_MODALITY_VALUES)))
+        out[key] = list(items)
+    if not out:
+        raise ValueError(
+            "{}: modalities must not be empty (omit the key instead).".format(
+                where))
+    return out
+
+
 def _render_model_entry(model: Model) -> Dict[str, Any]:
     """Render the per-model object stored under ``provider.<id>.models``.
 
@@ -149,6 +206,11 @@ def _render_model_entry(model: Model) -> Dict[str, Any]:
     or varies them by model. ``variants`` may arrive materialized from a
     preset (see `model_switch.variants.expand`); this driver only ever sees
     the plain dict.
+
+    ``modalities`` (``{ input = [...], output = [...] }``) is validated and
+    passed through; see `_render_modalities`. It is what lets an image/PDF
+    reach the model at all — OpenCode swaps undeclared modalities for an
+    ERROR text prompt before the request.
 
     When ``model.context_window`` is known, emit a ``limit`` block so OpenCode
     manages the real context budget (a custom provider isn't on models.dev, so
@@ -166,6 +228,9 @@ def _render_model_entry(model: Model) -> Dict[str, Any]:
     variants = model.extra.get("variants")
     if isinstance(variants, dict) and variants:
         entry["variants"] = variants
+    modalities = _render_modalities(model)
+    if modalities is not None:
+        entry["modalities"] = modalities
     if model.context_window is not None:
         entry["limit"] = {
             "context": model.context_window,
@@ -403,7 +468,8 @@ class OpenCodeDriver:
                     "apiKey": api_key,
                 },
                 # Per-model object: `reasoning`/`variants` passed through from
-                # models.toml (tier declarations for the variant cycle), plus a
+                # models.toml (tier declarations for the variant cycle),
+                # `modalities` when declared (non-text input gating), plus a
                 # `limit` block when context_window is known (a custom provider
                 # isn't on models.dev, so OpenCode needs it told). See
                 # _render_model_entry for the schema constraint.

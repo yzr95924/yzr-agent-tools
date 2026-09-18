@@ -41,12 +41,12 @@ function __fish_model_switch_using_action
     contains -- $cmd[3] $argv
 end
 
-# True while the model-name positional after `show|remove|use|probe` is unfilled.
+# True while the model-name positional after `show|remove|use|align` is unfilled.
 function __fish_model_switch_needs_model_name
     set -l cmd (commandline -opc)
-    __fish_model_switch_using_action show remove use probe; or return 1
+    __fish_model_switch_using_action show remove use align; or return 1
     # Completing a valued flag's argument right now is not a model name.
-    test "$cmd[-1]" = --driver; or test "$cmd[-1]" = --budgets; or test "$cmd[-1]" = --out; or test "$cmd[-1]" = --catalog-source; or test "$cmd[-1]" = --catalog-provider; and return 1
+    test "$cmd[-1]" = --driver; or test "$cmd[-1]" = --catalog-provider; and return 1
     # Scan words after the action for an already-given positional
     # (skipping --driver's value, which is a driver name, not a positional).
     # NOTE: no negative range bounds ($cmd[4..-1]) — fish 3.0+ only; on
@@ -61,7 +61,7 @@ function __fish_model_switch_needs_model_name
                 continue
             end
             switch $tok
-                case --driver --budgets --out --catalog-source --catalog-provider
+                case --driver --catalog-provider
                     set skip_next 1
                 case '--*'
                     # valueless flag (--all-drivers, --help)
@@ -85,7 +85,7 @@ complete -c model-switch -n __fish_model_switch_needs_action -f -a show -d 'Show
 complete -c model-switch -n __fish_model_switch_needs_action -f -a remove -d 'Remove a model definition'
 complete -c model-switch -n __fish_model_switch_needs_action -f -a use -d 'Activate a model'
 complete -c model-switch -n __fish_model_switch_needs_action -f -a import -d 'Import models from a TOML file'
-complete -c model-switch -n __fish_model_switch_needs_action -f -a probe -d 'Probe upstream reasoning-shape acceptance'
+complete -c model-switch -n __fish_model_switch_needs_action -f -a align -d 'Align model fields with the OpenCode catalog cache'
 
 # --- model name positional (show/remove/use) ----------------------------------
 complete -c model-switch -n __fish_model_switch_needs_model_name -f -a '(__fish_model_switch_models)' -d 'model'
@@ -102,6 +102,8 @@ complete -c model-switch -n '__fish_model_switch_using_action add' -l model-name
 complete -c model-switch -n '__fish_model_switch_using_action add' -l description -r -f -d 'Free-text description'
 complete -c model-switch -n '__fish_model_switch_using_action add' -l context-window -r -f -d 'Max input tokens'
 complete -c model-switch -n '__fish_model_switch_using_action add' -l provider -r -f -d 'Provider group name (id yzr-<name>); default derived from base_url'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l catalog-provider -r -f -d 'Pin the OpenCode-catalog provider entry used to fill fields'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l no-catalog -f -d 'Skip deriving fields from the catalog cache'
 complete -c model-switch -n '__fish_model_switch_using_action add' -s h -l help -f -d 'Show help'
 
 # --- flags: model use ---------------------------------------------------------
@@ -113,14 +115,9 @@ complete -c model-switch -n '__fish_model_switch_using_action use' -s h -l help 
 complete -c model-switch -n '__fish_model_switch_using_action import' -l merge -f -d 'Merge into existing models.toml'
 complete -c model-switch -n '__fish_model_switch_using_action import' -s h -l help -f -d 'Show help'
 
-# --- flags: model probe -------------------------------------------------------
-complete -c model-switch -n '__fish_model_switch_using_action probe' -l budgets -r -f -d 'Comma-separated budget ladder (overrides catalog rungs)'
-complete -c model-switch -n '__fish_model_switch_using_action probe' -l catalog-source -r -f -a 'auto live cache' -d 'models.dev catalog source'
-complete -c model-switch -n '__fish_model_switch_using_action probe' -l catalog-provider -r -f -d 'Pin the models.dev provider entry'
-complete -c model-switch -n '__fish_model_switch_using_action probe' -l json -f -d 'Machine-readable JSON output'
-complete -c model-switch -n '__fish_model_switch_using_action probe' -l out -r -f -d 'Also write the markdown report to this path'
-complete -c model-switch -n '__fish_model_switch_using_action probe' -l apply -f -d 'Write suggested tiers into a probe-* preset'
-complete -c model-switch -n '__fish_model_switch_using_action probe' -s h -l help -f -d 'Show help'
+# --- flags: model align -------------------------------------------------------
+complete -c model-switch -n '__fish_model_switch_using_action align' -l catalog-provider -r -f -d 'Pin the OpenCode-catalog provider entry (single model)'
+complete -c model-switch -n '__fish_model_switch_using_action align' -s h -l help -f -d 'Show help'
 
 # --- flags: model list / show / remove ----------------------------------------
 complete -c model-switch -n '__fish_model_switch_using_action list show remove' -s h -l help -f -d 'Show help'
@@ -135,4 +132,4 @@ complete -c model-switch -n '__fish_model_switch_using_command status' -s h -l h
 # (e.g. after `model use <name>`, or `model add`'s free-form name positional).
 # `import` is intentionally absent here: its positional IS a file path.
 complete -c model-switch -n '__fish_model_switch_using_command init status' -f
-complete -c model-switch -n '__fish_model_switch_using_action add list show remove use probe' -f
+complete -c model-switch -n '__fish_model_switch_using_action add list show remove use align' -f

@@ -30,7 +30,7 @@ _model_switch() {
 
     # Walk the completed words to establish context:
     #   cmd    = init | model | status   (COMP_WORDS[1])
-    #   action = add | list | show | remove | use | import | probe   (COMP_WORDS[2], under `model`)
+    #   action = add | list | show | remove | use | import | align   (COMP_WORDS[2], under `model`)
     local i w
     for (( i = 1; i < COMP_CWORD; i++ )); do
         w="${COMP_WORDS[i]}"
@@ -38,7 +38,7 @@ _model_switch() {
             init|model|status)
                 [ -z "$cmd" ] && cmd="$w"
                 ;;
-            add|list|show|remove|use|import|probe)
+            add|list|show|remove|use|import|align)
                 [ "$cmd" = "model" ] && [ -z "$action" ] && action="$w"
                 ;;
         esac
@@ -58,12 +58,12 @@ _model_switch() {
             ;;
         model)
             if [ -z "$action" ]; then
-                COMPREPLY=( $(compgen -W "add list show remove use import probe" -- "$cur") )
+                COMPREPLY=( $(compgen -W "add list show remove use import align" -- "$cur") )
                 return 0
             fi
             case "$action" in
                 add)
-                    COMPREPLY=( $(compgen -W "--base-url --api-key --model-name --description --context-window --provider --help" -- "$cur") )
+                    COMPREPLY=( $(compgen -W "--base-url --api-key --model-name --description --context-window --provider --catalog-provider --no-catalog --help" -- "$cur") )
                     ;;
                 list)
                     COMPREPLY=( $(compgen -W "--help" -- "$cur") )
@@ -85,9 +85,9 @@ _model_switch() {
                         COMPREPLY=( $(compgen -f -- "$cur") )
                     fi
                     ;;
-                probe)
+                align)
                     if [[ "$cur" == -* ]]; then
-                        COMPREPLY=( $(compgen -W "--budgets --catalog-source --catalog-provider --json --out --apply --help" -- "$cur") )
+                        COMPREPLY=( $(compgen -W "--catalog-provider --help" -- "$cur") )
                     else
                         COMPREPLY=( $(compgen -W "$(model-switch _complete models 2>/dev/null)" -- "$cur") )
                     fi

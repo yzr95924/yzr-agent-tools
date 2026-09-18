@@ -309,6 +309,30 @@ def test_dumper_expands_overlong_subtree(tmp_path):
     assert toml_loads(text) == before
 
 
+def test_dumper_keeps_sibling_extras_out_of_expanded_table(tmp_path):
+    """An expanded `[models.variants]` header must not swallow later sibling
+    keys: a bare `modalities = ...` line emitted after it would land inside
+    the variants table and silently corrupt the round-trip."""
+    p = tmp_path / "models.toml"
+    p.write_text('[[models]]\n'
+                 'model_id = "m"\nname = "n"\nbase_url = "u"\napi_key = "K"\n'
+                 'modalities = { input = ["text", "image"], output = ["text"] }\n'
+                 'variants = { low = { effort = "low" }, '
+                 'medium = { effort = "medium" }, high = { effort = "high" }, '
+                 'xhigh = { effort = "xhigh" }, max = { effort = "max" } }\n')
+    before = toml_loads(p.read_text())
+
+    save_models(p, load_models(p))
+    text = p.read_text()
+    reloaded = load_models(p)
+
+    assert text.index("modalities = ") < text.index("[models.variants]")
+    assert reloaded.models["m"].extra["modalities"] == {
+        "input": ["text", "image"], "output": ["text"]}
+    assert "modalities" not in reloaded.models["m"].extra["variants"]
+    assert toml_loads(text) == before
+
+
 def test_dumper_empty_table_survives(tmp_path):
     """An empty table must render as `key = {}` — never vanish."""
     p = tmp_path / "models.toml"

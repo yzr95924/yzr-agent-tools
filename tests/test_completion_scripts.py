@@ -168,7 +168,7 @@ def test_bash_top_level_prefix_filter(comp_env):
 
 def test_bash_model_actions(comp_env):
     got = bash_complete(comp_env, ["model-switch", "model", ""], 2)
-    assert set(got) == {"add", "list", "show", "remove", "use", "import", "probe"}
+    assert set(got) == {"add", "list", "show", "remove", "use", "import", "align"}
 
 
 def test_bash_model_action_prefix_filter(comp_env):
@@ -218,11 +218,10 @@ def test_bash_init_offers_nothing(comp_env):
     assert bash_complete(comp_env, ["model-switch", "init", ""], 2) == []
 
 
-def test_bash_probe_completes_flags_and_models(comp_env):
-    flags = bash_complete(comp_env, ["model-switch", "model", "probe", "--"], 3)
-    assert set(flags) == {"--budgets", "--catalog-source", "--catalog-provider",
-                          "--json", "--out", "--apply", "--help"}
-    models = bash_complete(comp_env, ["model-switch", "model", "probe", ""], 3)
+def test_bash_align_completes_flags_and_models(comp_env):
+    flags = bash_complete(comp_env, ["model-switch", "model", "align", "--"], 3)
+    assert set(flags) == {"--catalog-provider", "--help"}
+    models = bash_complete(comp_env, ["model-switch", "model", "align", ""], 3)
     assert set(models) == {"glm-z1", "kimi-k2"}
 
 
@@ -245,7 +244,7 @@ def test_fish_top_level_commands(comp_env):
 @needs_fish
 def test_fish_model_actions(comp_env):
     got = fish_complete(comp_env, "model-switch model ")
-    assert set(got) == {"add", "list", "show", "remove", "use", "import", "probe"}
+    assert set(got) == {"add", "list", "show", "remove", "use", "import", "align"}
 
 
 @needs_fish
@@ -310,7 +309,7 @@ def test_zsh_top_level_prefix_filter(comp_env):
 @needs_zsh
 def test_zsh_model_actions(comp_env):
     got = zsh_complete(comp_env, "model-switch model ")
-    assert set(got) == {"add", "list", "show", "remove", "use", "import", "probe"}
+    assert set(got) == {"add", "list", "show", "remove", "use", "import", "align"}
 
 
 @needs_zsh

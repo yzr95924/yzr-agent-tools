@@ -133,6 +133,58 @@ def test_apply_omits_limit_when_context_unknown(driver, glm_main):
     assert "limit" not in entry
 
 
+# --- modalities: opt-in non-text input, validated locally --------------------
+
+
+def _modalities_model(value):
+    return Model(
+        model_id="m",
+        base_url="https://api.z.ai/api/anthropic",
+        api_key="K",
+        name="glm-5.2",
+        extra={"modalities": value},
+    )
+
+
+def test_apply_emits_modalities_when_declared(driver):
+    """OpenCode drops (replaces with an ERROR text prompt) any message part
+    whose modality isn't declared, so a model that accepts images/PDFs must
+    opt in explicitly."""
+    model = _modalities_model({"input": ["text", "image"], "output": ["text"]})
+    driver.apply(models=[model], active=model)
+    cfg = json.loads(driver.settings_path.read_text())
+    entry = cfg["provider"][_pid(model)]["models"][model.name]
+    assert entry["modalities"] == {"input": ["text", "image"],
+                                   "output": ["text"]}
+
+
+def test_apply_omits_modalities_when_undeclared(driver, glm_main):
+    driver.apply(models=[glm_main], active=glm_main)
+    cfg = json.loads(driver.settings_path.read_text())
+    entry = cfg["provider"][_pid(glm_main)]["models"][glm_main.name]
+    assert "modalities" not in entry
+
+
+@pytest.mark.parametrize("value", [
+    ["text"],                      # not a table
+    {"inputs": ["text"]},          # unknown key
+    {"input": "text"},             # not a list
+    {"input": []},                 # empty list
+    {"input": ["text", "gif"]},    # unknown modality
+    {},                            # empty table
+])
+def test_modalities_invalid_values_fail_locally(driver, value):
+    """A schema violation would make OpenCode reject the *whole* config file,
+    so bad values must fail here — and before the file is written."""
+    model = _modalities_model(value)
+    with pytest.raises(ValueError) as excinfo:
+        driver.apply(models=[model], active=model)
+    message = str(excinfo.value)
+    assert "modalities" in message
+    assert model.model_id in message
+    assert not driver.settings_path.exists()
+
+
 def test_apply_preserves_unrelated_providers_and_keys(driver, glm_ctx):
     """model-switch must not clobber providers/keys it doesn't own in the
     same opencode.json (e.g. the user's other custom providers)."""

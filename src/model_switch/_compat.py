@@ -125,18 +125,21 @@ def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
 
     Tables render inline (`key = { ... }`) when shallow enough, otherwise
     as `[header]` sections; a pure-namespace table drops its own header.
+
+    Inline-able tables are emitted before `[[array]]` / `[header]` lines even
+    outside the root: after a header is opened, a bare `key = ...` line would
+    land inside that table instead of its real parent.
     """
     scalars = {}
     arrays = []
+    inline_tables = {}
     tables = {}
     for k, v in data.items():
         if isinstance(v, list) and v and isinstance(v[0], dict):
             arrays.append((k, v))
         elif isinstance(v, dict):
-            # A root-level inline value must precede every [header]: after a
-            # header, a bare `key = ...` line would land inside that table.
-            if not prefix and _inline_form(k, v) is not None:
-                scalars[k] = v
+            if _inline_form(k, v) is not None:
+                inline_tables[k] = v
             else:
                 tables[k] = v
         else:
@@ -144,6 +147,9 @@ def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
 
     for k, v in scalars.items():
         buf.write("{} = {}\n".format(_dump_key(k), _format_inline(v)))
+
+    for k, v in inline_tables.items():
+        buf.write("{}\n".format(_inline_form(k, v)))
 
     for k, items in arrays:
         for item in items:
