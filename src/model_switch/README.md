@@ -55,7 +55,29 @@ rc 块。脚本本体在 `completions/`,想自己接也可以。
 ## 快速上手
 
 ```bash
-# 1. 注册一个模型 —— API key 以明文形式存在 models.toml 里
+# 1. 注册一个模型 —— API key 以明文形式存在 models.toml 里。
+#    不带参数就是向导:只需粘 base URL 和 key,其余从 OpenCode 的 catalog
+#    缓存里按 host 列成编号菜单,选个数字、回车确认即可。
+model-switch model add
+#   Upstream API base URL: https://api.z.ai/api/anthropic
+#   API key: sk-...
+#   catalog: ~/.cache/opencode/models.json (updated 2026-09-18 17:27) — 23 model(s) on api.z.ai
+#   Search models (Enter = list, 'skip' = type the id by hand): glm
+#     1) zai/glm-4.7  GLM-4.7  ctx 200K
+#     2) zai/glm-5.3  GLM-5.3  ctx 1M  tiers[low,high,max]  text+image
+#   Pick a number [1] ('b' = back): 2
+#   Local name [glm-5.3]:
+#   Context window in tokens (press Enter to skip) [1000000]:
+#   Description (optional):
+#
+#   About to add 'glm-5.3':
+#     upstream id     glm-5.3
+#     base URL        https://api.z.ai/api/anthropic
+#     context window  1M
+#     variants        low, high, max
+#   Proceed? [Y/n]: y
+
+# 也可以一行 flags 全给(脚本 / CI 用法,零交互):
 model-switch model add glm-z1-plus \
      --base-url https://open.bigmodel.cn/api/anthropic \
      --api-key sk-... \
@@ -63,10 +85,10 @@ model-switch model add glm-z1-plus \
      --description "GLM-4 Plus" \
      --context-window 200000
 
-# 3. 激活它
+# 2. 激活它(不带名字会弹已配置模型的编号列表)
 model-switch model use glm-z1-plus
 
-# 4. 重启 Claude Code(Ctrl+D,然后再 `claude`)
+# 3. 重启 Claude Code(Ctrl+D,然后再 `claude`)
 ```
 
 `model-switch status` 显示当前激活的模型,以及 Claude Code 会看到的 env 键:
@@ -91,24 +113,39 @@ Agent (claude-code) effective env in /root/.claude/settings.json:
 ```
 model-switch init                              # 创建 ~/.config/model-switch/
 
-model-switch model add <name> \
-     --base-url <url> \
-     --api-key <KEY> \
-     [--model-name <id>] \
-     [--description <text>] \
-     [--context-window <tokens>] \
-     [--provider <group-name>] \
-     [--catalog-provider <id>] [--no-catalog]
+model-switch model add [<name>] [flags]        # 不带参数 = 向导;flag 预答对应提问
+     [--base-url <url>] [--api-key <KEY>] [--model-name <id>] [--description <text>]
+     [--context-window <tokens>] [--provider <group-name>]
+     [--catalog-provider <id>] [--no-catalog] [--yes]
 
 model-switch model list                        # 列出所有模型 + 激活标记
-model-switch model show <name>
-model-switch model remove <name>
+model-switch model show [<name>]               # 无 name = 编号选择
+model-switch model remove [<name>] [--yes]     # 无 name = 编号选择;删除前确认 [y/N]
 model-switch model align [<name>] [--catalog-provider <id>]   # 无 name = 全部;按 OpenCode catalog 对齐
 
-model-switch model use <name> [--driver NAME] [--all-drivers]   # 交互式默认 = 全部 driver;非 TTY / CI = 仅 claude-code
+model-switch model use [<name>] [--driver NAME] [--all-drivers]   # 无 name = 编号选择;交互式默认 = 全部 driver;非 TTY / CI = 仅 claude-code
 
 model-switch status [--driver NAME] [--all-drivers]
 ```
+
+### 交互与脚本行为
+
+- **每个提问都有对应 flag**。任意 flag 给了就跳过那道题;全 flag 调用零交互、零确认,
+  脚本 / CI 行为与旧版一致。
+- **非 TTY 永不阻塞**:菜单直接报错并提示"pass it as an argument";缺必填值时报错提示
+  用 flag 传;`model use` / `remove` / `show` 不带名字在非 TTY 下报错(要靠 flag 或名字)。
+- **写盘前确认**(仅 TTY):`model add` 先打印将写入的完整字段再问 `Proceed? [Y/n]`;
+  `model remove` 问 `Remove model 'x'? [y/N]`(默认 no)。答 no / Ctrl-C 时什么都不写。
+  `--yes`(-y)跳过这两个确认。
+- **重名不静默覆盖**:TTY 下问 `Overwrite it? [y/N]`(默认 no);答 no 会重新问本地名字
+  (已粘的 URL / key 不重问)。非 TTY 且没给 `--yes` 时直接报错
+  `already exists (use --yes to overwrite)`。覆盖 = 整条替换(含 `provider` / `variants` /
+  `modalities` 等 extra 字段),旧的手写字段不保留——想找回字段用 `model align` 重新推导。
+  被覆盖的模型恰是当前激活模型时只打印一行提示(去跑 `model use`),`model add` 从不改
+  agent 配置。
+- **catalog 选择器**(`model add` 向导):按 base_url 的 host 过滤 catalog 缓存,列出该
+  上游的模型;搜索支持多关键词(全部命中才显示);`b` 返回重搜,`skip`(或 host 无
+  匹配 / 缓存缺失)回落到手打 model id 的旧流程。菜单最多显示 20 行,超出时提示缩小搜索。
 
 ## 写进 settings.json 的内容
 
@@ -330,7 +367,8 @@ OpenCode 自己维护一份 models.dev 快照（`~/.cache/opencode/models.json`�
 从中导出 context window、reasoning、档位（variants）和 modalities：
 
 ```bash
-# 新增：只要本地名 + base_url + api_key;--model-name 默认 = 本地名
+# 新增：只要本地名 + base_url + api_key;TTY 下 model id 从 catalog 菜单里选,
+# 非 TTY / 给了 --model-name 时不弹菜单(--model-name 默认 = 本地名)
 model-switch model add qwen3.8-max --base-url https://dashscope.aliyuncs.com/apps/anthropic --api-key <KEY>
 
 # 已有模型重新对齐（无 name = 全部;幂等,已一致时零改动）
