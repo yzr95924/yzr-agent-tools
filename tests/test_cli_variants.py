@@ -58,8 +58,15 @@ def test_model_use_renders_expanded_variants(yzr_paths):
     cfg = json.loads(yzr_paths["opencode"].read_text())
     entry = cfg["provider"]["yzr-example"]["models"]["glm-5.3"]
     assert entry["reasoning"] is True
-    assert entry["variants"] == {"high": {"effort": "high"}, "max": {"effort": "max"}}
-    # The other model's inline variants are rendered untouched.
+    # The preset's tiers are the whole cycle: built-in names OpenCode would
+    # otherwise merge in are muted in the rendered block.
+    rendered = entry["variants"]
+    assert {t: body for t, body in rendered.items()
+            if not body.get("disabled")} == {
+        "high": {"effort": "high"}, "max": {"effort": "max"}}
+    assert rendered["medium"] == {"disabled": True}
+    # A model without `reasoning = true` injects no built-ins, so its inline
+    # variants are rendered untouched.
     inline = cfg["provider"]["yzr-kimi"]["models"]["inline"]
     assert inline["variants"] == {"none": {"thinking": {"type": "disabled"}}}
 

@@ -273,15 +273,17 @@ host 派生。两条路径都不会猜——同上游同 key 的两个 provider 
 ### Effort 档位(variants)
 
 OpenCode 的模型可以带若干「档位」(variant),用 `ctrl+t`(`variant_cycle`)循环切换——
-比如 high/max。model-switch 不认识任何具体模型或上游:它把 `models.toml` 里声明的东西
-**原样透传**进 `opencode.json` 的 model 块,所以档位是纯数据,加模型/换上游都只改 toml。
+比如 high/max。model-switch 不认识任何具体模型或上游:档位是纯数据,加模型/换上游都只改
+toml。**声明了 `variants` 的模型,`ctrl+t` 给出的就只有你声明的这些档位**——OpenCode 自己
+也会给某些模型家族算一套内置档位,并与你的声明深合并;driver 会在渲染时把其中你没声明的
+档位名静音掉(写 `disabled`,OpenCode 合并后立刻丢弃),详见下面「四条要知道的语义」。
 
 这些字段(都写在 `[[models]]` 条目里,都可选):
 
 | 字段 | 作用 |
 | --- | --- |
 | `provider = "<名字>"` | 钉住 provider 分组名,id 即 `yzr-<名字>`(缺省按 base_url host 派生;同名字下所有模型必须同 base_url + api_key;删掉本字段或 `model add` 时答 `-` 即回到派生) |
-| `reasoning = true` | 声明该模型支持推理(OpenCode 的一些行为以此为闸门,如内置档位规则与 picker 上的标注) |
+| `reasoning = true` | 声明该模型支持推理(OpenCode 的一些行为以此为闸门:内置档位**只对 reasoning 模型**计算,picker 上也有标注) |
 | `variants_preset = "<名字>"` | 引用顶层 `[variants_presets.<名字>]` 定义的档位表(推荐) |
 | `variants = { ... }` | 直接内联档位表(逃生舱;与 preset 同时存在时,逐字段覆盖 preset) |
 
@@ -301,12 +303,18 @@ variants_preset = "z-effort"
 ```
 
 `model use` 时 preset 在内存里展开成 `variants` 字典(模型自己内联的字段级覆盖 preset),
-渲染进 model 块:
+渲染进 model 块——声明之外的档位名下是自动补齐的静音键:
 
 ```json
 "glm-5.3": {
   "reasoning": true,
-  "variants": { "high": { "effort": "high" }, "max": { "effort": "max" } },
+  "variants": {
+    "high": { "effort": "high" },
+    "max": { "effort": "max" },
+    "none": { "disabled": true }, "thinking": { "disabled": true },
+    "low": { "disabled": true }, "medium": { "disabled": true },
+    "xhigh": { "disabled": true }
+  },
   "limit": { "context": 1000000, "output": 131072 }
 }
 ```
@@ -318,13 +326,27 @@ provider.<id>.models.<name>.variants.<tier>`)。档位**内容**不校验(原样
 自己校验)。`model show <名字>` 只检查被查看的那个模型,所以别的模型写错也能单独查一个;
 写入类命令则会检查整个 registry。
 
-三条要知道的语义:
+四条要知道的语义:
 
-- **与 OpenCode 内置规则是叠加,不是接管。** OpenCode 自己也会给某些模型家族生成档位
-  (按模型名匹配,随版本变化),你的声明与它 deep merge——同名档位你胜,你没声明的档位名
-  仍可能出现。要静音某个档位,在它下面写 `disabled = true`。
-- **匹配内置规则的永远是 `name`,不是 `model_id`**(`name` 是渲进 model 块的 key)。比如
-  `name = "glm-5.2"` 才会命中 glm-5.2 的内置规则,`glm-5_2` 不行。
+- **声明即全集:driver 把与内置规则的「叠加」变成了「接管」。** OpenCode 自己会给某些模型
+  家族算一套档位(匹配面见下条,随版本变化)并与你声明的档位做深合并——同名档位你胜,但
+  你没声明的档位名照样出现在 `ctrl+t` 里。所以 driver 渲染时会把**这套内置档位名中你未声明
+  的那些**写成 `{ disabled = true }`:OpenCode 在合并之后立刻丢弃 disabled 档位,最终给出的
+  正是你声明的集合。没声明 `variants` 的模型不受影响(内置档位照旧);档位名不在内置名单里
+  的(比如 `off`)原样保留,不会被误伤。
+- **内置规则按「渲进 model 块的 key / provider id / base_url」三面匹配。** key 就是本条的
+  `name`(不是 `model_id`;`name = "glm-5.2"` 才命中 glm-5.2 的规则),provider id 是
+  `yzr-<provider>`(未声明 `provider` 时由 host 派生),base_url 也参与——例如
+  `api.kimi.com` / `api.moonshot.*` 与 provider id 含 `kimi`/`moonshot` 一样触发 kimi 的
+  五档规则,所以「模型 key 里没有 kimi」并不等于不会命中。另有一批**抑制规则**按 key 匹配
+  (qwen / glm / kimi / deepseek-v3 / minimax…,命中则干脆不给内置档位)。
+  **别靠改 provider 组名来躲这些规则**:改名同时会丢掉 OpenCode 给该上游的请求基线(如
+  kimi 默认带 `thinking: adaptive` + `effort: high`),而且 provider id 一变,旧会话里记的
+  `providerID/modelID` 就指向不存在的 provider 了。
+- **深合并是逐字段的:内置档位里你没覆盖的叶子键会留下,而且删不掉。** 同名档位中,你写的
+  字段覆盖内置的同名字段,没写的保留(例如 kimi 内置的 `thinking.display = "summarized"` 会
+  留在你的 `low`/`high`/`max` 里);想「减掉」某个内置叶子键没有办法,能整档丢弃的只有
+  `disabled = true`。
 - **`[variants_presets.*]` 是顶层表**,模型条目里引用它;对 `models.toml` 的任何重写
   (`model add/remove/import`)会保留它,但 dumper 会把它排到文件末尾(合法,只是位置变化)。
 
@@ -333,14 +355,16 @@ provider.<id>.models.<name>.variants.<tier>`)。档位**内容**不校验(原样
 1. 你选的模型可能来自 **project 级 `opencode.json`** 或其它 provider——model-switch 只写
    全局 `~/.config/opencode/opencode.json` 的 `yzr-*` 命名空间,请在 picker 里选
    `yzr-*` 的模型;
-2. 该模型的档位表是空的(没写 preset/variants,或内置规则也没给它);
+2. 该模型的档位表是空的(没写 preset/variants;注意内置档位只对 `reasoning = true` 的模型
+   计算);
 3. 想看当前模型有哪些档位,不必盲按 `ctrl+t`:OpenCode 的 `variant_list` 键位默认**没绑**,
    在 `opencode.json` 里给它绑一个键即可列出,例如
    `"keybinds": { "variant_list": "ctrl+v" }`。
 
-`model show <name>` 会打印 `reasoning:` 与 `variants: preset '...' -> high, max`,便于
-改完 toml 后确认最终会渲染什么;被 `disabled = true` 静音的档位不会混进列表,而是标注在
-括号里(`-> high, max (disabled: low)`),与 OpenCode 实际给出的档位一致。
+`model show <name>` 会打印 `reasoning:` 与 `variants: preset '...' -> high, max`——这行就是
+`ctrl+t` 会给出的集合(渲染时自动静音的内置档位不列出,它们的唯一作用就是被丢掉);你自己
+写的 `disabled = true` 档位也不会混进列表,而是标注在括号里(`-> high, max (disabled: low)`)
+与 OpenCode 实际给出的档位一致。
 
 **Claude Code 是单槽 agent。** `model add/remove/import` 不碰它的配置;唯一例外——被删除的
 模型正是当前 active 时,`remove`/`import replace` 会把 model-switch 自己管理的四个键

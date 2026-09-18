@@ -69,15 +69,24 @@ default ``output`` cap (``_DEFAULT_MAX_OUTPUT``). When ``context_window`` is
 unknown the whole ``limit`` block is omitted — a partial ``{limit:{context}}``
 fails validation and makes the model unavailable.
 
-``reasoning`` and ``variants`` from a model entry are passed through into the
-model block as-is. ``reasoning = true`` marks the model as reasoning-capable
-(OpenCode gates some of its behaviour on that flag), and ``variants`` declares
-the effort tiers OpenCode's variant cycle (ctrl+t, ``variant_cycle``) offers —
-each tier is an opaque payload OpenCode merges into the request options. What
-the tiers are and which shapes an upstream accepts is user data in models.toml
-(optionally via ``[variants_presets]``, expanded by
+``reasoning`` from a model entry marks the model as reasoning-capable
+(OpenCode gates some of its behaviour on that flag). ``variants`` declares the
+effort tiers OpenCode's variant cycle (ctrl+t, ``variant_cycle``) offers —
+each tier is an opaque payload OpenCode merges over its own request options.
+What the tiers are and which shapes an upstream accepts is user data in
+models.toml (optionally via ``[variants_presets]``, expanded by
 `model_switch.variants.expand`); this driver holds no per-model or per-gateway
 knowledge, so adding a model or an upstream never touches it.
+
+Declaring ``variants`` makes the declaration authoritative. OpenCode *merges*
+user tiers over built-in ones it computes per model (matched on the rendered
+model key, the provider id or the base URL), so tiers nobody declared would
+otherwise show up in the cycle. `_mute_undeclared_builtins` renders those as
+``disabled`` — OpenCode drops disabled tiers right after the merge — so a
+reasoning model with a declared tier set offers exactly that set. A model
+without ``variants`` is left alone: OpenCode's built-ins apply untouched, and
+they are also the fallback for any tier name this driver does not know to
+mute.
 
 ``modalities`` from a model entry declares which non-text message parts
 OpenCode is allowed to send (``input``) — an undeclared image/PDF part is
@@ -120,6 +129,30 @@ _DEFAULT_MAX_OUTPUT = 131_072
 # OpenCode's modality enum for the model block; this tuple also orders the
 # values in rendered messages.
 _MODALITY_VALUES = ("text", "audio", "image", "video", "pdf")
+
+# Tier names OpenCode's built-in rules can inject for NPM_ADAPTER models
+# (verified against 1.18.31). A declared `variants` table does not replace
+# them, it is deep-merged *over* them — so a tier nobody declared would still
+# appear in the ctrl+t cycle. Rendering the omitted names as ``disabled``
+# makes the declaration authoritative: OpenCode filters disabled tiers out
+# immediately after the merge, before anything reads them.
+#
+# This is not a whitelist. Declared tier names are arbitrary strings
+# (`VariantID` is a branded string and the config schema a plain record);
+# this is only the union of names the built-ins can inject here: kimi/moonshot
+# (matched on provider id, api id *or* base URL) and claude >= 4.7 contribute
+# low/medium/high/xhigh/max, opus-4.5 low/medium/high, minimax-m3
+# none/thinking, and the non-claude anthropic fallback high/max. Muting a name
+# that was never injected is a no-op, so erring wide costs nothing beyond a
+# few ``{disabled: true}`` keys; a tier a later OpenCode adds simply stays
+# unmuted (today's behaviour, not a regression).
+#
+# Do not try to dodge these rules by renaming the provider group: the
+# kimi/moonshot match also reads the base URL, and the fallback that replaces
+# it brings its own request baseline. See the module docstring.
+_INJECTABLE_TIER_NAMES = (
+    "none", "thinking", "low", "medium", "high", "xhigh", "max",
+)
 
 
 def _base_url_for_ai_sdk(base_url):
@@ -170,21 +203,45 @@ def _render_modalities(model: Model) -> Optional[Dict[str, List[str]]]:
     return out
 
 
+def _mute_undeclared_builtins(variants: Dict[str, Any]) -> Dict[str, Any]:
+    """Return `variants` plus ``{disabled: True}`` for omitted built-in tiers.
+
+    Never mutates the input: `variants.expand_model` hands back the registry's
+    own entry — and therefore its own ``variants`` dict — for a model without
+    a preset reference, so mutating it here would leak into the in-memory
+    registry and into the next `save_models`.
+    """
+    muted = dict(variants)
+    for tier in _INJECTABLE_TIER_NAMES:
+        if tier not in muted:
+            muted[tier] = {"disabled": True}
+    return muted
+
+
 def _render_model_entry(model: Model) -> Dict[str, Any]:
     """Render the per-model object stored under ``provider.<id>.models``.
 
-    ``reasoning`` and ``variants`` pass through verbatim (a ``variants`` value
-    may have been materialized from a preset upstream of here); ``modalities``
-    is validated by `_render_modalities`; ``limit`` appears only when
-    ``context_window`` is known. With nothing set this returns ``{}`` — the
-    same shape as before those fields existed.
+    ``reasoning`` is passed through as-is. A ``variants`` table is rendered
+    with the undeclared built-in tiers muted when the model is a reasoning one
+    (see `_mute_undeclared_builtins`), so it is exactly what ctrl+t offers;
+    without ``reasoning`` there are no built-ins to mute and the table passes
+    through as before. A ``variants`` value may have been materialized from a
+    preset upstream of here. ``modalities`` is validated by
+    `_render_modalities`; ``limit`` appears only when ``context_window`` is
+    known. With nothing set this returns ``{}`` — the same shape as before
+    those fields existed.
     """
     entry: Dict[str, Any] = {}
     if model.extra.get("reasoning") is True:
         entry["reasoning"] = True
     variants = model.extra.get("variants")
     if isinstance(variants, dict) and variants:
-        entry["variants"] = variants
+        # Built-ins are only computed for reasoning models; without the flag
+        # the declared table is already the whole cycle, so it passes through.
+        entry["variants"] = (
+            _mute_undeclared_builtins(variants) if entry.get("reasoning")
+            else variants
+        )
     modalities = _render_modalities(model)
     if modalities is not None:
         entry["modalities"] = modalities

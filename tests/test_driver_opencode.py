@@ -539,44 +539,103 @@ def test_current_reports_default_and_catalog(driver):
     assert _pid(models[1]) in cur["catalog"]
 
 
-# --- reasoning / variants passthrough ----------------------------------------
+# --- reasoning / variants authority ------------------------------------------
 #
 # models.toml may carry `reasoning = true` (mark the model reasoning-capable)
 # and a `variants` table (effort tiers for OpenCode's ctrl+t variant cycle).
-# Both are rendered verbatim into the model block; the driver neither
-# interprets nor varies them by model — tier shapes are user data.
+# `reasoning` is rendered as-is. A declared `variants` table is rendered with
+# every built-in tier OpenCode would otherwise merge in muted, so the cycle
+# offers exactly what was declared; tier shapes stay user data.
 
-def test_apply_passes_reasoning_and_variants_through(driver):
-    from model_switch.drivers.opencode import _DEFAULT_MAX_OUTPUT
-    m = Model(
-        model_id="m", name="m", base_url="https://api.example.com",
-        api_key="K", context_window=1000000,
-        extra={
-            "reasoning": True,
-            "variants": {"high": {"effort": "high"}, "max": {"effort": "max"}},
-        },
-    )
-    driver.apply(models=[m], active=m)
+def _rendered(driver, model):
+    driver.apply(models=[model], active=model)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_pid(m)]["models"]["m"]
+    return cfg["provider"][_pid(model)]["models"][model.name]
+
+
+def _model(extra, context_window=None):
+    return Model(
+        model_id="m", name="m", base_url="https://api.example.com",
+        api_key="K", context_window=context_window, extra=extra,
+    )
+
+
+def test_apply_renders_declared_variants_as_the_full_set(driver):
+    from model_switch.drivers.opencode import (_DEFAULT_MAX_OUTPUT,
+                                               _INJECTABLE_TIER_NAMES)
+    entry = _rendered(driver, _model(
+        {"reasoning": True,
+         "variants": {"high": {"effort": "high"}, "max": {"effort": "max"}}},
+        context_window=1000000,
+    ))
     assert entry["reasoning"] is True
-    assert entry["variants"] == {"high": {"effort": "high"}, "max": {"effort": "max"}}
+    # Declared tiers keep their payload byte-for-byte; every other tier
+    # OpenCode's built-ins could inject is muted instead of offered.
+    for tier in _INJECTABLE_TIER_NAMES:
+        expected = {"high": {"effort": "high"},
+                    "max": {"effort": "max"}}.get(tier, {"disabled": True})
+        assert entry["variants"][tier] == expected
+    assert len(entry["variants"]) == len(_INJECTABLE_TIER_NAMES)
     assert entry["limit"] == {"context": 1000000, "output": _DEFAULT_MAX_OUTPUT}
+
+
+def test_apply_keeps_tier_names_outside_the_injectable_set(driver):
+    """The vocabulary is a mute list, not a whitelist: a tier name OpenCode
+    cannot inject (`off`) is rendered untouched."""
+    entry = _rendered(driver, _model(
+        {"reasoning": True, "variants": {"off": {"thinking": {"type": "disabled"}}}},
+    ))
+    assert entry["variants"]["off"] == {"thinking": {"type": "disabled"}}
+    assert "max" in entry["variants"]  # ...and the built-ins are still muted
+
+
+def test_apply_preserves_a_hand_written_disabled_tier(driver):
+    """A user-written `disabled` (alone or beside a payload) is not replaced
+    by the generated one."""
+    entry = _rendered(driver, _model(
+        {"reasoning": True,
+         "variants": {"medium": {"effort": "medium", "disabled": True},
+                      "xhigh": {"disabled": True},
+                      "high": {"effort": "high"}}},
+    ))
+    assert entry["variants"]["medium"] == {"effort": "medium", "disabled": True}
+    assert entry["variants"]["xhigh"] == {"disabled": True}
+    assert entry["variants"]["high"] == {"effort": "high"}
+
+
+def test_apply_does_not_mutate_the_registry_variants(driver):
+    """`variants.expand_model` hands back the registry's own dict when there
+    is no preset reference — muting must copy, not edit in place, or the muted
+    keys would leak into models.toml on the next save."""
+    variants = {"high": {"effort": "high"}}
+    m = _model({"reasoning": True, "variants": variants})
+    _rendered(driver, m)
+    assert m.extra["variants"] is variants
+    assert variants == {"high": {"effort": "high"}}
+
+
+def test_apply_without_reasoning_renders_variants_unmuted(driver):
+    """OpenCode computes no built-ins without `reasoning = true`, so there is
+    nothing to mute: the declared table passes through exactly as before."""
+    variants = {"high": {"effort": "high"}}
+    m = _model({"variants": variants})
+    entry = _rendered(driver, m)
+    assert "reasoning" not in entry
+    assert entry["variants"] == {"high": {"effort": "high"}}
+    assert variants == {"high": {"effort": "high"}}
 
 
 def test_apply_renders_optional_fields_without_context_window(driver):
     """The optional fields must not be swallowed when context_window is
     unknown: only `limit` is conditional, never the whole entry."""
-    m = Model(
-        model_id="m", name="m", base_url="https://api.example.com",
-        api_key="K", extra={"reasoning": True, "variants": {"high": {"effort": "high"}}},
-    )
-    driver.apply(models=[m], active=m)
-    cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_pid(m)]["models"]["m"]
+    from model_switch.drivers.opencode import _INJECTABLE_TIER_NAMES
+    entry = _rendered(driver, _model(
+        {"reasoning": True, "variants": {"high": {"effort": "high"}}},
+    ))
     assert "limit" not in entry
     assert entry["reasoning"] is True
-    assert entry["variants"] == {"high": {"effort": "high"}}
+    assert entry["variants"]["high"] == {"effort": "high"}
+    assert sorted(entry["variants"]) == sorted(_INJECTABLE_TIER_NAMES)
 
 
 def test_apply_ignores_non_true_reasoning_and_empty_variants(driver, glm_ctx):
@@ -592,10 +651,9 @@ def test_apply_ignores_non_true_reasoning_and_empty_variants(driver, glm_ctx):
 def test_sync_catalog_keeps_reasoning_and_variants_on_reconcile(driver):
     """Reconcile is a mirror: a second run must reproduce the same model
     block (no drift, no loss)."""
-    m = Model(
-        model_id="m", name="m", base_url="https://api.example.com",
-        api_key="K", context_window=1000,
-        extra={"reasoning": True, "variants": {"high": {"effort": "high"}}},
+    m = _model(
+        {"reasoning": True, "variants": {"high": {"effort": "high"}}},
+        context_window=1000,
     )
     driver.settings_path.write_text("{}", encoding="utf-8")  # sync never creates
     driver.sync_catalog([m])
@@ -603,4 +661,5 @@ def test_sync_catalog_keeps_reasoning_and_variants_on_reconcile(driver):
     driver.sync_catalog([m])
     second = json.loads(driver.settings_path.read_text())["provider"][_pid(m)]
     assert first == second
-    assert second["models"]["m"]["variants"] == {"high": {"effort": "high"}}
+    assert second["models"]["m"]["variants"]["high"] == {"effort": "high"}
+    assert second["models"]["m"]["variants"]["low"] == {"disabled": True}

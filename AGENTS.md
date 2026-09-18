@@ -171,9 +171,18 @@ src/
 
 **variant preset 的分层**:展开在 CLI 层(`model_switch.variants.expand`/`expand_model`,仅内存、
 不落盘,`save_models` 永远拿原始 Registry),driver 与 store 都不认识 preset——driver 只看到
-`reasoning`/`variants` 两个透传键。展开时顺带检查容器形状(preset 与内联的档位值必须是表;
+`reasoning`/`variants` 两个键。展开时顺带检查容器形状(preset 与内联的档位值必须是表;
 OpenCode 遇到标量会拒载整份配置),payload 内容不校验。`variants.py` 与 `drivers/opencode.py`
 的代码里不得出现模型/网关名(档位是数据不是特判;`test_variants.py` 有 AST 守卫)。
+
+**档位语义是「声明即全集」**:OpenCode 会给某些模型家族算一套内置档位,并与用户声明**深合并**
+(逐字段;同名叶子用户胜,内置独有叶子删不掉,只有整档 `disabled: true` 能丢)。所以
+`drivers/opencode.py` 渲染时把用户未声明的内置档位名补成 `{disabled: true}`(OpenCode 在合并
+之后立刻过滤),没声明 `variants` 的模型不动内置。内置规则的匹配面是 model key(=`name`)、
+`api.id`(同值)与 `providerID`(`yzr-<provider>`),**不得靠改 provider 组名规避**——改名会连带
+丢掉 OpenCode 给该上游的请求基线,且 provider id 变化让旧会话的 provider 引用失效。静音词表
+是 1.18.31 的快照(档位名是自由字符串,该常量是补集不是白名单);未知的新档位名退化为不静音。
+详见 README「Effort 档位」。`model show` 打印的就是 ctrl+t 会给出的集合。
 
 **catalog 只供参数与档位**:`model add` 向导与 `model align` 能从 catalog 推导的只有
 `context_window` / `reasoning` / `variants` / `modalities`(`catalog.derive` 的全部产出)。

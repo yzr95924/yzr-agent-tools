@@ -81,10 +81,13 @@ def test_align_updates_inline_fields_and_renders(yzr_paths):
         "medium": {"effort": "medium", "thinking": {"type": "adaptive"}},
     }
     assert m.extra["modalities"] == {"input": ["text", "image"], "output": ["text"]}
-    # The agent-facing render picked the new tiers up.
+    # The agent-facing render picked the new tiers up, with the built-in tier
+    # names OpenCode could inject muted around them.
     cfg = json.loads(yzr_paths["opencode"].read_text())
     entry = cfg["provider"]["yzr-fixture"]["models"]["fixture-model"]
-    assert list(entry["variants"]) == ["off", "low", "medium"]
+    rendered = entry["variants"]
+    assert [t for t, body in rendered.items() if not body.get("disabled")] == [
+        "off", "low", "medium"]
     assert entry["limit"]["context"] == 500000
     assert entry["modalities"]["input"] == ["text", "image"]
 
