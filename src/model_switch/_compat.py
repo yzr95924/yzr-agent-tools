@@ -161,10 +161,6 @@ def _dump_section(buf, data: Dict[str, Any], prefix: str) -> None:
             _dump_section(buf, item, prefix=header + ".")
 
     for k, v in tables.items():
-        inline = _inline_form(k, v)
-        if inline is not None:
-            buf.write("{}\n".format(inline))
-            continue
         header = "{}{}".format(prefix, _dump_key(k))
         if _needs_scope(v):
             buf.write("\n[{}]\n".format(header))

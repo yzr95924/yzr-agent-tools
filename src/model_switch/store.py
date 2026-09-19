@@ -19,8 +19,8 @@ from model_switch._compat import toml_dumps, toml_loads
 
 
 # Fields model-switch understands on a `[[models]]` entry. Anything else on
-# an entry (e.g. `api_key`, `is_default` from llmw's workspace_models.toml)
-# is preserved in `ModelEntry.extra` and round-tripped verbatim.
+# an entry (e.g. llmw's `is_default`) is preserved in `ModelEntry.extra` and
+# round-tripped verbatim.
 _MODEL_ENTRY_FIELDS = (
     "model_id",
     "name",

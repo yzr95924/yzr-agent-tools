@@ -517,9 +517,7 @@ class OpenCodeDriver:
                 return current
             if _is_owned_provider(current.split("/", 1)[0]):
                 # Ours but vanished — fall to the first remaining model.
-                for m in models:
-                    return refs[m.model_id]
-                return None
+                return refs[models[0].model_id]
             # Foreign reference — not ours to move.
             return current
         # No default key — don't conjure one; `model use` sets it.

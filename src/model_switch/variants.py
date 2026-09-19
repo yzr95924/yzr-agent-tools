@@ -110,7 +110,7 @@ def expand_model(reg: Registry, model: ModelEntry) -> ModelEntry:
     if not isinstance(preset, dict):
         raise VariantsError(
             "model {!r}: unknown preset {!r}; available: {}".format(
-                model.model_id, ref, ", ".join(sorted(presets)) or "<none>"
+                model.model_id, ref, ", ".join(sorted(presets))
             )
         )
     if not preset:

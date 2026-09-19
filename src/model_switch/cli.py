@@ -1,10 +1,11 @@
 """argparse-based CLI for model-switch.
 
-The CLI is a thin wrapper that:
-1. Reads models from ~/.config/model-switch/models.toml
-2. Reads state from ~/.config/model-switch/state.toml
-3. Calls the registered agent driver's read/apply/current methods
-4. Writes updated state back
+Three jobs live here: the `model add` wizard (catalog picker, provider
+grouping, upstream-id confirmation), the write paths (`use` / `remove` /
+`import` / `align`, which keep models.toml and every agent config in step),
+and read-only reporting (`list` / `show` / `status`). Config knowledge lives
+in `store`, `catalog`, `variants` and the drivers — this module orchestrates
+and prompts.
 
 V1+ ships with `claude-code` (default) and `opencode` drivers, both
 registered lazily on first use.
@@ -416,12 +417,11 @@ def _do_model_add(args: argparse.Namespace) -> None:
     """Add (or replace) a model definition.
 
     A wizard when stdin is a TTY: base URL and API key are pasted, then the
-    catalog picker fills every derivable field (context window, reasoning,
-    variant tiers, modalities) and pre-fills the upstream id — which the user
-    confirms, since only they know their endpoint's spelling. Any flag
-    pre-answers its prompt, so a fully flagged invocation stays script-safe.
-    `--no-catalog` opts out, `--catalog-provider` pins the provider entry
-    when several match.
+    catalog picker fills every field `catalog.derive` produces and pre-fills
+    the upstream id — which the user confirms, since only they know their
+    endpoint's spelling. Any flag pre-answers its prompt, so a fully flagged
+    invocation stays script-safe. `--no-catalog` opts out, `--catalog-provider`
+    pins the provider entry when several match.
 
     The provider group is asked about only when an existing model on the
     same base_url + api_key already declares one — see `_resolve_provider`.
@@ -490,10 +490,9 @@ def _choose_upstream(args: argparse.Namespace, base_url: str,
                      picked: Optional[catalog.Row]):
     """Resolve ``(model_name, derived_fields)`` from the pick or from flags.
 
-    The split is deliberate: parameter fields (context window, reasoning,
-    tiers, modalities) are the catalog's to supply, while the upstream id is
-    the user's provider's convention and is always asked — a pick only
-    pre-fills it. See `_prompt_upstream_id`.
+    The split is deliberate: `catalog.derive`'s fields are the catalog's to
+    supply, while the upstream id is the user's provider's convention and is
+    always asked — a pick only pre-fills it. See `_prompt_upstream_id`.
     """
     if picked is not None:
         return (
@@ -928,9 +927,9 @@ def _describe_fields(fields: Dict[str, Any]) -> str:
 def _do_model_align(args: argparse.Namespace) -> int:
     """Reconcile models.toml with OpenCode's catalog cache.
 
-    Aligns one model, or every model when no name is given. Scalar fields
-    (context_window, reasoning, modalities) are updated in place; variant
-    tiers are replaced only when declared inline — a model backed by a shared
+    Aligns one model, or every model when no name is given. The fields
+    `catalog.derive` produces are reconciled in place; variant tiers are
+    replaced only when declared inline — a model backed by a shared
     `variants_preset` is reported as `skip` instead, because rewriting that
     preset could silently change every model referencing it. Returns a
     nonzero exit code when any model stayed unresolved, so scripts notice.
@@ -1231,7 +1230,6 @@ def _do_model_import(args: argparse.Namespace) -> None:
 
     incoming = result.registry
 
-    # Merge or replace.
     if args.merge:
         existing = load_models(paths.models_file())
         for k, v in incoming.models.items():
