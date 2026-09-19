@@ -150,13 +150,14 @@ model-switch status [--driver NAME] [--all-drivers]
   手打 model id 的旧流程。菜单最多显示 20 行,超出时提示缩小搜索。base_url 里没有 host
   (例如漏写 `https://`)时直接不进入选择器——无 host 可限定,选择器会把整个 catalog 当成你
   的上游列出来,不如回落到手打。
-- **catalog 只供参数与档位,id 永远由你确认**:`catalog.derive` 只产出 context window /
-  reasoning / 档位 / modalities;upstream id、base_url、api_key 是模型提供商的约定,同一个
-  模型在不同 provider 下拼法不同(当前缓存里 `GLM-5.2` 有 21 种拼法,`Kimi K3` 有 15 种),
-  无法从 catalog 推断。向导选中后把 id 预填成该行的拼法(回车采纳),你的端点要别的就输入,
-  首尾空白会被去掉。id 会原样写进 `ANTHROPIC_MODEL` 与 OpenCode 的 model 指针,填错的表现
-  是每次请求都 model not found。脚本侧对应 `--model-name`(给了它就跳过选择器,参数靠
-  `--catalog-provider` / 缓存查找);`model align` 也只更新那几类参数,从不碰 id。
+- **catalog 只供参数、档位与能力位,id 永远由你确认**:`catalog.derive` 只产出 context
+  window / reasoning / 档位 / modalities / 两个能力位 / 显示名;upstream id、base_url、api_key
+  是模型提供商的约定,同一个模型在不同 provider 下拼法不同(当前缓存里 `GLM-5.2` 有 21 种
+  拼法,`Kimi K3` 有 15 种),无法从 catalog 推断。向导选中后把 id 预填成该行的拼法(回车采纳),
+  你的端点要别的就输入,首尾空白会被去掉。id 会原样写进 `ANTHROPIC_MODEL` 与 OpenCode 的
+  model 指针,填错的表现是每次请求都 model not found。脚本侧对应 `--model-name`(给了它就
+  跳过选择器,参数靠 `--catalog-provider` / 缓存查找);`model align` 也只更新那几类参数,
+  从不碰 id。
 - **`all <关键词>` 放宽搜索范围**:在搜索提示处用 `all` 开头即对**全 catalog**搜索,不限
   host。宽搜结果里 host 匹配的行排在前(菜单只有 20 行,字典序会把你在配的上游挤掉),其
   余行标 `[other host]`;选中非本上游的行时打印一行 note,提示 context window 与
@@ -407,22 +408,28 @@ modalities = { input = ["text", "image", "pdf"], output = ["text"] }
 声明必须**真实**:上游不接受的模态不会在这里报错,而是每次带该附件时请求直接 400;不声明
 则只是静默降级成上面那句 ERROR 文本。所以先用真实附件请求验证过再写。
 
-三个**不**透传的字段(都有具体原因,别当成缺口):
-
-| 字段 | 为什么不用 |
-| --- | --- |
-| `attachment` | OpenCode 二进制里只出现在配置归一化/合并处,没有消费点;真正起门禁作用的是 `modalities` |
-| `temperature` | 省略时 OpenCode 按"不支持"处理(不发 `temperature` 参数,用上游默认);只有要让 agent 的温度设置生效才需要声明 |
-| `interleaved` | 它声明"从响应哪个字段取 reasoning 文本",是 OpenAI 兼容端点的形状(`reasoning_content`);我们走 Anthropic 协议、reasoning 是标准 thinking 块,照抄可能反而取不到 |
-
 另外 `video` / `audio`:models.dev 条目里可能有,但 Anthropic messages 格式没有这两种 part,
 声明只会让闸门放行、上游报错,所以不声明。
+
+### 能力位与显示名(`temperature` / `attachment` / `display_name`)
+
+catalog 条目里还有两个能力位和一个人类可读名,`model align` 会一并导出(只有 catalog 明确
+声明 `true` 才写——OpenCode 对省略的 flag 按 false 处理,写 `false` 等于没写):
+
+| catalog 字段 | models.toml | 渲染 |
+| --- | --- | --- |
+| `temperature: true` | `temperature = true` | model 块 `"temperature": true`。声明前 OpenCode 把它当"不支持":**不发 `temperature` 参数**,agent 里配的温度也被忽略 |
+| `attachment: true` | `attachment = true` | model 块 `"attachment": true`。model 对象的 `capabilities.attachment`;OpenCode 对查不到的 provider 默认 false |
+| `name`(如 `"Kimi K3"`) | `display_name = "Kimi K3"` | model 块 `"name": "Kimi K3"`,只是选择器里的标签;与 upstream id 相同时不写(OpenCode 自己回退到 key) |
+
+`display_name` 只是标签:model 块的 **key 与 `api.id` 始终是 upstream id**,改它不会动请求
+里的模型名。这几个字段都由 `model align` 维护,不需要手改。
 
 ### 与 OpenCode 内置对齐（自动）
 
 OpenCode 自己维护一份 models.dev 快照（`~/.cache/opencode/models.json`，约每小时刷新），
 它也是 OpenCode 推导内置模型字段的同一份数据。model-switch **只读这份缓存、不联网**，
-从中导出 context window、reasoning、档位（variants）和 modalities：
+从中导出 context window、reasoning、档位（variants）、modalities 与上面三个字段：
 
 ```bash
 # 新增：只要本地名 + base_url + api_key;TTY 下 model id 从 catalog 菜单里选,
@@ -441,6 +448,8 @@ model-switch model align
 | `reasoning_options` 的 `toggle` | 不造档位（OpenCode 自己的推导在有 effort 时也丢弃 toggle），想要关思考的档位就手写一档 `off = { thinking = { type = "disabled" } }` |
 | `limit.context` | `context_window`（按模型/套餐的最大值，如 kimi `k3` 是 `1048576`——需要 Pro/Allegretto 及以上套餐，超出套餐的上下文服务端返回 401） |
 | `modalities.input` | `modalities`，剔掉 `video`/`audio`（Anthropic messages 无这两种 part） |
+| `temperature` / `attachment` | 同名（仅 `true` 才写，见上一节） |
+| `name` | `display_name`（仅当与 upstream id 不同才写，见上一节） |
 | 只有 `budget_tokens` 或只有 toggle 声明 | 不造档位（打印提示，需要就手写） |
 
 选择哪条 catalog 条目的规则：先按 base_url 的 **host** 收敛（同名模型常挂在几十个
@@ -455,6 +464,28 @@ jq -r 'to_entries[] | .value.models["qwen3.8-max"] as $m | select($m)
        | "\(.key)  api=\(.value.api)  reasoning=\($m.reasoning_options|tostring)  limit=\($m.limit|tostring)"' \
   ~/.cache/opencode/models.json
 ```
+
+对齐的口径：对齐的对象是 **models.dev 官方 provider 条目**——OpenCode 只对它认识的 provider
+读那份条目；对我们自建的 `yzr-*`，它只跑按 model id / provider id / base URL 匹配的家族规则。
+两者对 kimi 恰好一致（家族规则给 low/medium/high/xhigh/max，静音后剩条目声明的
+low/high/max），对 qwen/glm 则是我们补了家族规则本来不给的档位。以下差异是**有意或结构性**的：
+
+- **`none` / `minimal` 不照抄**：OpenCode 在 Anthropic 路径会原样发 `effort: "none"` /
+  `"minimal"`，而 adapter 的 effort 枚举只有 low\|medium\|high\|xhigh\|max——它自己这条是坏的。
+  我们翻成关思考档 / 跳过。
+- **`interleaved` 不写**：条目里的值（`{field: "reasoning_content"}`）是 OpenAI 兼容端点取
+  reasoning 文本用的字段；Anthropic 路径由 `anthropic-beta: interleaved-thinking-2025-05-14`
+  头处理，OpenCode 对 `@ai-sdk/anthropic` 会自己加。
+- **`cost` / `family` / `release_date` 不写**：纯显示/元数据（价格还会过期）；`structured_output`
+  则是**写不了**——OpenCode 的 model 配置 schema 没有这个字段，adapter 按内置模型表判断，
+  只认识 `claude-*`。
+- 档位 body 与内置档位是**叶子级深合并**：同名内置档位里你没写的叶子会跟过来。kimi 上这补回
+  `display: "summarized"`（与官方条目一致，好事）；走 anthropic 兜底档的模型（如
+  `deepseek-v4.1-flash`）会带进 `budgetTokens`——我们的 adaptive 档会被 adapter 剥掉它（无
+  影响）；但**手写 `thinking = { type = "enabled" }` 而不写 `budget_tokens` 会真的继承内置的
+  16000/31999**，思考被封顶——要么写全，要么别用 `enabled`。
+- 官方条目的 `limit.output` 不复刻，统一 `131072`：线上 `max_tokens = min(limit.output,
+  32000)`，catalog 值再大也是 32000，请求实际一样。
 
 已知限制（设计如此）：catalog 描述的是各 provider **声明**的端点（通常是其 OpenAI 兼容
 API），我们走 Anthropic 兼容路径——档位**名**是家族级的，wire 形状由 driver 翻译；接受 ≠

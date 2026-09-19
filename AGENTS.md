@@ -180,19 +180,29 @@ OpenCode 遇到标量会拒载整份配置),payload 内容不校验。`variants.
 `drivers/opencode.py` 渲染时把用户未声明的内置档位名补成 `{disabled: true}`(OpenCode 在合并
 之后立刻过滤),没声明 `variants` 的模型不动内置。内置规则的匹配面是 model key(=`name`)、
 `api.id`(同值)与 `providerID`(`yzr-<provider>`),**不得靠改 provider 组名规避**——改名会连带
-丢掉 OpenCode 给该上游的请求基线,且 provider id 变化让旧会话的 provider 引用失效。静音词表
+丢掉 OpenCode 给该上游的请求基线,且 provider id 变化让旧会话的 provider 引用失效。body 合并
+是**叶子级**:同名内置档位里没写的叶子会漏进声明档位(kimi 补回 `display:"summarized"` 是好事;
+手写 `thinking = { type = "enabled" }` 不写 `budget_tokens` 会继承内置的 16000/31999)。静音词表
 是 1.18.31 的快照(档位名是自由字符串,该常量是补集不是白名单);未知的新档位名退化为不静音。
 详见 README「Effort 档位」。`model show` 的 variants 行列的是声明档位;ctrl+t 的站点是它们再
 加最后回到的未选档 Default(不覆盖档位、走 provider 基线,kimi 基线即 `effort = "high"`);
 未声明档位的 reasoning 模型显式标注内置档位生效。
 
-**catalog 只供参数与档位**:`model add` 向导与 `model align` 能从 catalog 推导的只有
-`context_window` / `reasoning` / `variants` / `modalities`(`catalog.derive` 的全部产出)。
+**catalog 只供参数、档位与能力位**:`model add` 向导与 `model align` 能从 catalog 推导的只有
+`context_window` / `reasoning` / `variants` / `modalities` / `temperature` / `attachment` /
+`display_name`(`catalog.derive` 的全部产出)。
 档位推导跟 OpenCode 自己的规则一致:effort 值每值一档、`toggle` 不造档(OpenCode 的
 `reasoningVariants` 在有 effort 时同样丢弃它)、`none` 翻成 `{thinking:{type:"disabled"}}`
 (Anthropic 的 effort 枚举没有 `none`;该形状即 Kimi 文档对 `none` 的定义,实测有效)、
-`minimal` 跳过。`context_window` 按模型/套餐上限取 catalog 值(kimi `k3` = 1M,需
+`minimal` 跳过。`temperature`/`attachment` 只在 catalog 声明 `true` 时写(OpenCode 省略即
+false);`display_name` 渲染成 model 块的 `name`(纯选择器标签,key 与 `api.id` 仍是 upstream
+id),与 id 相同则不写。`context_window` 按模型/套餐上限取 catalog 值(kimi `k3` = 1M,需
 Pro/Allegretto+,超出套餐服务端 401)。
+**一致性口径**:对齐对象是 models.dev 官方 provider 条目;`yzr-*` 在 OpenCode 侧只跑家族规则
+(两者对 kimi 殊途同归,qwen/glm 的档位是我们补的)。有意/结构性差异:`none`/`minimal` 有意
+偏离(OpenCode 会发越出 adapter 枚举的 `effort`)、`interleaved` 不写(anthropic 路径由
+`anthropic-beta` 头覆盖)、`cost`/`family`/`release_date` 不写(纯显示)、`structured_output`
+写不了(schema 无此字段,adapter 只认 `claude-*`)。
 `name`(upstream id)、`base_url`、`api_key` 是模型提供商的约定,同一个模型在不同 provider
 下拼法不同(缓存里 `GLM-5.2` 有 21 种拼法),**任何路径都不得从 catalog 推断 id**:向导选中后
 把 id 预填成该行的拼法但显式问一次(`_prompt_upstream_id`,可改、首尾空白 strip),脚本侧
