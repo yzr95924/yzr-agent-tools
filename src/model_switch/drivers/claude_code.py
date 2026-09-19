@@ -16,11 +16,10 @@ Writes a single model identifier to:
 
 Anything else in `env` and the rest of the JSON file is preserved.
 """
-import json
 from pathlib import Path
 from typing import List, Optional
 
-from model_switch.drivers._atomic import atomic_write_json
+from model_switch.drivers._atomic import atomic_write_json, read_json
 from model_switch.store import ModelEntry as Model
 
 
@@ -59,13 +58,7 @@ class ClaudeCodeDriver:
         self.settings_path = settings_path
 
     def read(self) -> dict:
-        if not self.settings_path.exists():
-            return {}
-        with open(self.settings_path, "r", encoding="utf-8") as f:
-            text = f.read().strip()
-        if not text:
-            return {}
-        return json.loads(text)
+        return read_json(self.settings_path)
 
     def apply(self, models: List[Model], active: Model) -> None:
         config = self.read()

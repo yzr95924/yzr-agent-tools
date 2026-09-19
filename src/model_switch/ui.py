@@ -27,7 +27,8 @@ def abort(message: str, code: int = 1) -> NoReturn:
     sys.exit(code)
 
 
-def _fail(message) -> NoReturn:
+def fail(message) -> NoReturn:
+    """``Error: <message>`` to stderr + exit 1 — the CLI's failure channel."""
     abort("Error: {}".format(message))
 
 
@@ -36,7 +37,7 @@ def ask(prompt: str) -> str:
     try:
         return input(prompt)
     except EOFError:
-        _fail("input exhausted — aborted, nothing written.")
+        fail("input exhausted — aborted, nothing written.")
 
 
 def pick_one(title: str, items: Sequence[Any], render: Callable[[Any], str],
@@ -50,13 +51,13 @@ def pick_one(title: str, items: Sequence[Any], render: Callable[[Any], str],
     truncated with a hint to narrow the list.
     """
     if not sys.stdin.isatty():
-        _fail("the interactive picker needs a TTY — pass the value as an "
+        fail("the interactive picker needs a TTY — pass the value as an "
               "argument instead.")
     if not items:
-        _fail("nothing to pick from.")
+        fail("nothing to pick from.")
     shown: List[Any] = list(items)[:MENU_MAX]
     if default is not None and not 0 <= default < len(shown):
-        _fail("default index {} is out of range (menu shows {} row(s))".format(
+        fail("default index {} is out of range (menu shows {} row(s))".format(
             default, len(shown)))
     if title:
         print(title)
@@ -91,7 +92,7 @@ def confirm(question: str, *, default: bool = True) -> bool:
     answered silently on someone's behalf.
     """
     if not sys.stdin.isatty():
-        _fail("a confirmation needs a TTY — pass --yes to answer it in "
+        fail("a confirmation needs a TTY — pass --yes to answer it in "
               "advance.")
     suffix = " [Y/n]: " if default else " [y/N]: "
     while True:

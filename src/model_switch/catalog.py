@@ -197,6 +197,11 @@ def search(data: Dict[str, Any], query: str = "",
     return out
 
 
+def _reasoning_options(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The entry's ``reasoning_options``, filtered to tables."""
+    return [o for o in (entry.get("reasoning_options") or []) if isinstance(o, dict)]
+
+
 def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
     """Map one catalog entry to the fields model-switch writes.
 
@@ -214,7 +219,7 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
     derivation emits effort tiers only when an effort option exists, so
     keeping the toggle would expose a cycle OpenCode itself does not.
     """
-    opts = [o for o in (entry.get("reasoning_options") or []) if isinstance(o, dict)]
+    opts = _reasoning_options(entry)
     effort_values: List[str] = []
     for o in opts:
         if o.get("type") == "effort" and not effort_values:
@@ -263,20 +268,11 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
 def no_tiers_declared(entry: Dict[str, Any]) -> bool:
     """True when the entry declares reasoning but none of it yields tiers.
 
-    Covers budget-only entries, bare toggles and effort lists whose values
-    are all skippable — in each case the caller should say so instead of
-    silently writing no variants.
+    Delegates to `derive` so the two can never disagree about what makes a
+    tier — budget-only entries, bare toggles and all-skippable effort lists
+    are exactly the cases whose ``variants`` come back empty.
     """
-    opts = [o for o in (entry.get("reasoning_options") or []) if isinstance(o, dict)]
-    if not opts:
-        return False
-    for o in opts:
-        if o.get("type") != "effort":
-            continue
-        for v in (o.get("values") or []):
-            if isinstance(v, str) and v not in _SKIP_EFFORT_TIERS:
-                return False
-    return True
+    return bool(_reasoning_options(entry)) and not derive(entry)["variants"]
 
 
 def pick(cands: List[Candidate], pin: Optional[str] = None) -> Pick:

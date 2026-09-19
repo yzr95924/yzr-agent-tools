@@ -101,7 +101,7 @@ src/
 │   ├── _compat.py               TOML loader (tomllib/tomli) + 手写 dumper
 │   ├── drivers/
 │   │   ├── base.py              AgentDriver Protocol + Registry
-│   │   ├── _atomic.py           atomic JSON write (driver 共享)
+│   │   ├── _atomic.py           JSON tolerant read + atomic write (driver 共享)
 │   │   ├── claude_code.py       ~/.claude/settings.json 适配器
 │   │   └── opencode.py          ~/.config/opencode/opencode.json 适配器
 │   └── README.md                详细用户文档

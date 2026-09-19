@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, NoReturn, Optional, Tuple
 from model_switch import catalog, paths, ui
 from model_switch.drivers.base import registry
 from model_switch.store import (
+    BOOLEAN_FLAGS,
     ModelEntry,
     Registry,
     State,
@@ -57,20 +58,17 @@ def _ensure_default_registered() -> None:
     from model_switch.drivers.claude_code import ClaudeCodeDriver
     from model_switch.drivers.opencode import OpenCodeDriver
 
-    if "claude-code" not in registry.list():
+    if ClaudeCodeDriver.name not in registry.list():
         registry.register(ClaudeCodeDriver())
     if "opencode" not in registry.list():
         registry.register(OpenCodeDriver())
 
 
 def _die(message) -> NoReturn:
-    """Print ``Error: <message>`` to stderr and exit 1.
-
-    The single failure path for user errors (see the module docstring's exit
-    codes); ``message`` may be an exception or a plain string. Delegates the
-    actual stop to `ui.abort` so every abort shares one channel.
-    """
-    ui.abort(f"Error: {message}")
+    """The single failure path for user errors; ``message`` may be an
+    exception or a plain string. Delegates to `ui.fail`, so the CLI and the
+    ui module cannot drift into two ``Error:`` shapes."""
+    ui.fail(message)
 
 
 def _interactive(args: argparse.Namespace) -> bool:
@@ -862,8 +860,7 @@ def _print_add_summary(entry: ModelEntry, replacing: bool) -> None:
         print(f"  context window  {_format_context(entry.context_window)}")
     if entry.extra.get("reasoning"):
         print("  reasoning       yes")
-    flags = [f for f in ("temperature", "attachment")
-             if entry.extra.get(f) is True]
+    flags = [f for f in BOOLEAN_FLAGS if entry.extra.get(f) is True]
     if flags:
         print("  capabilities    " + ", ".join(flags))
     if entry.extra.get("variants"):
@@ -914,7 +911,7 @@ def _describe_fields(fields: Dict[str, Any]) -> str:
         bits.append("context_window={}".format(fields["context_window"]))
     if fields.get("reasoning"):
         bits.append("reasoning")
-    for flag in ("temperature", "attachment"):
+    for flag in BOOLEAN_FLAGS:
         if fields.get(flag):
             bits.append(flag)
     if fields.get("variants"):
@@ -976,7 +973,7 @@ def _do_model_align(args: argparse.Namespace) -> int:
         if fields["reasoning"] and model.extra.get("reasoning") is not True:
             changes.append("+reasoning")
             model.extra["reasoning"] = True
-        for flag in ("temperature", "attachment"):
+        for flag in BOOLEAN_FLAGS:
             if fields[flag] and model.extra.get(flag) is not True:
                 changes.append("+" + flag)
                 model.extra[flag] = True

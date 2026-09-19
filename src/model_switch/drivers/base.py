@@ -20,6 +20,11 @@ except ImportError:  # Python <3.8
 from model_switch.store import ModelEntry as Model
 
 
+# The driver `_resolve_driver(None)` falls back to. Kept here so the lookup
+# and the registered driver's `name` cannot drift apart.
+DEFAULT_DRIVER_NAME = "claude-code"
+
+
 class AgentDriver(Protocol):
     """Protocol every agent driver must satisfy."""
     name: str
@@ -80,12 +85,12 @@ class DriverRegistry:
         return sorted(self._drivers.keys())
 
     def default(self) -> Optional[AgentDriver]:
-        """Return the default driver (currently: claude-code).
+        """Return the default driver (`DEFAULT_DRIVER_NAME`).
 
         `_ensure_default_registered` always registers claude-code, so this is
         a plain lookup; None means the caller ran before any registration.
         """
-        return self._drivers.get("claude-code")
+        return self._drivers.get(DEFAULT_DRIVER_NAME)
 
 
 # Singleton registry; built-in drivers are registered lazily by

@@ -107,15 +107,14 @@ locally (a bad value makes OpenCode reject the whole file). Declaring a
 modality the upstream doesn't actually accept turns that silent fallback into
 a hard request error, so entries opt in per model.
 """
-import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from model_switch import paths
-from model_switch.drivers._atomic import atomic_write_json
+from model_switch.drivers._atomic import atomic_write_json, read_json
 from model_switch.store import ModelEntry as Model
-from model_switch.store import provider_group_key
+from model_switch.store import BOOLEAN_FLAGS, provider_group_key
 
 
 PROVIDER_ID = "yzr"
@@ -270,7 +269,7 @@ def _render_model_entry(model: Model) -> Dict[str, Any]:
     modalities = _render_modalities(model)
     if modalities is not None:
         entry["modalities"] = modalities
-    for flag in ("temperature", "attachment"):
+    for flag in BOOLEAN_FLAGS:
         if _render_optional_flag(model, flag):
             entry[flag] = True
     display_name = model.extra.get("display_name")
@@ -438,13 +437,7 @@ class OpenCodeDriver:
         self.settings_path = settings_path
 
     def read(self) -> dict:
-        if not self.settings_path.exists():
-            return {}
-        with open(self.settings_path, "r", encoding="utf-8") as f:
-            text = f.read().strip()
-        if not text:
-            return {}
-        return json.loads(text)
+        return read_json(self.settings_path)
 
     def apply(self, models: List[Model], active: Model) -> None:
         """Write the full catalog into the OpenCode config, defaulting to `active`."""
