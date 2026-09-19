@@ -238,6 +238,33 @@ def test_derive_text_only_modalities_stay_undeclared():
 def test_derive_missing_or_invalid_context_is_none():
     assert catalog.derive(_entry())["context_window"] is None
     assert catalog.derive(_entry(limit={"context": 0}))["context_window"] is None
+
+
+def test_derive_capability_flags_only_when_true():
+    """OpenCode's model config treats an absent flag as false, so only a
+    declared ``true`` carries information; false/null/missing derive None."""
+    entry = _entry()
+    assert catalog.derive(entry)["temperature"] is None
+    assert catalog.derive(entry)["attachment"] is None
+    entry["temperature"] = False
+    entry["attachment"] = None
+    fields = catalog.derive(entry)
+    assert fields["temperature"] is None
+    assert fields["attachment"] is None
+    entry["temperature"] = True
+    entry["attachment"] = True
+    fields = catalog.derive(entry)
+    assert fields["temperature"] is True
+    assert fields["attachment"] is True
+
+
+def test_derive_display_name_from_entry_name():
+    entry = _entry()
+    entry["name"] = "  Kimi K3  "
+    assert catalog.derive(entry)["display_name"] == "Kimi K3"
+    entry["name"] = "   "
+    assert catalog.derive(entry)["display_name"] is None
+    assert catalog.derive(_entry())["display_name"] is None
     assert catalog.derive(_entry(limit={"output": 100}))["context_window"] is None
 
 

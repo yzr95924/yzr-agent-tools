@@ -648,6 +648,48 @@ def test_apply_ignores_non_true_reasoning_and_empty_variants(driver, glm_ctx):
     assert entry == {"limit": {"context": 1000000, "output": 131072}}
 
 
+# --- capability flags + display name -----------------------------------------
+
+
+def test_apply_renders_true_capability_flags(driver):
+    """Temperature and attachment pass through when declared true; absent and
+    false render nothing, because OpenCode reads them as false anyway."""
+    entry = _rendered(driver, _model({"temperature": True, "attachment": True}))
+    assert entry["temperature"] is True
+    assert entry["attachment"] is True
+    entry = _rendered(driver, _model({"temperature": False, "attachment": False}))
+    assert "temperature" not in entry
+    assert "attachment" not in entry
+
+
+@pytest.mark.parametrize("key", ["temperature", "attachment"])
+def test_apply_rejects_non_boolean_capability_flags(driver, key):
+    model = _model({key: "yes"})
+    with pytest.raises(ValueError) as excinfo:
+        driver.apply(models=[model], active=model)
+    assert key in str(excinfo.value)
+    assert not driver.settings_path.exists()
+
+
+def test_apply_renders_display_name_as_model_name(driver):
+    entry = _rendered(driver, _model({"display_name": "Kimi K3"}))
+    assert entry["name"] == "Kimi K3"
+
+
+def test_apply_skips_display_name_equal_to_the_model_key(driver):
+    entry = _rendered(driver, _model({"display_name": "m"}))
+    assert "name" not in entry
+
+
+@pytest.mark.parametrize("value", ["", "   ", 7])
+def test_apply_rejects_invalid_display_name(driver, value):
+    model = _model({"display_name": value})
+    with pytest.raises(ValueError) as excinfo:
+        driver.apply(models=[model], active=model)
+    assert "display_name" in str(excinfo.value)
+    assert not driver.settings_path.exists()
+
+
 def test_sync_catalog_keeps_reasoning_and_variants_on_reconcile(driver):
     """Reconcile is a mirror: a second run must reproduce the same model
     block (no drift, no loss)."""

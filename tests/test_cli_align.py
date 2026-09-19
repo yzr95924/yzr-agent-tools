@@ -91,6 +91,69 @@ def test_align_updates_inline_fields_and_renders(yzr_paths):
     assert entry["modalities"]["input"] == ["text", "image"]
 
 
+def test_align_derives_capability_flags_and_display_name(yzr_paths):
+    """Temperature/attachment (only when true) and the human-readable name
+    are derived like the other catalog fields — and a second run is a no-op."""
+    _write_models(yzr_paths["models"], MODEL_TOML)
+    entry = _entry([{"type": "effort", "values": ["low"]}], context=500000)
+    entry["temperature"] = True
+    entry["attachment"] = True
+    entry["name"] = "Fixture Model"
+    _write_catalog(yzr_paths["catalog"], {
+        "fixture": {"api": "https://api.fixture.com/compatible-mode/v1",
+                    "models": {"fixture-model": entry}},
+    })
+    runner(["model", "use", "m", "--driver", "opencode"])
+
+    result = runner(["model", "align"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "+temperature" in result.stdout
+    assert "+attachment" in result.stdout
+    assert "display_name→Fixture Model" in result.stdout
+    m = load_models(yzr_paths["models"]).models["m"]
+    assert m.extra["temperature"] is True
+    assert m.extra["attachment"] is True
+    assert m.extra["display_name"] == "Fixture Model"
+    cfg = json.loads(yzr_paths["opencode"].read_text())
+    rendered = cfg["provider"]["yzr-fixture"]["models"]["fixture-model"]
+    assert rendered["temperature"] is True
+    assert rendered["attachment"] is True
+    assert rendered["name"] == "Fixture Model"
+
+    again = runner(["model", "align"])
+    assert again.exit_code == 0, again.stdout
+    assert "no change" in again.stdout
+
+
+def test_align_skips_capability_flags_that_are_false_or_absent(yzr_paths):
+    """OpenCode reads an absent flag as false, so ``false``/missing derive
+    nothing; a display name equal to the upstream id is not repeated."""
+    _write_models(yzr_paths["models"], MODEL_TOML)
+    entry = _entry([{"type": "effort", "values": ["low"]}], context=500000)
+    entry["temperature"] = False
+    entry["attachment"] = None
+    entry["name"] = "fixture-model"   # same as the upstream id
+    _write_catalog(yzr_paths["catalog"], {
+        "fixture": {"api": "https://api.fixture.com/compatible-mode/v1",
+                    "models": {"fixture-model": entry}},
+    })
+    runner(["model", "use", "m", "--driver", "opencode"])
+
+    result = runner(["model", "align"])
+
+    assert result.exit_code == 0, result.stdout
+    m = load_models(yzr_paths["models"]).models["m"]
+    assert "temperature" not in m.extra
+    assert "attachment" not in m.extra
+    assert "display_name" not in m.extra
+    cfg = json.loads(yzr_paths["opencode"].read_text())
+    rendered = cfg["provider"]["yzr-fixture"]["models"]["fixture-model"]
+    assert "temperature" not in rendered
+    assert "attachment" not in rendered
+    assert "name" not in rendered
+
+
 def test_align_reports_and_keeps_preset_backed_variants(yzr_paths):
     _write_models(yzr_paths["models"], (
         "[[models]]\n"

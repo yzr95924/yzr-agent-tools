@@ -221,6 +221,69 @@ def test_wizard_picks_from_catalog_and_derives_fields(catalog):
                                      "output": ["text"]}
 
 
+def test_wizard_derives_capability_flags_and_display_name(yzr_paths):
+    """The catalog's capability flags (only when true) and the display name
+    are written to models.toml and shown in the summary — the summary reads
+    from the entry, so the two cannot drift."""
+    yzr_paths["catalog"].parent.mkdir(parents=True, exist_ok=True)
+    yzr_paths["catalog"].write_text(json.dumps({
+        "zai": {"id": "zai", "name": "Z.AI",
+                "api": "https://api.z.ai/api/paas/v4",
+                "models": {"glm-5.3": {
+                    "name": "GLM-5.3",
+                    "limit": {"context": 1000000},
+                    "reasoning_options": [{"type": "effort", "values": ["low"]}],
+                    "temperature": True,
+                    "attachment": True,
+                }}},
+    }), encoding="utf-8")
+
+    result = runner(["model", "add"], input="\n".join([
+        ZAI_BASE, "K",
+        "glm-5", "1",             # → zai/glm-5.3
+        "",                       # upstream id = the picked spelling
+        "",                       # local name = resolved id
+        "",                       # context window = catalog default
+        "",                       # description (skip)
+        "y",
+    ]) + "\n")
+
+    assert result.exit_code == 0, result.stdout
+    assert "display name    GLM-5.3" in result.stdout
+    assert "capabilities    temperature, attachment" in result.stdout
+    m = load_models(yzr_paths["models"]).models["glm-5.3"]
+    assert m.extra["display_name"] == "GLM-5.3"
+    assert m.extra["temperature"] is True
+    assert m.extra["attachment"] is True
+
+
+def test_wizard_omits_display_name_equal_to_the_upstream_id(yzr_paths):
+    """A catalog name that just repeats the id must not be copied into
+    models.toml — the picker label falls back to the key by itself."""
+    yzr_paths["catalog"].parent.mkdir(parents=True, exist_ok=True)
+    yzr_paths["catalog"].write_text(json.dumps({
+        "zai": {"id": "zai", "name": "Z.AI",
+                "api": "https://api.z.ai/api/paas/v4",
+                "models": {"glm-5.3": {
+                    "name": "glm-5.3",
+                    "limit": {"context": 1000000},
+                }}},
+    }), encoding="utf-8")
+
+    result = runner(["model", "add"], input="\n".join([
+        ZAI_BASE, "K",
+        "glm-5", "1",
+        "", "",                   # upstream id, local name
+        "", "",                   # context window, description
+        "y",
+    ]) + "\n")
+
+    assert result.exit_code == 0, result.stdout
+    assert "display name" not in result.stdout
+    m = load_models(yzr_paths["models"]).models["glm-5.3"]
+    assert "display_name" not in m.extra
+
+
 def test_wizard_edited_upstream_id_carries_into_the_local_name(catalog):
     """The pick pre-fills the id but does not decide it: every provider spells
     the same model differently, so the typed id wins — and the local-name

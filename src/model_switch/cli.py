@@ -452,7 +452,7 @@ def _do_model_add(args: argparse.Namespace) -> None:
         api_key=api_key,
         context_window=context_window,
         description=description,
-        extra=_build_extra(derived, provider),
+        extra=_build_extra(derived, provider, model_name),
     )
 
     if _interactive(args):
@@ -643,7 +643,8 @@ def _save_and_report(reg: Registry, entry: ModelEntry, replacing: bool) -> None:
               f"your agents.")
 
 
-def _build_extra(derived: Dict[str, Any], provider: Optional[str]) -> dict:
+def _build_extra(derived: Dict[str, Any], provider: Optional[str],
+                 model_name: Optional[str] = None) -> dict:
     """Assemble the passthrough fields the drivers render from `derived`."""
     extra = {}
     if provider:
@@ -654,6 +655,15 @@ def _build_extra(derived: Dict[str, Any], provider: Optional[str]) -> dict:
         extra["variants"] = derived["variants"]
     if derived.get("modalities"):
         extra["modalities"] = derived["modalities"]
+    if derived.get("temperature"):
+        extra["temperature"] = True
+    if derived.get("attachment"):
+        extra["attachment"] = True
+    # The upstream id doubles as OpenCode's fallback display label, so a
+    # display name that just repeats it is noise in models.toml.
+    display_name = derived.get("display_name")
+    if display_name and display_name != model_name:
+        extra["display_name"] = display_name
     return extra
 
 
@@ -846,10 +856,16 @@ def _print_add_summary(entry: ModelEntry, replacing: bool) -> None:
           f"{' (replaces existing)' if replacing else ''}:")
     print(f"  upstream id     {entry.name}")
     print(f"  base URL        {entry.base_url}")
+    if entry.extra.get("display_name"):
+        print(f"  display name    {entry.extra['display_name']}")
     if entry.context_window:
         print(f"  context window  {_format_context(entry.context_window)}")
     if entry.extra.get("reasoning"):
         print("  reasoning       yes")
+    flags = [f for f in ("temperature", "attachment")
+             if entry.extra.get(f) is True]
+    if flags:
+        print("  capabilities    " + ", ".join(flags))
     if entry.extra.get("variants"):
         print("  variants        " + ", ".join(entry.extra["variants"]))
     if entry.extra.get("modalities"):
@@ -892,10 +908,15 @@ def _derive_or_report(model_name: str, base_url: str,
 def _describe_fields(fields: Dict[str, Any]) -> str:
     """One-line summary of the fields `catalog.derive` produced."""
     bits = []
+    if fields.get("display_name"):
+        bits.append('name="{}"'.format(fields["display_name"]))
     if fields.get("context_window"):
         bits.append("context_window={}".format(fields["context_window"]))
     if fields.get("reasoning"):
         bits.append("reasoning")
+    for flag in ("temperature", "attachment"):
+        if fields.get(flag):
+            bits.append(flag)
     if fields.get("variants"):
         bits.append("variants[{}]".format(",".join(fields["variants"])))
     if fields.get("modalities"):
@@ -955,6 +976,15 @@ def _do_model_align(args: argparse.Namespace) -> int:
         if fields["reasoning"] and model.extra.get("reasoning") is not True:
             changes.append("+reasoning")
             model.extra["reasoning"] = True
+        for flag in ("temperature", "attachment"):
+            if fields[flag] and model.extra.get(flag) is not True:
+                changes.append("+" + flag)
+                model.extra[flag] = True
+        display_name = fields["display_name"]
+        if (display_name and display_name != model.name
+                and model.extra.get("display_name") != display_name):
+            changes.append("display_name→{}".format(display_name))
+            model.extra["display_name"] = display_name
         if fields["modalities"] and model.extra.get("modalities") != fields["modalities"]:
             changes.append("modalities→[{}]".format(
                 ",".join(fields["modalities"]["input"])))

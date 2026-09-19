@@ -78,6 +78,17 @@ models.toml (optionally via ``[variants_presets]``, expanded by
 `model_switch.variants.expand`); this driver holds no per-model or per-gateway
 knowledge, so adding a model or an upstream never touches it.
 
+``temperature`` and ``attachment`` mirror the catalog's capability flags and
+are rendered only when ``true``: OpenCode treats an absent flag as false, so
+writing ``false`` adds nothing. ``temperature`` has a visible consumer — when
+false, OpenCode omits the parameter and a per-agent temperature never reaches
+the request; ``attachment`` feeds the model object's ``capabilities`` (the
+config default for a model OpenCode cannot look up is false). ``display_name``
+renders as the model-level ``name``, which is only the picker label: OpenCode
+falls back to the model key when it is absent, and both the key and ``api.id``
+stay the upstream id. A ``display_name`` equal to that id is skipped rather
+than repeated.
+
 Declaring ``variants`` makes the declaration authoritative. OpenCode *merges*
 user tiers over built-in ones it computes per model (matched on the rendered
 model key, the provider id or the base URL), so tiers nobody declared would
@@ -197,6 +208,23 @@ def _render_modalities(model: Model) -> Optional[Dict[str, List[str]]]:
     return out
 
 
+def _render_optional_flag(model: Model, key: str) -> bool:
+    """Validate ``model.extra[key]`` as a boolean flag; render only ``True``.
+
+    OpenCode treats an omitted flag as false, so ``false`` and absent render
+    the same (nothing). Anything else is rejected locally — OpenCode rejects
+    the *whole* config file on a schema violation, taking every model down.
+    """
+    value = model.extra.get(key)
+    if value is None or value is False:
+        return False
+    if value is not True:
+        raise ValueError(
+            "model {!r}: {} must be true or false, got {!r}.".format(
+                model.model_id, key, value))
+    return True
+
+
 def _mute_undeclared_builtins(variants: Dict[str, Any]) -> Dict[str, Any]:
     """Return `variants` plus ``{disabled: True}`` for omitted built-in tiers.
 
@@ -215,15 +243,18 @@ def _mute_undeclared_builtins(variants: Dict[str, Any]) -> Dict[str, Any]:
 def _render_model_entry(model: Model) -> Dict[str, Any]:
     """Render the per-model object stored under ``provider.<id>.models``.
 
-    ``reasoning`` is passed through as-is. A ``variants`` table is rendered
-    with the undeclared built-in tiers muted when the model is a reasoning one
-    (see `_mute_undeclared_builtins`), so it is exactly what ctrl+t offers;
+    ``reasoning`` and the capability flags (``temperature``/``attachment``)
+    are passed through. A ``variants`` table is rendered with the undeclared
+    built-in tiers muted when the model is a reasoning one (see
+    `_mute_undeclared_builtins`), so it is exactly what ctrl+t offers;
     without ``reasoning`` there are no built-ins to mute and the table passes
     through as before. A ``variants`` value may have been materialized from a
     preset upstream of here. ``modalities`` is validated by
-    `_render_modalities`; ``limit`` appears only when ``context_window`` is
-    known. With nothing set this returns ``{}`` — the same shape as before
-    those fields existed.
+    `_render_modalities`, the capability flags by `_render_optional_flag`;
+    ``display_name`` becomes the model-level ``name`` unless it repeats the
+    upstream id; ``limit`` appears only when ``context_window`` is known.
+    With nothing set this returns ``{}`` — the same shape as before those
+    fields existed.
     """
     entry: Dict[str, Any] = {}
     if model.extra.get("reasoning") is True:
@@ -239,6 +270,17 @@ def _render_model_entry(model: Model) -> Dict[str, Any]:
     modalities = _render_modalities(model)
     if modalities is not None:
         entry["modalities"] = modalities
+    for flag in ("temperature", "attachment"):
+        if _render_optional_flag(model, flag):
+            entry[flag] = True
+    display_name = model.extra.get("display_name")
+    if display_name is not None:
+        if not isinstance(display_name, str) or not display_name.strip():
+            raise ValueError(
+                "model {!r}: display_name must be a non-empty string, got "
+                "{!r}.".format(model.model_id, display_name))
+        if display_name != model.name:
+            entry["name"] = display_name
     if model.context_window is not None:
         entry["limit"] = {
             "context": model.context_window,

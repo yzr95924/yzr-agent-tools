@@ -16,10 +16,12 @@ silently mis-configures reasoning tiers.
 
 Fields derived (see `derive`): ``context_window`` (from ``limit.context``),
 ``reasoning``, ``variants`` (one tier per declared effort value, plus
-``none`` translated to a thinking-off tier when declared) and ``modalities``.
-A ``toggle`` option adds no tier of its own, mirroring OpenCode's own
-derivation; budget ladders are never invented, so a model declaring only
-``budget_tokens`` gets no tiers.
+``none`` translated to a thinking-off tier when declared), ``modalities``,
+``temperature`` / ``attachment`` (only when the entry declares ``true`` —
+OpenCode treats an omitted flag as false) and ``display_name`` (the entry's
+human-readable ``name``). A ``toggle`` option adds no tier of its own,
+mirroring OpenCode's own derivation; budget ladders are never invented, so a
+model declaring only ``budget_tokens`` gets no tiers.
 
 Known limits, by design:
 
@@ -194,8 +196,11 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns ``context_window`` (``limit.context``), ``reasoning`` (any
     ``reasoning_options`` declared), ``variants`` (``{}`` when the entry
-    declares none we can honor) and ``modalities`` (``None`` when the entry
-    is text-only — declaring that adds nothing).
+    declares none we can honor), ``modalities`` (``None`` when the entry
+    is text-only — declaring that adds nothing), ``temperature`` /
+    ``attachment`` (``True`` only when the entry says so, else ``None`` —
+    OpenCode's own default for both is false) and ``display_name`` (the
+    entry's human-readable ``name``, or ``None``).
 
     Tier names follow the entry's effort values in declaration order: each
     becomes an effort tier, while ``none`` becomes a thinking-off tier (see
@@ -230,11 +235,22 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
         outputs = [m for m in (mods.get("output") or []) if isinstance(m, str)]
         modalities = {"input": inputs, "output": outputs or ["text"]}
 
+    display_name = entry.get("name")
+    if isinstance(display_name, str) and display_name.strip():
+        display_name = display_name.strip()
+    else:
+        display_name = None
+
     return {
         "context_window": context,
         "reasoning": bool(opts),
         "variants": variants,
         "modalities": modalities,
+        # OpenCode's model config treats an absent flag as false, so only a
+        # declared ``true`` carries information.
+        "temperature": True if entry.get("temperature") is True else None,
+        "attachment": True if entry.get("attachment") is True else None,
+        "display_name": display_name,
     }
 
 
