@@ -787,41 +787,55 @@ def _pick_catalog_model(base_url: str) -> Optional[catalog.Row]:
     host_keys = {_catalog_row_key(r) for r in host_rows}
     print(f"catalog: {desc} — {len(host_rows)} model(s) on {host}")
     while True:
-        raw = ui.ask(f"Search models (Enter = list, '{_SEARCH_ALL} <term>' = "
-                     f"every provider, '{_SEARCH_SKIP}' = type the id by "
-                     f"hand): ").strip()
-        head, rest = _split_search(raw)
-        if head == _SEARCH_SKIP:
+        action, row = _search_once(data, host, host_rows, host_keys)
+        if action == "skip":
             return None
-        wide = head == _SEARCH_ALL
-        query = rest if wide else raw
-        if wide and not query:
-            print(f"  '{_SEARCH_ALL}' needs a search term — the full catalog "
-                  f"is too long to list (e.g. '{_SEARCH_ALL} qwen')")
-            continue
-        if raw == "":
-            rows = host_rows
-        else:
-            rows = _rank_host_first(
-                catalog.search(data, query, host=None if wide else host),
-                host_keys)
-        if not rows:
-            _print_no_catalog_rows(host, query, wide)
-            continue
-        title = f"  {len(rows)} match(es):"
-        if wide:
-            title += f"  (host {host} first, then every provider)"
-        idx = ui.pick_one(title, rows, _catalog_row_renderer(host_keys),
-                          default=0, allow_back=True)
-        if idx is None:
-            continue  # 'b' — refine the search
-        row = rows[idx]
-        if _catalog_row_key(row) not in host_keys:
-            print(f"  note: fields and id come from {row.provider}'s catalog "
-                  f"entry, not {host}'s — it spells the model {row.model!r}, "
-                  f"which your endpoint may not accept; verify the context "
-                  f"window and modalities too")
-        return row
+        if action == "pick":
+            return row
+
+
+def _search_once(data: Dict[str, Any], host: str, host_rows: List[catalog.Row],
+                 host_keys: set) -> Tuple[str, Optional[catalog.Row]]:
+    """Run one search prompt + menu; returns ``(action, row)``.
+
+    ``action`` is ``"pick"`` (row is set), ``"skip"`` (fall back to typing
+    the id by hand) or ``"retry"`` (refine the query, or 'b' from the menu).
+    """
+    raw = ui.ask(f"Search models (Enter = list, '{_SEARCH_ALL} <term>' = "
+                 f"every provider, '{_SEARCH_SKIP}' = type the id by "
+                 f"hand): ").strip()
+    head, rest = _split_search(raw)
+    if head == _SEARCH_SKIP:
+        return "skip", None
+    wide = head == _SEARCH_ALL
+    query = rest if wide else raw
+    if wide and not query:
+        print(f"  '{_SEARCH_ALL}' needs a search term — the full catalog "
+              f"is too long to list (e.g. '{_SEARCH_ALL} qwen')")
+        return "retry", None
+    if raw == "":
+        rows = host_rows
+    else:
+        rows = _rank_host_first(
+            catalog.search(data, query, host=None if wide else host),
+            host_keys)
+    if not rows:
+        _print_no_catalog_rows(host, query, wide)
+        return "retry", None
+    title = f"  {len(rows)} match(es):"
+    if wide:
+        title += f"  (host {host} first, then every provider)"
+    idx = ui.pick_one(title, rows, _catalog_row_renderer(host_keys),
+                      default=0, allow_back=True)
+    if idx is None:
+        return "retry", None  # 'b' — refine the search
+    row = rows[idx]
+    if _catalog_row_key(row) not in host_keys:
+        print(f"  note: fields and id come from {row.provider}'s catalog "
+              f"entry, not {host}'s — it spells the model {row.model!r}, "
+              f"which your endpoint may not accept; verify the context "
+              f"window and modalities too")
+    return "pick", row
 
 
 def _render_catalog_row(row: catalog.Row) -> str:
@@ -922,6 +936,53 @@ def _describe_fields(fields: Dict[str, Any]) -> str:
     return ", ".join(bits) or "nothing derivable"
 
 
+def _align_one(model: ModelEntry, fields: Dict[str, Any],
+               entry: Dict[str, Any]) -> Tuple[List[str], List[str], bool]:
+    """Reconcile one model with the catalog entry its `fields` came from.
+
+    Mutates `model` in place and returns ``(changes, notes, preset_skip)``
+    for the row printer. Additive only: a field the entry no longer declares
+    is left alone, never unset. ``preset_skip`` marks the one case the caller
+    counts as skipped — variant tiers backed by a shared `variants_preset`
+    (rewriting that preset could silently change every model referencing it).
+    """
+    changes: List[str] = []
+    notes: List[str] = []
+    preset_skip = False
+
+    if fields["context_window"] and model.context_window != fields["context_window"]:
+        changes.append("context_window {}→{}".format(
+            model.context_window, fields["context_window"]))
+        model.context_window = fields["context_window"]
+    if fields["reasoning"] and model.extra.get("reasoning") is not True:
+        changes.append("+reasoning")
+        model.extra["reasoning"] = True
+    for flag in BOOLEAN_FLAGS:
+        if fields[flag] and model.extra.get(flag) is not True:
+            changes.append("+" + flag)
+            model.extra[flag] = True
+    display_name = fields["display_name"]
+    if (display_name and display_name != model.name
+            and model.extra.get("display_name") != display_name):
+        changes.append("display_name→{}".format(display_name))
+        model.extra["display_name"] = display_name
+    if fields["modalities"] and model.extra.get("modalities") != fields["modalities"]:
+        changes.append("modalities→[{}]".format(
+            ",".join(fields["modalities"]["input"])))
+        model.extra["modalities"] = fields["modalities"]
+    if fields["variants"]:
+        if PRESET_REF_KEY in model.extra:
+            preset_skip = True
+            notes.append("variants from preset {!r} left alone".format(
+                model.extra[PRESET_REF_KEY]))
+        elif model.extra.get(VARIANTS_KEY) != fields["variants"]:
+            changes.append("variants[{}]".format(",".join(fields["variants"])))
+            model.extra[VARIANTS_KEY] = fields["variants"]
+    elif catalog.no_tiers_declared(entry):
+        notes.append("declared options yield no tiers")
+    return changes, notes, preset_skip
+
+
 def _do_model_align(args: argparse.Namespace) -> int:
     """Reconcile models.toml with OpenCode's catalog cache.
 
@@ -963,40 +1024,11 @@ def _do_model_align(args: argparse.Namespace) -> int:
             print("{:<{w}}  skip     -  {}".format(model_id, detail, w=width))
             continue
 
-        fields = catalog.derive(picked.candidate.entry)
-        changes: List[str] = []
-        notes: List[str] = []
-        if fields["context_window"] and model.context_window != fields["context_window"]:
-            changes.append("context_window {}→{}".format(
-                model.context_window, fields["context_window"]))
-            model.context_window = fields["context_window"]
-        if fields["reasoning"] and model.extra.get("reasoning") is not True:
-            changes.append("+reasoning")
-            model.extra["reasoning"] = True
-        for flag in BOOLEAN_FLAGS:
-            if fields[flag] and model.extra.get(flag) is not True:
-                changes.append("+" + flag)
-                model.extra[flag] = True
-        display_name = fields["display_name"]
-        if (display_name and display_name != model.name
-                and model.extra.get("display_name") != display_name):
-            changes.append("display_name→{}".format(display_name))
-            model.extra["display_name"] = display_name
-        if fields["modalities"] and model.extra.get("modalities") != fields["modalities"]:
-            changes.append("modalities→[{}]".format(
-                ",".join(fields["modalities"]["input"])))
-            model.extra["modalities"] = fields["modalities"]
-        if fields["variants"]:
-            if PRESET_REF_KEY in model.extra:
-                skipped += 1
-                notes.append("variants from preset {!r} left alone".format(
-                    model.extra[PRESET_REF_KEY]))
-            elif model.extra.get(VARIANTS_KEY) != fields["variants"]:
-                changes.append("variants[{}]".format(",".join(fields["variants"])))
-                model.extra[VARIANTS_KEY] = fields["variants"]
-        elif catalog.no_tiers_declared(picked.candidate.entry):
-            notes.append("declared options yield no tiers")
-
+        entry = picked.candidate.entry
+        changes, notes, preset_skip = _align_one(
+            model, catalog.derive(entry), entry)
+        if preset_skip:
+            skipped += 1
         if changes:
             changed += 1
         print("{:<{w}}  {:<7}  {}  {}".format(

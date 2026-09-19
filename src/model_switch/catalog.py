@@ -212,19 +212,38 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
     ``attachment`` (``True`` only when the entry says so, else ``None`` —
     OpenCode's own default for both is false) and ``display_name`` (the
     entry's human-readable ``name``, or ``None``).
-
-    Tier names follow the entry's effort values in declaration order: each
-    becomes an effort tier, while ``none`` becomes a thinking-off tier (see
-    ``_SKIP_EFFORT_TIERS``). A ``toggle`` option adds nothing: OpenCode's own
-    derivation emits effort tiers only when an effort option exists, so
-    keeping the toggle would expose a cycle OpenCode itself does not.
     """
-    opts = _reasoning_options(entry)
+    limit = entry.get("limit") or {}
+    context = limit.get("context") if isinstance(limit, dict) else None
+    if not (isinstance(context, int) and context > 0):
+        context = None
+    return {
+        "context_window": context,
+        "reasoning": bool(_reasoning_options(entry)),
+        "variants": _derive_variants(entry),
+        "modalities": _derive_modalities(entry),
+        # OpenCode's model config treats an absent flag as false, so only a
+        # declared ``true`` carries information.
+        "temperature": True if entry.get("temperature") is True else None,
+        "attachment": True if entry.get("attachment") is True else None,
+        "display_name": _derive_display_name(entry),
+    }
+
+
+def _derive_variants(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """The effort tiers the entry yields, in declaration order.
+
+    Each effort value becomes a tier; ``none`` becomes a thinking-off tier
+    (see ``_SKIP_EFFORT_TIERS``), and ``minimal`` is skipped because the
+    Anthropic effort enum has no room for it. A ``toggle`` adds nothing:
+    OpenCode's own derivation emits effort tiers only when an effort option
+    exists, so keeping the toggle would expose a cycle OpenCode itself does
+    not. Budget ladders are never invented.
+    """
     effort_values: List[str] = []
-    for o in opts:
+    for o in _reasoning_options(entry):
         if o.get("type") == "effort" and not effort_values:
             effort_values = [v for v in (o.get("values") or []) if isinstance(v, str)]
-
     variants: Dict[str, Any] = {}
     for v in effort_values:
         if v == "none":
@@ -233,36 +252,31 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
             continue
         else:
             variants[v] = {"effort": v, "thinking": {"type": "adaptive"}}
+    return variants
 
-    limit = entry.get("limit") or {}
-    context = limit.get("context") if isinstance(limit, dict) else None
-    if not (isinstance(context, int) and context > 0):
-        context = None
 
+def _derive_modalities(entry: Dict[str, Any]) -> Optional[Dict[str, List[str]]]:
+    """Input/output modalities, or ``None`` when text-only.
+
+    Text-only needs no declaration — undeclared parts are already blocked,
+    which is the same outcome. ``video``/``audio`` inputs and any non-text
+    output are dropped: the catalog describes an OpenAI-compatible endpoint,
+    the Anthropic Messages path has no such parts.
+    """
     mods = entry.get("modalities") or {}
     inputs = [m for m in (mods.get("input") or []) if m in _SUPPORTED_INPUT]
-    modalities = None
-    if inputs and inputs != ["text"]:
-        outputs = [m for m in (mods.get("output") or []) if m in _SUPPORTED_OUTPUT]
-        modalities = {"input": inputs, "output": outputs or ["text"]}
+    if not inputs or inputs == ["text"]:
+        return None
+    outputs = [m for m in (mods.get("output") or []) if m in _SUPPORTED_OUTPUT]
+    return {"input": inputs, "output": outputs or ["text"]}
 
-    display_name = entry.get("name")
-    if isinstance(display_name, str) and display_name.strip():
-        display_name = display_name.strip()
-    else:
-        display_name = None
 
-    return {
-        "context_window": context,
-        "reasoning": bool(opts),
-        "variants": variants,
-        "modalities": modalities,
-        # OpenCode's model config treats an absent flag as false, so only a
-        # declared ``true`` carries information.
-        "temperature": True if entry.get("temperature") is True else None,
-        "attachment": True if entry.get("attachment") is True else None,
-        "display_name": display_name,
-    }
+def _derive_display_name(entry: Dict[str, Any]) -> Optional[str]:
+    """The entry's human-readable name, stripped; ``None`` when blank."""
+    name = entry.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None
 
 
 def no_tiers_declared(entry: Dict[str, Any]) -> bool:

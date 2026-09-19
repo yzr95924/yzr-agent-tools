@@ -362,9 +362,8 @@ def _group_assignments(models: List[Model]) -> Tuple[Dict[_GroupKey, List[Model]
     with derived slugs; leftovers get ``-2``/``-3`` suffixes in sorted order,
     so repeated renders are byte-stable. All models declaring one name must
     share one upstream — a partial key rotation fails loudly instead of
-    silently splitting the group in two. Duplicate model names within a group
-    would overwrite each other in the provider's ``models`` map — rejected
-    loudly too.
+    silently splitting the group in two; `_validate_unique_model_names`
+    covers the other collision.
     """
     groups: Dict[_GroupKey, List[Model]] = {}
     for m in models:
@@ -390,6 +389,16 @@ def _group_assignments(models: List[Model]) -> Tuple[Dict[_GroupKey, List[Model]
                       key=lambda k: (k[1], k[2])):
         assign(key, _upstream_slug(key[1]))
 
+    _validate_unique_model_names(groups)
+    return groups, pid_by_key
+
+
+def _validate_unique_model_names(groups: Dict[_GroupKey, List[Model]]) -> None:
+    """Reject two models sharing one name within a group.
+
+    They would overwrite each other in the provider's ``models`` map, so the
+    collision fails loudly instead of silently dropping a model.
+    """
     for members in groups.values():
         seen = set()
         for m in members:
@@ -399,7 +408,6 @@ def _group_assignments(models: List[Model]) -> Tuple[Dict[_GroupKey, List[Model]
                     "{!r} is claimed by multiple models on {}".format(
                         m.name, m.base_url))
             seen.add(m.name)
-    return groups, pid_by_key
 
 
 def _provider_layout(models: List[Model]) -> Tuple[Dict[_GroupKey, str], Dict[_GroupKey, List[Model]], Dict[str, str]]:
