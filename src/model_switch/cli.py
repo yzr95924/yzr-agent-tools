@@ -27,6 +27,7 @@ from model_switch.store import (
     ModelEntry,
     Registry,
     State,
+    StoreError,
     load_models,
     load_state,
     provider_group_key,
@@ -1224,11 +1225,9 @@ def _do_model_import(args: argparse.Namespace) -> None:
         _die(f"{src_path} does not exist.")
 
     try:
-        result = import_from_path(src_path)
+        incoming = import_from_path(src_path)
     except _ImportError as e:
         _die(f"importing {src_path}: {e}")
-
-    incoming = result.registry
 
     if args.merge:
         existing = load_models(paths.models_file())
@@ -1275,8 +1274,13 @@ def _do_status(args: argparse.Namespace) -> None:
     if not state.active_main:
         print("active main:  (none)")
     else:
-        print(f"active main:  {state.active_main} "
-              f"(model_name: {reg.models[state.active_main].name})")
+        entry = reg.models.get(state.active_main)
+        if entry is None:
+            # state.toml can outlive an entry deleted by hand; status is a
+            # read-only command and must still answer.
+            print(f"active main:  {state.active_main} (missing from models.toml)")
+        else:
+            print(f"active main:  {state.active_main} (model_name: {entry.name})")
 
     if args.all_drivers:
         _ensure_default_registered()
@@ -1305,6 +1309,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         # A wizard interrupted mid-question must not print a traceback and,
         # more importantly, must not have written anything yet.
         ui.abort("Aborted.", code=130)
+    except StoreError as e:
+        # A malformed models.toml / state.toml is a user error like any other,
+        # not a traceback.
+        _die(e)
 
 
 def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:

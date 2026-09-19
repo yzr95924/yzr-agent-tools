@@ -362,6 +362,34 @@ def test_status_when_no_active_model(yzr_paths):
     assert result.exit_code == 0, result.stdout
     assert "active main:  (none)" in result.stdout
 
+
+def test_status_survives_an_active_model_deleted_by_hand(yzr_paths):
+    """state.toml can outlive a hand-deleted entry; status is read-only and
+    must answer instead of raising KeyError."""
+    runner([
+        "model", "add", "big",
+        "--base-url", "https://x", "--api-key", "K", "--model-name", "big",
+    ])
+    runner(["model", "use", "big"])
+    yzr_paths["models"].write_text("", encoding="utf-8")  # remove entry by hand
+
+    result = runner(["status"])
+    assert result.exit_code == 0, result.stdout
+    assert "active main:  big (missing from models.toml)" in result.stdout
+
+
+def test_corrupt_models_toml_fails_with_one_line(yzr_paths):
+    """A malformed models.toml is a user error: exit 1 + message, not a
+    traceback escaping past the store's StoreError."""
+    yzr_paths["models"].write_text('[[models]]\nmodel_id = "m"\n# no name\n',
+                                   encoding="utf-8")
+
+    result = runner(["model", "list"])
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "name" in result.stderr
+    assert "Traceback" not in result.stderr
+
 # --- interactive pickers (name omitted) ---------------------------------------
 
 def _seed_two(yzr_paths):

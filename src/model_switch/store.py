@@ -156,6 +156,41 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 # ---- models.toml -------------------------------------------------------------
 
+def entry_from_dict(entry: Dict[str, Any]) -> ModelEntry:
+    """Validate and convert one ``[[models]]`` table.
+
+    The single owner of the entry schema — required fields (``api_key``
+    included: it is the sole credential source), the ``context_window``
+    type, the known/unknown split from `_MODEL_ENTRY_FIELDS`, and the
+    api_key/description normalization. `load_models` and the llmw importer
+    both go through it, so an imported file cannot produce an entry that
+    `load_models` would then refuse.
+    """
+    if not isinstance(entry, dict):
+        raise StoreError(
+            "each [[models]] entry must be a table, got: {!r}".format(type(entry)))
+    for required in ("model_id", "name", "base_url"):
+        if required not in entry:
+            raise MissingRequiredField(
+                "[[models]] entry missing {!r}: {}".format(required, entry))
+    if not entry.get("api_key"):
+        raise MissingRequiredField(
+            "[[models]] entry must have 'api_key': {}".format(entry))
+    context_window = entry.get("context_window")
+    if context_window is not None and not isinstance(context_window, int):
+        raise InvalidContextWindow(
+            "context_window must be int, got: {!r}".format(type(context_window)))
+    return ModelEntry(
+        model_id=str(entry["model_id"]),
+        name=str(entry["name"]),
+        base_url=str(entry["base_url"]),
+        api_key=str(entry["api_key"]),
+        context_window=context_window,
+        description=(str(entry["description"]) if entry.get("description") else None),
+        extra={k: v for k, v in entry.items() if k not in _MODEL_ENTRY_FIELDS},
+    )
+
+
 def load_models(path: Path) -> Registry:
     """Load `models.toml`. Missing file -> empty Registry.
 
@@ -175,53 +210,11 @@ def load_models(path: Path) -> Registry:
         reg.extra_top[k] = v
 
     for entry in raw.get("models", []) or []:
-        if not isinstance(entry, dict):
-            raise StoreError(
-                "models.toml: each [[models]] entry must be a table, got: {!r}".format(type(entry))
-            )
-
-        # Required fields
-        for required in ("model_id", "name", "base_url"):
-            if required not in entry:
-                raise MissingRequiredField(
-                    "models.toml: [[models]] entry missing {!r}: {}".format(
-                        required, entry
-                    )
-                )
-
-        # `api_key` is required — it's the sole credential source.
-        if "api_key" not in entry:
-            raise MissingRequiredField(
-                "models.toml: [[models]] entry must have 'api_key': {}".format(entry)
-            )
-
-        model_id = str(entry["model_id"])
-        if model_id in reg.models:
+        model = entry_from_dict(entry)
+        if model.model_id in reg.models:
             raise DuplicateModelId(
-                "models.toml: duplicate model_id {!r}".format(model_id)
-            )
-
-        # Optional fields
-        cw = entry.get("context_window")
-        if cw is not None and not isinstance(cw, int):
-            raise InvalidContextWindow(
-                "models.toml: context_window must be int, got: {!r}".format(type(cw))
-            )
-
-        # Anything else goes into extra.
-        extra = {
-            k: v for k, v in entry.items() if k not in _MODEL_ENTRY_FIELDS
-        }
-
-        reg.models[model_id] = ModelEntry(
-            model_id=model_id,
-            name=str(entry["name"]),
-            base_url=str(entry["base_url"]),
-            api_key=(str(entry["api_key"]) if entry.get("api_key") else None),
-            context_window=cw,
-            description=(str(entry["description"]) if entry.get("description") else None),
-            extra=extra,
-        )
+                "models.toml: duplicate model_id {!r}".format(model.model_id))
+        reg.models[model.model_id] = model
     return reg
 
 

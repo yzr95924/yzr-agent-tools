@@ -215,3 +215,23 @@ def test_model_import_merge_adds_provider_keeps_default(yzr_paths):
     cfg = json.loads(yzr_paths["opencode"].read_text())
     assert "yzr-kimi" in cfg["provider"]
     assert cfg["model"] == "yzr-zai/glm-4"  # default preserved
+
+
+def test_model_import_rejects_an_entry_with_no_api_key(yzr_paths):
+    """The store refuses a keyless entry; import must fail before writing
+    rather than produce a models.toml no command can load."""
+    _add(runner, "glm", key="K1", model_name="glm-4",
+         base_url="https://api.z.ai/api/anthropic")
+    before = yzr_paths["models"].read_text()
+
+    src = yzr_paths["config_dir"] / "incoming.toml"
+    src.write_text(
+        "[[models]]\n"
+        'model_id = "keyless"\nname = "m"\nbase_url = "https://n"\n',
+        encoding="utf-8",
+    )
+    result = runner(["model", "import", str(src)])
+
+    assert result.exit_code == 1
+    assert "api_key" in result.stderr
+    assert yzr_paths["models"].read_text() == before

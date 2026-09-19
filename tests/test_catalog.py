@@ -273,6 +273,14 @@ def test_derive_modalities_without_text_input_is_none():
     assert fields["modalities"] is None
 
 
+def test_derive_drops_output_modalities_the_anthropic_path_cannot_produce():
+    """Entries describe their provider's OpenAI-compatible endpoint, where a
+    TTS model may declare audio output — this path only ever returns text."""
+    fields = catalog.derive(_entry(
+        modalities={"input": ["text", "image"], "output": ["audio"]}))
+    assert fields["modalities"] == {"input": ["text", "image"], "output": ["text"]}
+
+
 # --- search --------------------------------------------------------------------
 
 def _search_cache():

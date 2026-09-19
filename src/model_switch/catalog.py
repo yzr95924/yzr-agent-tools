@@ -57,6 +57,12 @@ from model_switch import paths
 # undeclared parts are already blocked, which is the same outcome.
 _SUPPORTED_INPUT = ("text", "image", "pdf")
 
+# Output modalities worth declaring: the Anthropic Messages path produces
+# text, full stop. Catalog entries describe their provider's OpenAI-compatible
+# endpoint, where an entry may declare audio output (a TTS model); mirroring
+# that would advertise an output this path can never return.
+_SUPPORTED_OUTPUT = ("text",)
+
 # Effort values that never become an ``effort`` tier. ``none`` is not here:
 # it becomes a thinking-off tier instead (see `derive`). ``minimal`` is: it
 # means "a little thinking", not "no thinking", and the Anthropic effort enum
@@ -232,7 +238,7 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
     inputs = [m for m in (mods.get("input") or []) if m in _SUPPORTED_INPUT]
     modalities = None
     if inputs and inputs != ["text"]:
-        outputs = [m for m in (mods.get("output") or []) if isinstance(m, str)]
+        outputs = [m for m in (mods.get("output") or []) if m in _SUPPORTED_OUTPUT]
         modalities = {"input": inputs, "output": outputs or ["text"]}
 
     display_name = entry.get("name")
