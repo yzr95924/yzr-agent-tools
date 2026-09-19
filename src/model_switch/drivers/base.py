@@ -41,9 +41,10 @@ class AgentDriver(Protocol):
     def apply(self, models: List[Model], active: Model) -> None:
         """Write the active model into the agent's config file.
 
-        `models` is the full registry list; single-slot drivers only render
-        `active`, catalog drivers mirror the whole list and set `active` as
-        the default pointer.
+        `models` is the full registry list; single-slot drivers ignore it and
+        render only `active`, catalog drivers mirror the whole list and set
+        `active` as the default pointer. The uniform signature is deliberate:
+        the CLI loops over drivers without branching on their kind.
         """
         ...
 
@@ -51,12 +52,17 @@ class AgentDriver(Protocol):
         """Return the env-relevant subset of the current config."""
         ...
 
-    # Catalog-capable drivers (supports_catalog=True) additionally implement
-    # `sync_catalog(models)` — reconcile the agent's catalog with `models`
-    # without changing the default pointer unless it vanished. Single-slot
-    # drivers implement `clear()` — drop the managed slot's keys. The CLI
-    # probes `supports_catalog` and calls the matching method; neither is
-    # part of the mandatory protocol.
+    # Optional methods, probed by the CLI with getattr:
+    #
+    # - `validate(models, active=None)` — render without writing and raise
+    #   `ValueError` on anything the write would reject. Catalog-capable
+    #   drivers should implement it so `model use` can fail before touching
+    #   any agent config; a driver with nothing to pre-flight may omit it.
+    # - catalog-capable drivers (supports_catalog=True) implement
+    #   `sync_catalog(models)` — reconcile the agent's catalog with `models`
+    #   without changing the default pointer unless it vanished.
+    # - single-slot drivers implement `clear()` — drop the managed slot's
+    #   keys.
 
 
 class DriverRegistry:

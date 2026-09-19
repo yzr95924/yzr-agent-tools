@@ -169,9 +169,10 @@ def _sync_catalog(reg: Registry) -> None:
     targeted `model use` creates them).
 
     Takes the Registry (not just the model list) so variant presets declared
-    at the top level can be expanded before rendering. Grouping errors
-    (conflicting provider declarations, duplicate names) surface as a clean
-    one-line error instead of a traceback.
+    at the top level can be expanded before rendering. Each driver validates
+    its render right before it writes, and grouping errors (conflicting
+    provider declarations, duplicate names) surface as a clean one-line error
+    instead of a traceback.
     """
     models = _expand_or_die(reg)
     try:
@@ -180,6 +181,17 @@ def _sync_catalog(reg: Registry) -> None:
                 d.sync_catalog(models)
     except ValueError as e:
         _die(e)
+
+
+def _validate_driver(driver, models: List[ModelEntry],
+                     active: Optional[ModelEntry] = None) -> None:
+    """Run a driver's optional pre-flight render (see `drivers.base`).
+
+    Drivers without a `validate` method have nothing to pre-flight.
+    """
+    validate = getattr(driver, "validate", None)
+    if validate is not None:
+        validate(models, active)
 
 
 def _clear_active_if_orphaned(reg: Registry) -> None:
@@ -642,8 +654,13 @@ def _save_and_report(reg: Registry, entry: ModelEntry, replacing: bool) -> None:
 
 
 def _build_extra(derived: Dict[str, Any], provider: Optional[str],
-                 model_name: Optional[str] = None) -> dict:
-    """Assemble the passthrough fields the drivers render from `derived`."""
+                 model_name: str) -> dict:
+    """Assemble the passthrough fields the drivers render from `derived`.
+
+    ``model_name`` is the resolved upstream id and is required: the
+    `display_name` comparison against it is what keeps the entry from
+    repeating the id as its own label.
+    """
     extra = {}
     if provider:
         extra["provider"] = provider
@@ -1222,9 +1239,15 @@ def _do_model_use(args: argparse.Namespace) -> None:
     # Validate the active model has a key before touching any driver config.
     _resolve_api_key(main_model)
 
+    drivers = _resolve_drivers(args)
     applied = []
     try:
-        for driver in _resolve_drivers(args):
+        # Fail fast: every driver validates its whole render before any of
+        # them writes, so one malformed entry cannot leave one agent switched
+        # and another untouched.
+        for driver in drivers:
+            _validate_driver(driver, list(expanded.values()), main_model)
+        for driver in drivers:
             driver.apply(models=list(expanded.values()), active=main_model)
             applied.append(driver)
     except ValueError as e:

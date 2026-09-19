@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from model_switch.store import load_models, load_state
+from model_switch.store import load_models, load_state, save_models
 
 from _cli_runner import invoke_cli as runner  # `runner(args, input=...)` mirrors CliRunner
 
@@ -326,6 +326,29 @@ def test_model_use_all_drivers_flag_writes_both_and_lists_paths(yzr_paths):
     # Output names every driver it wrote, not just the last one.
     assert "claude-code" in result.stdout
     assert "opencode" in result.stdout
+
+
+def test_model_use_all_drivers_validates_before_any_write(yzr_paths):
+    """A render the second driver would reject must stop the first driver
+    from writing too — otherwise one agent ends up switched and the other
+    untouched, with state.toml still naming the old model."""
+    runner([
+        "model", "add", "glm-z1",
+        "--base-url", "https://x", "--api-key", "K", "--model-name", "glm-4",
+    ])
+    # Hand-write a modalities value the OpenCode driver rejects locally.
+    reg = load_models(yzr_paths["models"])
+    reg.models["glm-z1"].extra["modalities"] = {
+        "input": ["text", "nonsense"], "output": ["text"]}
+    save_models(yzr_paths["models"], reg)
+
+    result = runner(["model", "use", "glm-z1", "--all-drivers"])
+
+    assert result.exit_code == 1
+    assert "modalities" in result.stderr
+    assert not yzr_paths["settings"].exists()   # claude-code was not written
+    assert not yzr_paths["opencode"].exists()
+    assert load_state(yzr_paths["state"]).active_main is None
 
 
 def test_model_use_non_tty_defaults_to_claude_code_only(yzr_paths):

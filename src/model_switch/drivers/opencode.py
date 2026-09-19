@@ -447,6 +447,23 @@ class OpenCodeDriver:
     def read(self) -> dict:
         return read_json(self.settings_path)
 
+    def validate(self, models: List[Model], active: Model = None) -> None:
+        """Render everything a write would render, without writing.
+
+        Raises the same `ValueError` the write path would (bad modalities /
+        flags, conflicting provider declarations, duplicate names), so
+        `model use` can fail before any driver's config is touched. Optional
+        protocol method — see `drivers.base.AgentDriver`.
+        """
+        if active is not None and not active.api_key:
+            raise ValueError(
+                "model {!r} has no api_key in models.toml.".format(active.model_id)
+            )
+        keyed = [m for m in models if m.api_key]
+        _provider_layout(keyed)
+        for m in keyed:
+            _render_model_entry(m)
+
     def apply(self, models: List[Model], active: Model) -> None:
         """Write the full catalog into the OpenCode config, defaulting to `active`."""
         if not active.api_key:
@@ -461,12 +478,25 @@ class OpenCodeDriver:
 
         Reconciliation, deletion and pointer rules are the module docstring's;
         `create=False` (the catalog-sync path from add/remove/import) leaves a
-        missing config file alone — no file is created out of thin air.
+        missing config file alone — no file is created out of thin air. The
+        render is validated right before the write, so a skipped sync (no
+        config file) never fails on entries OpenCode would not see.
         """
         if not create and not self.settings_path.exists():
             return
 
+        self.validate(models)
         config = self.read()
+        self._compose(config, models, active_id)
+        atomic_write_json(self.settings_path, config)
+
+    def _compose(self, config: dict, models: List[Model],
+                 active_id: Optional[str]) -> None:
+        """Update `config` in place with the mirrored ``yzr-*`` namespace.
+
+        Pure computation: nothing is read or written here, so `validate`
+        can run the same rendering the write path runs (see `apply`).
+        """
         providers = {
             k: v for k, v in config.get("provider", {}).items()
             if not _is_owned_provider(k)
@@ -493,8 +523,6 @@ class OpenCodeDriver:
             config.pop("model", None)
         else:
             config["model"] = default
-
-        atomic_write_json(self.settings_path, config)
 
     def _resolve_default(self, current: Optional[str], models: List[Model],
                          refs: Dict[str, str],

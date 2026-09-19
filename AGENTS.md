@@ -157,15 +157,20 @@ src/
 新 agent = 实现一个 driver 并在 `cli._ensure_default_registered()` 注册。
 
 **Per-driver 语义——单槽 vs catalog**:`model use <name>` 把所选 driver 的配置写到
-激活的模型。driver 语义由 `supports_catalog` 区分:
+激活的模型。driver 语义由 `supports_catalog` 区分,可选方法(`validate` / `sync_catalog` /
+`clear`)由 CLI 用 `getattr` 探测:
 
 - `claude-code`(单槽,`supports_catalog=False`):`apply(models, active)` 只渲染 `active`,
-  写 `env` 块 + 顶层 `model`。
+  写 `env` 块 + 顶层 `model`。无渲染期校验,故不实现 `validate`。
 - `opencode`(catalog,`supports_catalog=True`):`apply` = 全量 reconcile——把 `models.toml`
   全部模型镜像成 `yzr-<model_id>` 的 provider(每模型一个,`baseURL`/`apiKey` 是 provider
   级字段、不同上游不能共用一个块),`config["model"]` 只作默认指针。`sync_catalog(registry)`
   在 add/remove/import 时触发,同样全量 reconcile 但保留有效默认指针(悬空则落剩余第一个 /
-  无剩余删键);`create=False` 时不凭空创建不存在的 `opencode.json`。model 块除 `limit` 外
+  无剩余删键);`create=False` 时不凭空创建不存在的 `opencode.json`。渲染拆成纯计算的
+  `_compose`,写入前先跑 `validate(models, active=None)`;`model use` 对**所有** driver 先
+  校验、全过才开写,所以一个 driver 的渲染错误不会留下「一半 agent 已切、state 未更新」。
+  校验严格对应写入:`sync_catalog` 在「没有配置文件、无需写」时直接返回、不校验(否则
+  `model add` 会对 OpenCode 根本看不到的条目报错)。model 块除 `limit` 外
   还透传 `models.toml` 的 `reasoning` 与 `variants`(OpenCode 的 ctrl+t 档位,形状由用户
   在 `[variants_presets.<名>]` 定义、模型用 `variants_preset` 引用)。
 

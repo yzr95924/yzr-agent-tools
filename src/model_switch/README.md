@@ -213,7 +213,9 @@ API key 在你跑 `model use` 的那一刻从 shell 环境(或 `models.toml` 的
 
 除了默认的 Claude Code driver,`model-switch` 还内置了一个 OpenCode driver。
 交互式跑 `model use`(不加 flag)直接回车,会**同时**写两个 agent;加 `--driver opencode`
-就只动 OpenCode:
+就只动 OpenCode。写多个 agent 时,`model use` **先让每个 driver 校验各自的渲染、全部通过
+才开始落盘**——任何一个 driver 拒绝(比如手写的 `modalities` 非法),所有 agent 都不写、
+`state.toml` 也不更新:
 
 ```bash
 # 给 OpenCode 激活一个模型
