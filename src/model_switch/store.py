@@ -97,13 +97,6 @@ class State:
     last_updated: Optional[str] = None
 
 
-# Derived capability flags whose contract is "only ``true`` carries
-# information": OpenCode's model config treats an absent flag as false, so
-# `catalog.derive`, the add wizard, `model align` and the driver must agree
-# on which keys behave that way. Adding a flag means adding it here, once.
-BOOLEAN_FLAGS = ("temperature", "attachment")
-
-
 # ---- provider grouping -------------------------------------------------------
 #
 # One agent-side provider block carries one baseURL and one apiKey, so a block

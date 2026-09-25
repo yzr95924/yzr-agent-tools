@@ -17,53 +17,53 @@ bash scripts/llmw-connect-mgr.sh install    # bin wrapper + 补全 + PATH 块
 ```bash
 llmw-connect-mgr install
 # 依赖检查(tmux/opencode/npm/systemctl) → llmw-connect 不在 PATH 则自动
-#   npm i -g @yzr95924/llmw-connect@latest → 凭据收集(见下) →
-#   systemd 单元(ExecStart=实测二进制路径, EnvironmentFile=~/.cc-connect/env,
-#   PATH=systemd 默认 + 探测到的 llmw/opencode/tmux 所在目录,
-#   HOME=显式注入——daemon 子进程(opencode/tmux)需要它;
-#   已存在的手写单元会被接管,覆盖前打 diff) →
-#   enable --now → 轮询 journald 验证 "connected"。幂等可重跑;
-#   单元内容有变时自动 restart 让新单元生效;
-#   发现旧 cc-connect.service 单元会顺手迁移(disable + 删除)。
-#   非 root:打印单元内容 + 手动步骤,不静默失败。
+#   npm i -g @yzr95924/llmw-connect@latest → 凭据收集（见下） →
+#   systemd 单元（ExecStart=实测二进制路径， EnvironmentFile=~/.cc-connect/env,
+#   PATH=systemd 默认 + 探测到的 llmw/opencode/tmux 所在目录，
+#   HOME=显式注入——daemon 子进程(opencode/tmux)需要它；
+#   已存在的手写单元会被接管，覆盖前打 diff) →
+#   enable --now → 轮询 journald 验证 "connected"。幂等可重跑；
+#   单元内容有变时自动 restart 让新单元生效；
+#   发现旧 cc-connect.service 单元会顺手迁移（disable + 删除）。
+#   非 root：打印单元内容 + 手动步骤，不静默失败。
 
 llmw-connect-mgr config
-# 凭据管理(可单独重跑,改 token 免重装):
-#   Telegram bot token → ~/.cc-connect/env (0600, 原子写, 保留未知键)
-#   钉钉(可选 --dingtalk): client_id/client_secret → env 文件
-#   钉钉流式卡片(可选 --dingtalk-card-template <id>): card_template_id 写进
-#     config.toml 钉钉块(非密钥,不走 env);已有块→插入/更新该行(备份 .bak,
-#     同值幂等不改),新生成 config→直接带上;无钉钉块时打 warning 不写
-#     (先配 --dingtalk-id/--dingtalk-secret)。模板在开放平台「卡片平台」建
-#     AI 卡片(markdown 变量名默认 content),应用需开 Card.Instance.Write 权限
-#   钉钉权限提醒:检测到钉钉配置(env 凭据或 config 平台块)时,收尾打印平台侧
-#     前置清单——启用机器人 / 事件订阅选 Stream 模式 / (配了卡片时)开通
-#     Card.Instance.Write(附一键申请链接,含 client_id)。清单为 2026-09-07
-#     生产实证:基础 Stream 收发无需申请任何 API 权限(上游 docs 的 4 个
-#     qyapi_* 是旧 REST 体系,勿被误导);卡片权限缺失 = 403 + daemon 30 分钟
-#     内存降级,开通后必须 restart 才能恢复卡片
-#   config.toml 不存在 → 从模板生成(secrets 全走 ${ENV} 占位符,
-#     config.toml 零密钥);已存在且缺 dingtalk 块 → **自动插入**
-#     (锚定在 [[projects]] 内首个顶级 [表] 之前,原文件备份 .bak;
+# 凭据管理（可单独重跑，改 token 免重装）：
+#   Telegram bot token → ~/.cc-connect/env （0600, 原子写， 保留未知键）
+#   钉钉（可选 --dingtalk）： client_id/client_secret → env 文件
+#   钉钉流式卡片（可选 --dingtalk-card-template <id>）： card_template_id 写进
+#     config.toml 钉钉块（非密钥，不走 env）；已有块→插入/更新该行（备份 .bak,
+#     同值幂等不改），新生成 config→直接带上；无钉钉块时打 warning 不写
+#     （先配 --dingtalk-id/--dingtalk-secret）。模板在开放平台「卡片平台」建
+#     AI 卡片（markdown 变量名默认 content），应用需开 Card.Instance.Write 权限
+#   钉钉权限提醒：检测到钉钉配置（env 凭据或 config 平台块）时，收尾打印平台侧
+#     前置清单——启用机器人 / 事件订阅选 Stream 模式 / （配了卡片时）开通
+#     Card.Instance.Write（附一键申请链接，含 client_id）。清单为 2026-09-07
+#     生产实证：基础 Stream 收发无需申请任何 API 权限（上游 docs 的 4 个
+#     qyapi_* 是旧 REST 体系，勿被误导）；卡片权限缺失 = 403 + daemon 30 分钟
+#     内存降级，开通后必须 restart 才能恢复卡片
+#   config.toml 不存在 → 从模板生成（secrets 全走 ${ENV} 占位符，
+#     config.toml 零密钥）；已存在且缺 dingtalk 块 → **自动插入**
+#     (锚定在 [[projects]] 内首个顶级 [表] 之前，原文件备份 .bak;
 #     无 [[projects]] 表时退回打印待粘贴块)
-#   收尾做一致性检查:凭据在 env 但 config 无对应平台块(或反之)都会
-#     打 warning——半配置状态不再静默(平台直接不启动)
-# 变化即生效:有实际变更(env 写入/config 生成/块插入)且 daemon 在跑时
-#   自动 systemctl restart + 验证 connected(换错 token 立刻红,不静默
-#   崩溃循环);daemon 未跑/无权限 → 打印手动命令提示;--no-restart 跳过
-# 漂移对齐:即使本次无变更,也会比对运行中 daemon 的环境(/proc/<pid>/
-#   environ)与 env 文件——手动编辑过 env(如换 token)后忘了重启,
-#   下次跑 config 自动发现并对齐(systemd 不热加载 EnvironmentFile)
-# 非交互: --telegram-token / --dingtalk-id / --dingtalk-secret /
+#   收尾做一致性检查：凭据在 env 但 config 无对应平台块（或反之）都会
+#     打 warning——半配置状态不再静默（平台直接不启动）
+# 变化即生效：有实际变更（env 写入/config 生成/块插入）且 daemon 在跑时
+#   自动 systemctl restart + 验证 connected(换错 token 立刻红，不静默
+#   崩溃循环);daemon 未跑/无权限 → 打印手动命令提示；--no-restart 跳过
+# 漂移对齐：即使本次无变更，也会比对运行中 daemon 的环境（/proc/<pid>/
+#   environ）与 env 文件——手动编辑过 env（如换 token）后忘了重启，
+#   下次跑 config 自动发现并对齐（systemd 不热加载 EnvironmentFile）
+# 非交互： --telegram-token / --dingtalk-id / --dingtalk-secret /
 #   --dingtalk-card-template / --yes
-#   (非交互且缺凭据 → 干净报错退出,不会卡在提示符;env 已有凭据则免传)
-# --telegram-allow-from: 生成 config 时的 allow_from;默认 "*" = 任何人都能
+#   （非交互且缺凭据 → 干净报错退出，不会卡在提示符；env 已有凭据则免传）
+# --telegram-allow-from: 生成 config 时的 allow_from；默认 "*" = 任何人都能
 #   驱动这台机的 opencode——多机分发强烈建议锁自己的 TG user id
 
 llmw-connect-mgr upgrade
-# 已装版本以 `npm ls -g` 为准(改名后的二进制 --version 只打上游基线,不带
-#   -llmw.N 后缀)——先 `npm view` 查 registry 最新版:已最新 → 直接退出
-#   (不装包、不重启 daemon);有新版或 registry 不可达(离线兜底) →
+# 已装版本以 `npm ls -g` 为准（改名后的二进制 --version 只打上游基线，不带
+#   -llmw.N 后缀)——先 `npm view` 查 registry 最新版：已最新 → 直接退出
+#   （不装包、不重启 daemon）；有新版或 registry 不可达（离线兜底） →
 #   npm i -g @latest → systemctl restart → 验证 connected。
 #   本地二进制缺失/非 llmw fork → 报错并指回 install。
 

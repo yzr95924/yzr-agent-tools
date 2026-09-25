@@ -60,6 +60,8 @@ REAL_QODER_SETTINGS = Path(os.path.expanduser("~")) / ".qoder" / "settings.json"
 REAL_CLAUDE_MD = Path(os.path.expanduser("~")) / ".claude" / "CLAUDE.md"
 REAL_OPENCODE_AGENTS = _REAL_CFG_BASE / "opencode" / "AGENTS.md"
 REAL_QODER_AGENTS = Path(os.path.expanduser("~")) / ".qoder" / "AGENTS.md"
+# OpenCode's real global plugin dir (where opencode-plugins installs into).
+REAL_OPENCODE_PLUGINS_DIR = _REAL_CFG_BASE / "opencode" / "plugins"
 
 
 def _sha256(path: Path):
@@ -84,6 +86,7 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
                      ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG),
+                     ("opencode_plugins_dir", REAL_OPENCODE_PLUGINS_DIR),
                      ("qoder_settings", REAL_QODER_SETTINGS),
                      ("claude_md", REAL_CLAUDE_MD),
                      ("opencode_agents", REAL_OPENCODE_AGENTS),
@@ -101,13 +104,13 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     state_p = cfg_dir / "state.toml"
     settings_p = tmp_path / ".claude" / "settings.json"
     opencode_p = tmp_path / ".config" / "opencode" / "opencode.json"
-    catalog_p = tmp_path / ".cache" / "opencode" / "models.json"
+    catalog_p = tmp_path / ".local" / "share" / "opencode" / "opencode.db"
 
     monkeypatch.setattr(paths, "config_dir", lambda: cfg_dir)
     monkeypatch.setattr(paths, "models_file", lambda: models_p)
     monkeypatch.setattr(paths, "state_file", lambda: state_p)
     monkeypatch.setattr(paths, "opencode_config_file", lambda: opencode_p)
-    monkeypatch.setattr(paths, "catalog_cache_file", lambda: catalog_p)
+    monkeypatch.setattr(paths, "catalog_db_file", lambda: catalog_p)
 
     # Replace any pre-existing claude-code driver in the registry with
     # one pointing at the tmp settings path. (Earlier auto-registration
@@ -172,6 +175,22 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     monkeypatch.setattr(style_paths, "opencode_agents_file", lambda: opencode_agents_p)
     monkeypatch.setattr(style_paths, "qoder_agents_file", lambda: qoder_agents_p)
 
+    # Redirect opencode-plugins' paths into tmp. The bundled-plugins source
+    # dir also moves to tmp so tests build their own fake sources and never
+    # depend on (or touch) the real ones. opencode_p (shared) receives the
+    # `plugins` array writes.
+    from opencode_plugins import deep as op_deep
+    from opencode_plugins import paths as op_paths
+    op_plugins_target_p = tmp_path / ".config" / "opencode" / "plugins"
+    op_bundled_p = tmp_path / "opencode-plugins-bundled"
+    op_heartbeat_p = tmp_path / ".local" / "share" / "opencode-plugins" / "at-import-heartbeat.json"
+    monkeypatch.setattr(op_paths, "opencode_config_file", lambda: opencode_p)
+    monkeypatch.setattr(op_paths, "plugins_target_dir", lambda: op_plugins_target_p)
+    monkeypatch.setattr(op_paths, "bundled_plugins_dir", lambda: op_bundled_p)
+    # The real machine carries a live heartbeat (written by the running
+    # opencode's at-import plugin) — deep checks must never read it in tests.
+    monkeypatch.setattr(op_deep, "heartbeat_file", lambda: op_heartbeat_p)
+
     paths_dict = {
         "config_dir": cfg_dir,
         "models": models_p,
@@ -186,6 +205,9 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
         "claude_md": claude_md_p,
         "opencode_agents": opencode_agents_p,
         "qoder_agents": qoder_agents_p,
+        "op_plugins_target": op_plugins_target_p,
+        "op_bundled": op_bundled_p,
+        "op_heartbeat": op_heartbeat_p,
     }
     yield paths_dict
 
@@ -195,6 +217,7 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
                      ("yzr_config_dir", REAL_YZR_CONFIG_DIR),
                      ("mcp_plugin_mgr_config_dir", REAL_MCP_PLUGIN_MGR_CONFIG_DIR),
                      ("opencode_config", REAL_OPENCODE_CONFIG),
+                     ("opencode_plugins_dir", REAL_OPENCODE_PLUGINS_DIR),
                      ("qoder_settings", REAL_QODER_SETTINGS),
                      ("claude_md", REAL_CLAUDE_MD),
                      ("opencode_agents", REAL_OPENCODE_AGENTS),

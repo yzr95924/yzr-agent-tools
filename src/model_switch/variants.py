@@ -17,12 +17,11 @@ OpenCode driver already understands (a model's own hand-written
 `[models.variants]` wins field-by-field, so it doubles as an escape hatch).
 Expansion happens in memory, right before drivers render, and the result is
 never written back to `models.toml` — the file keeps the preset + reference
-form. Drivers know nothing about presets; they only pass `reasoning` and
-`variants` through.
+form. Drivers know nothing about presets; they only pass `variants` through.
 
 Tier *bodies* must be tables (both in a preset and inline) — that one shape
-is checked here so a typo fails locally; OpenCode rejects the whole config
-for it (``Expected object, got "high" provider.<id>.models.<name>.variants.high``).
+is checked here so a typo fails locally; a scalar would reach OpenCode as a
+malformed variant entry and take the whole config file down.
 Payload content is never inspected.
 
 Presets are pure data supplied by the user: no model names, gateways or

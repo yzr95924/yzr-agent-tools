@@ -24,7 +24,6 @@ from typing import Any, Callable, Dict, List, NoReturn, Optional, Tuple
 from model_switch import catalog, paths, ui
 from model_switch.drivers.base import registry
 from model_switch.store import (
-    BOOLEAN_FLAGS,
     ModelEntry,
     Registry,
     State,
@@ -664,16 +663,10 @@ def _build_extra(derived: Dict[str, Any], provider: Optional[str],
     extra = {}
     if provider:
         extra["provider"] = provider
-    if derived.get("reasoning"):
-        extra["reasoning"] = True
     if derived.get("variants"):
         extra["variants"] = derived["variants"]
     if derived.get("modalities"):
         extra["modalities"] = derived["modalities"]
-    if derived.get("temperature"):
-        extra["temperature"] = True
-    if derived.get("attachment"):
-        extra["attachment"] = True
     # The upstream id doubles as OpenCode's fallback display label, so a
     # display name that just repeats it is noise in models.toml.
     display_name = derived.get("display_name")
@@ -867,7 +860,7 @@ def _render_catalog_row(row: catalog.Row) -> str:
         bits.append("ctx " + _format_context(derived["context_window"]))
     if derived["variants"]:
         bits.append("tiers[" + ",".join(derived["variants"]) + "]")
-    elif derived["reasoning"]:
+    elif catalog.no_tiers_declared(entry):
         bits.append("reasoning")
     if derived["modalities"]:
         bits.append("+".join(derived["modalities"]["input"]))
@@ -889,11 +882,6 @@ def _print_add_summary(entry: ModelEntry, replacing: bool) -> None:
         print(f"  display name    {entry.extra['display_name']}")
     if entry.context_window:
         print(f"  context window  {_format_context(entry.context_window)}")
-    if entry.extra.get("reasoning"):
-        print("  reasoning       yes")
-    flags = [f for f in BOOLEAN_FLAGS if entry.extra.get(f) is True]
-    if flags:
-        print("  capabilities    " + ", ".join(flags))
     if entry.extra.get("variants"):
         print("  variants        " + ", ".join(entry.extra["variants"]))
     if entry.extra.get("modalities"):
@@ -940,11 +928,6 @@ def _describe_fields(fields: Dict[str, Any]) -> str:
         bits.append('name="{}"'.format(fields["display_name"]))
     if fields.get("context_window"):
         bits.append("context_window={}".format(fields["context_window"]))
-    if fields.get("reasoning"):
-        bits.append("reasoning")
-    for flag in BOOLEAN_FLAGS:
-        if fields.get(flag):
-            bits.append(flag)
     if fields.get("variants"):
         bits.append("variants[{}]".format(",".join(fields["variants"])))
     if fields.get("modalities"):
@@ -971,13 +954,6 @@ def _align_one(model: ModelEntry, fields: Dict[str, Any],
         changes.append("context_window {}→{}".format(
             model.context_window, fields["context_window"]))
         model.context_window = fields["context_window"]
-    if fields["reasoning"] and model.extra.get("reasoning") is not True:
-        changes.append("+reasoning")
-        model.extra["reasoning"] = True
-    for flag in BOOLEAN_FLAGS:
-        if fields[flag] and model.extra.get(flag) is not True:
-            changes.append("+" + flag)
-            model.extra[flag] = True
     display_name = fields["display_name"]
     if (display_name and display_name != model.name
             and model.extra.get("display_name") != display_name):
@@ -1182,28 +1158,15 @@ def _do_model_show(args: argparse.Namespace) -> None:
         print(f"context_window: {m.context_window}")
     if m.description:
         print(f"description:    {m.description}")
-    # What OpenCode will render for the variant cycle: the reasoning flag,
-    # the declared preset (if any) and the tier names it expands to.
-    if m.extra.get("reasoning") is True:
-        print("reasoning:      true")
+    # What OpenCode will offer as `provider/model#variant`: the declared
+    # preset (if any) and the tier names it expands to, in cycle order. V2
+    # computes no built-in tiers for custom providers, so an undeclared model
+    # simply has no variant selection.
     if isinstance(variants, dict) and variants:
-        # OpenCode drops tiers marked `disabled` (that's how a model mutes a
-        # preset tier or a built-in one), so report what the cycle will
-        # actually offer and name the muted tiers separately.
-        enabled = [
-            t for t, body in variants.items()
-            if not (isinstance(body, dict) and body.get("disabled"))
-        ]
-        muted = [t for t in variants if t not in enabled]
         source = "preset {!r}".format(ref) if ref is not None else "(inline)"
-        line = "variants:       {} -> {}".format(source, ", ".join(enabled) or "<none>")
-        if muted:
-            line += " (disabled: {})".format(", ".join(muted))
-        print(line)
-    elif m.extra.get("reasoning") is True:
-        # No declaration, but OpenCode computes built-in tiers for reasoning
-        # models — silence here would read as "no tiers".
-        print("variants:       <none declared> (OpenCode's built-in tiers apply)")
+        print("variants:       {} -> {}".format(source, ", ".join(variants)))
+    else:
+        print("variants:       <none declared>")
 
 
 def _do_model_remove(args: argparse.Namespace) -> None:

@@ -2,7 +2,8 @@
 
 OpenCode holds a multi-model catalog: model-switch groups models by
 (base_url, api_key) upstream and mirrors each group into a `yzr-<host-slug>`
-provider, with `config["model"]` as the default pointer.
+provider under the V2-native `providers` key, with `config["model"]` as the
+default pointer. The V1 `provider` key is reclaimed, never written.
 """
 import json
 from pathlib import Path
@@ -16,6 +17,9 @@ from model_switch.drivers.opencode import OpenCodeDriver, _upstream_slug
 def _pid(model: Model) -> str:
     """Provider id for a model under the grouped scheme."""
     return "yzr-" + _upstream_slug(model.base_url)
+
+
+TEXT_ONLY = {"tools": True, "input": ["text"], "output": ["text"]}
 
 
 @pytest.fixture
@@ -72,67 +76,68 @@ def test_driver_is_catalog_capable(driver):
 # These encode the bugs that made `model use --driver opencode` silently fail
 # (opencode fell back to its default model):
 #   1. wrong config path              — covered in test_paths.py
-#   2. missing `npm` AI-SDK adapter   — test_apply_emits_anthropic_npm_adapter
+#   2. missing `package` provider     — test_apply_emits_anthropic_package
 #   3. limit block mishandled         — test_apply_emits_context_limit_when_known
-#                                       + test_apply_omits_undeclared_optional_fields
+#                                       + test_apply_renders_text_only_capabilities
 
 
 def test_apply_writes_resolved_api_key_verbatim(driver, glm_ctx):
-    """The resolved key is written verbatim into options.apiKey — matching the
-    claude-code driver and OpenCode's own convention for custom providers.
+    """The resolved key is written verbatim into settings.apiKey — matching
+    the claude-code driver and OpenCode's own convention for custom providers.
     No `{env:VAR}` placeholder: the key lives in the config file (so the file
     holds a secret; keep its permissions tight)."""
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
     pid = _pid(glm_ctx)
     assert cfg["model"] == "{}/{}".format(pid, glm_ctx.name)
-    provider = cfg["provider"][pid]
-    # baseURL is /v1-adapted for @ai-sdk/anthropic (see the baseURL test group
-    # below); glm_ctx.base_url has no /v1, so the driver appends it here.
-    assert provider["options"]["baseURL"] == glm_ctx.base_url + "/v1"
-    assert provider["options"]["apiKey"] == "MS_API_KEY"
-    assert "{env:" not in provider["options"]["apiKey"]
+    provider = cfg["providers"][pid]
+    # baseURL is /v1-adapted for the Anthropic package (see the baseURL test
+    # group below); glm_ctx.base_url has no /v1, so the driver appends it here.
+    assert provider["settings"]["baseURL"] == glm_ctx.base_url + "/v1"
+    assert provider["settings"]["apiKey"] == "MS_API_KEY"
+    assert "{env:" not in provider["settings"]["apiKey"]
 
 
-def test_apply_emits_anthropic_npm_adapter(driver, glm_ctx):
-    """A non-built-in opencode provider needs `npm` to tell opencode which
-    AI-SDK adapter to load. Without it opencode reports 'Provider not found'
-    and falls back to its default model. Anthropic-compatible upstreams use
-    @ai-sdk/anthropic."""
+def test_apply_emits_anthropic_package(driver, glm_ctx):
+    """A non-built-in opencode provider needs `package` to tell opencode which
+    runtime to load. Without it opencode reports 'Provider not found' and
+    falls back to its default model. Anthropic-compatible upstreams use
+    OpenCode's Anthropic package."""
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_pid(glm_ctx)]["npm"] == "@ai-sdk/anthropic"
+    assert cfg["providers"][_pid(glm_ctx)]["package"] == (
+        "@opencode/ai/providers/anthropic")
 
 
 def test_apply_emits_context_limit_when_known(driver, glm_ctx):
     """A custom provider isn't on models.dev, so OpenCode can't infer the
     context budget — surface context_window as limit.context. OpenCode's
-    schema requires `context` and `output` together (limit.required ==
-    [context, output]), so context is paired with the default output cap;
-    never a bare {limit:{context}} that would fail validation."""
+    schema requires `context` and `output` together, so context is paired with
+    the default output cap; never a bare {limit:{context}} that would fail
+    validation."""
     from model_switch.drivers.opencode import _DEFAULT_MAX_OUTPUT
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_pid(glm_ctx)]["models"][glm_ctx.name]
+    entry = cfg["providers"][_pid(glm_ctx)]["models"][glm_ctx.name]
     assert entry["limit"] == {
         "context": glm_ctx.context_window,
         "output": _DEFAULT_MAX_OUTPUT,
     }
 
 
-def test_apply_omits_undeclared_optional_fields(driver, glm_main):
-    """No context_window and no modalities → neither `limit` nor `modalities`
-    is emitted, and never a partial block: OpenCode rejects a limit missing
-    its paired `output`, so an empty model entry is the only schema-valid
-    rendering of undeclared optional fields."""
+def test_apply_renders_text_only_capabilities(driver, glm_main):
+    """No context_window and no modalities → no `limit`, but capabilities is
+    always emitted: OpenCode's fallback for an unknown model claims image
+    input, while an undeclared `modalities` means text-only. Tools stay on —
+    every model-switch entry is an agent model."""
     assert glm_main.context_window is None
     driver.apply(models=[glm_main], active=glm_main)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_pid(glm_main)]["models"][glm_main.name]
-    assert entry == {}
+    entry = cfg["providers"][_pid(glm_main)]["models"][glm_main.name]
+    assert entry == {"capabilities": TEXT_ONLY}
 
 
-# --- modalities: opt-in non-text input, validated locally --------------------
+# --- modalities → capabilities: opt-in non-text input, validated locally -----
 
 
 def _modalities_model(value):
@@ -145,16 +150,29 @@ def _modalities_model(value):
     )
 
 
-def test_apply_emits_modalities_when_declared(driver):
+def test_apply_emits_capabilities_when_modalities_declared(driver):
     """OpenCode drops (replaces with an ERROR text prompt) any message part
     whose modality isn't declared, so a model that accepts images/PDFs must
     opt in explicitly."""
     model = _modalities_model({"input": ["text", "image"], "output": ["text"]})
     driver.apply(models=[model], active=model)
     cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_pid(model)]["models"][model.name]
-    assert entry["modalities"] == {"input": ["text", "image"],
-                                   "output": ["text"]}
+    entry = cfg["providers"][_pid(model)]["models"][model.name]
+    assert entry["capabilities"] == {"tools": True,
+                                     "input": ["text", "image"],
+                                     "output": ["text"]}
+
+
+def test_apply_defaults_missing_capability_halves_to_text(driver):
+    """A hand-written modalities table may declare only one half; the other
+    half stays text rather than disappearing from the capabilities block."""
+    model = _modalities_model({"input": ["text", "image"]})
+    driver.apply(models=[model], active=model)
+    cfg = json.loads(driver.settings_path.read_text())
+    entry = cfg["providers"][_pid(model)]["models"][model.name]
+    assert entry["capabilities"] == {"tools": True,
+                                     "input": ["text", "image"],
+                                     "output": ["text"]}
 
 
 @pytest.mark.parametrize("value", [
@@ -181,30 +199,67 @@ def test_apply_preserves_unrelated_providers_and_keys(driver, glm_ctx):
     """model-switch must not clobber providers/keys it doesn't own in the
     same opencode.json (e.g. the user's other custom providers)."""
     seed = {
-        "provider": {
-            "existing": {"npm": "@ai-sdk/openai-compatible", "options": {"apiKey": "k"}},
+        "providers": {
+            "existing": {"package": "@opencode/ai/providers/openai", "settings": {"apiKey": "k"}},
         },
-        "small_model": "existing/foo",
+        "username": "alice",
     }
     driver.settings_path.write_text(json.dumps(seed), encoding="utf-8")
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert _pid(glm_ctx) in cfg["provider"]   # our provider added
-    assert "existing" in cfg["provider"]      # foreign provider preserved
-    assert cfg["small_model"] == "existing/foo"  # foreign top-level key preserved
+    assert _pid(glm_ctx) in cfg["providers"]   # our provider added
+    assert "existing" in cfg["providers"]      # foreign provider preserved
+    assert cfg["username"] == "alice"          # foreign top-level key preserved
+
+
+# --- legacy V1 `provider` key: reclaimed, never written -----------------------
+
+
+def test_apply_migrates_owned_blocks_out_of_the_legacy_key(driver, glm_ctx):
+    """A pre-V2 file holds our blocks under `provider`; one sync moves them to
+    `providers` and drops the emptied legacy key entirely."""
+    legacy = {
+        "provider": {
+            "yzr-kimi": {"npm": "@ai-sdk/anthropic",
+                         "options": {"apiKey": "OLD_KEY"}},
+        },
+        "model": "yzr-kimi/k3",
+    }
+    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
+    driver.apply(models=[glm_ctx], active=glm_ctx)
+    cfg = json.loads(driver.settings_path.read_text())
+    assert "provider" not in cfg
+    assert _pid(glm_ctx) in cfg["providers"]
+    assert cfg["model"] == "{}/{}".format(_pid(glm_ctx), glm_ctx.name)
+
+
+def test_apply_keeps_foreign_entries_in_the_legacy_key(driver, glm_ctx):
+    """A user's own V1 provider block is not ours to delete — the legacy key
+    survives with the owned ids stripped out."""
+    legacy = {
+        "provider": {
+            "yzr-glm": {"options": {"apiKey": "OLD_KEY"}},
+            "mine": {"npm": "@ai-sdk/openai-compatible"},
+        },
+    }
+    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
+    driver.apply(models=[glm_ctx], active=glm_ctx)
+    cfg = json.loads(driver.settings_path.read_text())
+    assert list(cfg["provider"]) == ["mine"]
+    assert _pid(glm_ctx) in cfg["providers"]
 
 
 # --- apply: baseURL /v1 adaptation -----------------------------------------
 #
-# @ai-sdk/anthropic (opencode's adapter) appends ONLY `/messages` to baseURL —
-# it treats it as a prefix that already includes the API version. So a
-# base_url stored WITHOUT `/v1` (which is exactly what the claude-code driver
-# wants: Claude Code appends /v1 itself) makes opencode request
-# `.../anthropic/messages`. z.ai answers that with a 404 wrapped in HTTP 200,
-# and ai-sdk's SSE parser drops the non-event body silently → zero-token
-# empty reply, no error event. The opencode driver owns this adaptation:
-# ensure baseURL ends in a version segment. The SAME base_url value then serves
-# both agents — the protocol difference lives inside each driver.
+# The Anthropic package appends ONLY `/messages` to baseURL — it treats it as
+# a prefix that already includes the API version. So a base_url stored WITHOUT
+# `/v1` (which is exactly what the claude-code driver wants: Claude Code
+# appends /v1 itself) makes opencode request `.../anthropic/messages`. z.ai
+# answers that with a 404 wrapped in HTTP 200, and the SSE parser drops the
+# non-event body silently → zero-token empty reply, no error event. The
+# opencode driver owns this adaptation: ensure baseURL ends in a version
+# segment. The SAME base_url value then serves both agents — the protocol
+# difference lives inside each driver.
 
 
 @pytest.mark.parametrize("base_url, expected", [
@@ -220,7 +275,7 @@ def test_apply_adapts_baseurl_to_a_version_segment(driver, glm_ctx, base_url, ex
     glm_ctx.base_url = base_url
     driver.apply(models=[glm_ctx], active=glm_ctx)
     cfg = json.loads(driver.settings_path.read_text())
-    assert cfg["provider"][_pid(glm_ctx)]["options"]["baseURL"] == expected
+    assert cfg["providers"][_pid(glm_ctx)]["settings"]["baseURL"] == expected
 
 
 # --- upstream slug derivation -------------------------------------------------
@@ -248,11 +303,11 @@ def test_apply_writes_one_provider_per_upstream(driver):
     models = _models()
     driver.apply(models=models, active=models[0])
     cfg = json.loads(driver.settings_path.read_text())
-    assert _pid(models[0]) in cfg["provider"]
-    assert _pid(models[1]) in cfg["provider"]
+    assert _pid(models[0]) in cfg["providers"]
+    assert _pid(models[1]) in cfg["providers"]
     # Each provider is self-contained (baseURL/key differ per upstream).
-    assert cfg["provider"][_pid(models[0])]["options"]["apiKey"] == "K1"
-    assert cfg["provider"][_pid(models[1])]["options"]["apiKey"] == "K2"
+    assert cfg["providers"][_pid(models[0])]["settings"]["apiKey"] == "K1"
+    assert cfg["providers"][_pid(models[1])]["settings"]["apiKey"] == "K2"
     # Default pointer names the active model.
     assert cfg["model"] == "{}/glm-4".format(_pid(models[0]))
 
@@ -266,8 +321,8 @@ def test_apply_groups_same_upstream_models_into_one_provider(driver):
                   api_key="K", name="glm-5.3")
     driver.apply(models=[glm, glm53], active=glm53)
     cfg = json.loads(driver.settings_path.read_text())
-    assert list(cfg["provider"]) == ["yzr-zai"]
-    assert set(cfg["provider"]["yzr-zai"]["models"]) == {"glm-5.2", "glm-5.3"}
+    assert list(cfg["providers"]) == ["yzr-zai"]
+    assert set(cfg["providers"]["yzr-zai"]["models"]) == {"glm-5.2", "glm-5.3"}
     assert cfg["model"] == "yzr-zai/glm-5.3"
 
 
@@ -280,9 +335,9 @@ def test_apply_splits_same_host_different_key(driver):
               api_key="K2", name="m2")
     driver.apply(models=[a, b], active=a)
     cfg = json.loads(driver.settings_path.read_text())
-    assert set(cfg["provider"]) == {"yzr-zai", "yzr-zai-2"}
-    assert cfg["provider"]["yzr-zai"]["options"]["apiKey"] == "K1"
-    assert cfg["provider"]["yzr-zai-2"]["options"]["apiKey"] == "K2"
+    assert set(cfg["providers"]) == {"yzr-zai", "yzr-zai-2"}
+    assert cfg["providers"]["yzr-zai"]["settings"]["apiKey"] == "K1"
+    assert cfg["providers"]["yzr-zai-2"]["settings"]["apiKey"] == "K2"
     assert cfg["model"] == "yzr-zai/m1"
 
 
@@ -318,8 +373,8 @@ def test_apply_declared_provider_groups_and_names_ids(driver):
               api_key="K", name="qwen3.8-flash", extra={"provider": "dashscope"})
     driver.apply(models=[a, b], active=b)
     cfg = json.loads(driver.settings_path.read_text())
-    assert list(cfg["provider"]) == ["yzr-dashscope"]
-    assert set(cfg["provider"]["yzr-dashscope"]["models"]) == {
+    assert list(cfg["providers"]) == ["yzr-dashscope"]
+    assert set(cfg["providers"]["yzr-dashscope"]["models"]) == {
         "qwen3.8-max", "qwen3.8-flash"}
     assert cfg["model"] == "yzr-dashscope/qwen3.8-flash"
 
@@ -331,15 +386,15 @@ def test_apply_declared_provider_id_survives_base_url_change(driver):
     old = Model(model_id="m", base_url="https://dashscope.aliyuncs.com/apps/anthropic",
                 api_key="K", name="qwen3.8-flash", extra=dict(pinned))
     driver.apply(models=[old], active=old)
-    assert list(json.loads(driver.settings_path.read_text())["provider"]) == [
+    assert list(json.loads(driver.settings_path.read_text())["providers"]) == [
         "yzr-dashscope"]
 
     moved = Model(model_id="m", base_url="https://new-gateway.example.com/anthropic",
                   api_key="K", name="qwen3.8-flash", extra=dict(pinned))
     driver.apply(models=[moved], active=moved)
     cfg = json.loads(driver.settings_path.read_text())
-    assert list(cfg["provider"]) == ["yzr-dashscope"]
-    assert cfg["provider"]["yzr-dashscope"]["options"]["baseURL"] == (
+    assert list(cfg["providers"]) == ["yzr-dashscope"]
+    assert cfg["providers"]["yzr-dashscope"]["settings"]["baseURL"] == (
         "https://new-gateway.example.com/anthropic/v1")
     assert cfg["model"] == "yzr-dashscope/qwen3.8-flash"
 
@@ -378,10 +433,10 @@ def test_apply_declared_name_wins_collision_with_derived_slug(driver):
                     api_key="K2", name="m2")
     driver.apply(models=[declared, derived], active=declared)
     cfg = json.loads(driver.settings_path.read_text())
-    assert set(cfg["provider"]) == {"yzr-zai", "yzr-zai-2"}
-    assert cfg["provider"]["yzr-zai"]["options"]["baseURL"] == (
+    assert set(cfg["providers"]) == {"yzr-zai", "yzr-zai-2"}
+    assert cfg["providers"]["yzr-zai"]["settings"]["baseURL"] == (
         "https://one.example/anthropic/v1")
-    assert cfg["provider"]["yzr-zai-2"]["options"]["baseURL"] == (
+    assert cfg["providers"]["yzr-zai-2"]["settings"]["baseURL"] == (
         "https://api.z.ai/api/anthropic/v1")
 
 
@@ -431,7 +486,7 @@ def test_sync_catalog_falls_back_when_default_vanished(driver):
     remaining = [models[1]]                         # glm removed
     driver.sync_catalog(remaining)
     cfg = json.loads(driver.settings_path.read_text())
-    assert _pid(models[0]) not in cfg["provider"]   # provider + key reclaimed
+    assert _pid(models[0]) not in cfg["providers"]   # provider + key reclaimed
     assert cfg["model"] == "{}/kimi-k2".format(_pid(models[1]))
 
 
@@ -441,7 +496,7 @@ def test_sync_catalog_drops_default_when_no_models(driver):
     driver.sync_catalog([])
     cfg = json.loads(driver.settings_path.read_text())
     assert "model" not in cfg
-    assert cfg["provider"] == {}
+    assert cfg["providers"] == {}
 
 
 def test_sync_catalog_reclaims_legacy_single_slot_provider(driver):
@@ -455,9 +510,9 @@ def test_sync_catalog_reclaims_legacy_single_slot_provider(driver):
     models = _models()
     driver.sync_catalog(models)
     cfg = json.loads(driver.settings_path.read_text())
-    assert "yzr" not in cfg["provider"]
-    assert _pid(models[0]) in cfg["provider"]
-    assert cfg["provider"][_pid(models[0])]["options"]["apiKey"] == "K1"
+    assert "yzr" not in cfg["providers"]
+    assert _pid(models[0]) in cfg["providers"]
+    assert cfg["providers"][_pid(models[0])]["settings"]["apiKey"] == "K1"
 
 
 def test_sync_catalog_reclaims_per_model_ids_from_pre_grouping_scheme(driver):
@@ -470,8 +525,8 @@ def test_sync_catalog_reclaims_per_model_ids_from_pre_grouping_scheme(driver):
     models = _models()
     driver.sync_catalog(models)
     cfg = json.loads(driver.settings_path.read_text())
-    assert "yzr-glm" not in cfg["provider"]
-    assert _pid(models[0]) in cfg["provider"]
+    assert "yzr-glm" not in cfg["providers"]
+    assert _pid(models[0]) in cfg["providers"]
 
 
 def test_sync_catalog_does_not_create_missing_file(driver):
@@ -485,8 +540,8 @@ def test_sync_catalog_preserves_foreign_default_pointer(driver):
     """A default pointer that isn't ours (user's own provider) must never be
     hijacked by a catalog sync — only a `model use` moves the default."""
     seed = {
-        "provider": {
-            "anthropic": {"options": {"apiKey": "k"}},
+        "providers": {
+            "anthropic": {"settings": {"apiKey": "k"}},
         },
         "model": "anthropic/claude-sonnet-4",
     }
@@ -495,14 +550,14 @@ def test_sync_catalog_preserves_foreign_default_pointer(driver):
     driver.sync_catalog(models)
     cfg = json.loads(driver.settings_path.read_text())
     assert cfg["model"] == "anthropic/claude-sonnet-4"  # foreign default intact
-    assert "anthropic" in cfg["provider"]                # foreign provider intact
-    assert _pid(models[0]) in cfg["provider"]            # ours added alongside
+    assert "anthropic" in cfg["providers"]               # foreign provider intact
+    assert _pid(models[0]) in cfg["providers"]           # ours added alongside
 
 
 def test_sync_catalog_does_not_conjure_default_when_absent(driver):
     """No `model` key in the file → sync_catalog leaves it absent (only
     `model use` sets a default)."""
-    seed = {"provider": {"anthropic": {"options": {"apiKey": "k"}}}}
+    seed = {"providers": {"anthropic": {"settings": {"apiKey": "k"}}}}
     driver.settings_path.write_text(json.dumps(seed), encoding="utf-8")
     driver.sync_catalog(_models())
     cfg = json.loads(driver.settings_path.read_text())
@@ -516,8 +571,8 @@ def test_sync_catalog_skips_models_without_key(driver, glm_ctx):
     kimi = Model(model_id="kimi", base_url="https://b", api_key="K2", name="kimi")
     driver.apply(models=[glm_ctx, kimi], active=kimi)
     cfg = json.loads(driver.settings_path.read_text())
-    assert _pid(kimi) in cfg["provider"]
-    assert _pid(glm_ctx) not in cfg["provider"]
+    assert _pid(kimi) in cfg["providers"]
+    assert _pid(glm_ctx) not in cfg["providers"]
 
 
 def test_apply_errors_when_active_missing_key(driver, glm_ctx):
@@ -539,18 +594,27 @@ def test_current_reports_default_and_catalog(driver):
     assert _pid(models[1]) in cur["catalog"]
 
 
-# --- reasoning / variants authority ------------------------------------------
+def test_current_reports_owned_blocks_from_the_legacy_key(driver):
+    """Before the first sync after upgrading, the file still holds V1 blocks —
+    `current()` must still report the catalog instead of pretending it's empty."""
+    legacy = {"provider": {"yzr-kimi": {"options": {"apiKey": "K"}}}}
+    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert "yzr-kimi" in driver.current()["catalog"]
+
+
+# --- variants: declared tiers are the whole set ------------------------------
 #
-# models.toml may carry `reasoning = true` (mark the model reasoning-capable)
-# and a `variants` table (effort tiers for OpenCode's ctrl+t variant cycle).
-# `reasoning` is rendered as-is. A declared `variants` table is rendered with
-# every built-in tier OpenCode would otherwise merge in muted, so the cycle
-# offers exactly what was declared; tier shapes stay user data.
+# models.toml may carry a `variants` table (effort tiers for OpenCode's
+# `provider/model#variant` selection). V2 renders it as the array shape
+# [{id, settings}], in declaration order. OpenCode V2 computes no built-in
+# tiers for custom providers, so there is nothing to mute or merge — the
+# declared tiers are exactly what the selection offers. Tier payloads stay
+# user data.
 
 def _rendered(driver, model):
     driver.apply(models=[model], active=model)
     cfg = json.loads(driver.settings_path.read_text())
-    return cfg["provider"][_pid(model)]["models"][model.name]
+    return cfg["providers"][_pid(model)]["models"][model.name]
 
 
 def _model(extra, context_window=None):
@@ -560,115 +624,64 @@ def _model(extra, context_window=None):
     )
 
 
-def test_apply_renders_declared_variants_as_the_full_set(driver):
-    from model_switch.drivers.opencode import (_DEFAULT_MAX_OUTPUT,
-                                               _INJECTABLE_TIER_NAMES)
+def test_apply_renders_declared_variants_as_an_array(driver):
+    from model_switch.drivers.opencode import _DEFAULT_MAX_OUTPUT
     entry = _rendered(driver, _model(
-        {"reasoning": True,
-         "variants": {"high": {"effort": "high"}, "max": {"effort": "max"}}},
+        {"variants": {"low": {"effort": "low", "thinking": {"type": "adaptive"}},
+                      "high": {"effort": "high", "thinking": {"type": "adaptive"}},
+                      "max": {"effort": "max", "thinking": {"type": "adaptive"}}}},
         context_window=1000000,
     ))
-    assert entry["reasoning"] is True
-    # Declared tiers keep their payload byte-for-byte; every other tier
-    # OpenCode's built-ins could inject is muted instead of offered.
-    for tier in _INJECTABLE_TIER_NAMES:
-        expected = {"high": {"effort": "high"},
-                    "max": {"effort": "max"}}.get(tier, {"disabled": True})
-        assert entry["variants"][tier] == expected
-    assert len(entry["variants"]) == len(_INJECTABLE_TIER_NAMES)
+    assert entry["variants"] == [
+        {"id": "low", "settings": {"effort": "low", "thinking": {"type": "adaptive"}}},
+        {"id": "high", "settings": {"effort": "high", "thinking": {"type": "adaptive"}}},
+        {"id": "max", "settings": {"effort": "max", "thinking": {"type": "adaptive"}}},
+    ]
     assert entry["limit"] == {"context": 1000000, "output": _DEFAULT_MAX_OUTPUT}
 
 
-def test_apply_keeps_tier_names_outside_the_injectable_set(driver):
-    """The vocabulary is a mute list, not a whitelist: a tier name OpenCode
-    cannot inject (`off`) is rendered untouched."""
-    entry = _rendered(driver, _model(
-        {"reasoning": True, "variants": {"off": {"thinking": {"type": "disabled"}}}},
-    ))
-    assert entry["variants"]["off"] == {"thinking": {"type": "disabled"}}
-    assert entry["variants"]["max"] == {"disabled": True}
+def test_apply_renders_no_variants_when_undeclared(driver):
+    """No declaration, no variants key: OpenCode V2 injects no built-in tiers
+    for custom providers, so there is no cycle to populate."""
+    entry = _rendered(driver, _model({}))
+    assert "variants" not in entry
+    entry = _rendered(driver, _model({"variants": {}}))
+    assert "variants" not in entry
 
 
-def test_apply_preserves_a_hand_written_disabled_tier(driver):
-    """A user-written `disabled` (alone or beside a payload) is not replaced
-    by the generated one."""
+def test_apply_keeps_declaration_order_as_cycle_order(driver):
+    """The array order is the order ctrl+t cycles through the tiers."""
     entry = _rendered(driver, _model(
-        {"reasoning": True,
-         "variants": {"medium": {"effort": "medium", "disabled": True},
-                      "xhigh": {"disabled": True},
-                      "high": {"effort": "high"}}},
+        {"variants": {"max": {"effort": "max"}, "low": {"effort": "low"}}},
     ))
-    assert entry["variants"]["medium"] == {"effort": "medium", "disabled": True}
-    assert entry["variants"]["xhigh"] == {"disabled": True}
-    assert entry["variants"]["high"] == {"effort": "high"}
+    assert [v["id"] for v in entry["variants"]] == ["max", "low"]
 
 
 def test_apply_does_not_mutate_the_registry_variants(driver):
     """`variants.expand_model` hands back the registry's own dict when there
-    is no preset reference — muting must copy, not edit in place, or the muted
-    keys would leak into models.toml on the next save."""
-    variants = {"high": {"effort": "high"}}
-    m = _model({"reasoning": True, "variants": variants})
-    _rendered(driver, m)
-    assert m.extra["variants"] is variants
-    assert variants == {"high": {"effort": "high"}}
-
-
-def test_apply_without_reasoning_renders_variants_unmuted(driver):
-    """OpenCode computes no built-ins without `reasoning = true`, so there is
-    nothing to mute: the declared table passes through exactly as before."""
+    is no preset reference — rendering must not edit it in place, or the
+    change would leak into models.toml on the next save."""
     variants = {"high": {"effort": "high"}}
     m = _model({"variants": variants})
-    entry = _rendered(driver, m)
-    assert "reasoning" not in entry
-    assert entry["variants"] == {"high": {"effort": "high"}}
+    _rendered(driver, m)
+    assert m.extra["variants"] is variants
     assert variants == {"high": {"effort": "high"}}
 
 
 def test_apply_renders_optional_fields_without_context_window(driver):
     """The optional fields must not be swallowed when context_window is
     unknown: only `limit` is conditional, never the whole entry."""
-    from model_switch.drivers.opencode import _INJECTABLE_TIER_NAMES
     entry = _rendered(driver, _model(
-        {"reasoning": True, "variants": {"high": {"effort": "high"}}},
+        {"variants": {"high": {"effort": "high"}}},
     ))
     assert "limit" not in entry
-    assert entry["reasoning"] is True
-    assert entry["variants"]["high"] == {"effort": "high"}
-    assert sorted(entry["variants"]) == sorted(_INJECTABLE_TIER_NAMES)
+    assert entry["variants"] == [
+        {"id": "high", "settings": {"effort": "high"}},
+    ]
+    assert entry["capabilities"] == TEXT_ONLY
 
 
-def test_apply_ignores_non_true_reasoning_and_empty_variants(driver, glm_ctx):
-    """A string '"true"' or an empty variants table renders nothing, keeping
-    entries without usable declarations byte-identical to the old output."""
-    glm_ctx.extra = {"reasoning": "true", "variants": {}}
-    driver.apply(models=[glm_ctx], active=glm_ctx)
-    cfg = json.loads(driver.settings_path.read_text())
-    entry = cfg["provider"][_pid(glm_ctx)]["models"][glm_ctx.name]
-    assert entry == {"limit": {"context": 1000000, "output": 131072}}
-
-
-# --- capability flags + display name -----------------------------------------
-
-
-def test_apply_renders_true_capability_flags(driver):
-    """Temperature and attachment pass through when declared true; absent and
-    false render nothing, because OpenCode reads them as false anyway."""
-    entry = _rendered(driver, _model({"temperature": True, "attachment": True}))
-    assert entry["temperature"] is True
-    assert entry["attachment"] is True
-    entry = _rendered(driver, _model({"temperature": False, "attachment": False}))
-    assert "temperature" not in entry
-    assert "attachment" not in entry
-
-
-@pytest.mark.parametrize("key", ["temperature", "attachment"])
-def test_apply_rejects_non_boolean_capability_flags(driver, key):
-    model = _model({key: "yes"})
-    with pytest.raises(ValueError) as excinfo:
-        driver.apply(models=[model], active=model)
-    assert key in str(excinfo.value)
-    assert not driver.settings_path.exists()
+# --- display name -------------------------------------------------------------
 
 
 def test_apply_renders_display_name_as_model_name(driver):
@@ -690,18 +703,19 @@ def test_apply_rejects_invalid_display_name(driver, value):
     assert not driver.settings_path.exists()
 
 
-def test_sync_catalog_keeps_reasoning_and_variants_on_reconcile(driver):
+def test_sync_catalog_keeps_variants_on_reconcile(driver):
     """Reconcile is a mirror: a second run must reproduce the same model
     block (no drift, no loss)."""
     m = _model(
-        {"reasoning": True, "variants": {"high": {"effort": "high"}}},
+        {"variants": {"high": {"effort": "high"}}},
         context_window=1000,
     )
     driver.settings_path.write_text("{}", encoding="utf-8")  # sync never creates
     driver.sync_catalog([m])
-    first = json.loads(driver.settings_path.read_text())["provider"][_pid(m)]
+    first = json.loads(driver.settings_path.read_text())["providers"][_pid(m)]
     driver.sync_catalog([m])
-    second = json.loads(driver.settings_path.read_text())["provider"][_pid(m)]
+    second = json.loads(driver.settings_path.read_text())["providers"][_pid(m)]
     assert first == second
-    assert second["models"]["m"]["variants"]["high"] == {"effort": "high"}
-    assert second["models"]["m"]["variants"]["low"] == {"disabled": True}
+    assert second["models"]["m"]["variants"] == [
+        {"id": "high", "settings": {"effort": "high"}},
+    ]

@@ -2,10 +2,13 @@
 
 Consistency with OpenCode's built-in catalog means copying the declarations
 OpenCode itself would use for the same upstream model — same source, same
-values. This module reads OpenCode's local models.dev snapshot
-(``~/.cache/opencode/models.json``, refreshed by OpenCode about hourly); it
-never touches the network. A missing cache is not an error: the caller falls
-back to manual values, because auto-fill is an assist, never a requirement.
+values. This module reads OpenCode's local models.dev snapshot — since
+OpenCode 2.0 a SQLite database at
+``$XDG_DATA_HOME/opencode/opencode.db`` (default
+``~/.local/share/opencode/opencode.db``), refreshed by OpenCode about
+hourly; it never touches the network. A missing cache is not an error: the
+caller falls back to manual values, because auto-fill is an assist, never a
+requirement.
 
 Disambiguation is deliberately conservative. One model name appears under
 many providers with conflicting declarations, so candidates are narrowed by
@@ -15,11 +18,9 @@ derived fields must agree, otherwise the caller has to pin one with
 silently mis-configures reasoning tiers.
 
 Fields derived (see `derive`): ``context_window`` (from ``limit.context``),
-``reasoning``, ``variants`` (one tier per declared effort value, plus
-``none`` translated to a thinking-off tier when declared), ``modalities``,
-``temperature`` / ``attachment`` (only when the entry declares ``true`` —
-OpenCode treats an omitted flag as false) and ``display_name`` (the entry's
-human-readable ``name``). A ``toggle`` option adds no tier of its own,
+``variants`` (one tier per declared effort value, plus ``none`` translated to
+a thinking-off tier when declared), ``modalities`` and ``display_name`` (the
+entry's human-readable ``name``). A ``toggle`` option adds no tier of its own,
 mirroring OpenCode's own derivation; budget ladders are never invented, so a
 model declaring only ``budget_tokens`` gets no tiers.
 
@@ -42,6 +43,7 @@ Known limits, by design:
   it silently. Only vendor docs plus task-level observation can tell.
 """
 import json
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -104,24 +106,55 @@ def host_of(url: str) -> str:
     return urlsplit(str(url or "")).netloc.lower()
 
 
+# OpenCode 2.0 keeps the models.dev snapshot in its SQLite database: table
+# ``kv``, this key, value = JSON envelope {updatedAt, digest, body} where
+# ``body`` carries the provider map as a JSON string.
+_CATALOG_KV_KEY = "models-dev:catalog"
+
+
 def load_cache(path: Optional[Path] = None) -> Tuple[Optional[Dict[str, Any]], str]:
     """Read the catalog cache: ``(data-or-None, human description)``.
 
-    Never raises and never fetches anything — the only failure modes are a
-    missing or unreadable local file, both reported in the description.
+    ``path`` is an OpenCode database file (default
+    `paths.catalog_db_file`). Never raises and never fetches anything — the
+    failure modes are all local (missing db, missing snapshot row,
+    unreadable content), both reported in the description. The database is
+    opened read-only: model-switch never writes it.
     """
-    p = Path(path) if path is not None else paths.catalog_cache_file()
-    try:
-        raw = p.read_text(encoding="utf-8")
-    except OSError:
+    p = Path(path) if path is not None else paths.catalog_db_file()
+    if not p.exists():
         return None, "no catalog cache at {} (OpenCode builds it on first run)".format(p)
     try:
-        data = json.loads(raw)
-    except ValueError:
+        con = sqlite3.connect(p.absolute().as_uri() + "?mode=ro", uri=True)
+    except (OSError, ValueError, sqlite3.Error):
+        return None, "unreadable catalog cache at {}".format(p)
+    try:
+        try:
+            row = con.execute("SELECT value FROM kv WHERE key = ?",
+                              (_CATALOG_KV_KEY,)).fetchone()
+        except sqlite3.Error:
+            return None, "unreadable catalog cache at {}".format(p)
+    finally:
+        con.close()
+    if row is None:
+        return None, "no catalog cache at {} (OpenCode builds it on first run)".format(p)
+    try:
+        envelope = json.loads(row[0])
+    except (ValueError, TypeError):
+        return None, "unreadable catalog cache at {}".format(p)
+    if not isinstance(envelope, dict):
+        return None, "unexpected catalog cache shape at {}".format(p)
+    try:
+        data = json.loads(envelope["body"])
+    except (ValueError, TypeError, KeyError):
         return None, "unreadable catalog cache at {}".format(p)
     if not isinstance(data, dict):
         return None, "unexpected catalog cache shape at {}".format(p)
-    stamp = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    updated = envelope.get("updatedAt")
+    ts = (updated / 1000.0
+          if isinstance(updated, (int, float)) and updated > 0
+          else p.stat().st_mtime)
+    stamp = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
     return data, "{} (updated {})".format(p, stamp)
 
 
@@ -205,13 +238,10 @@ def _reasoning_options(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
 def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
     """Map one catalog entry to the fields model-switch writes.
 
-    Returns ``context_window`` (``limit.context``), ``reasoning`` (any
-    ``reasoning_options`` declared), ``variants`` (``{}`` when the entry
-    declares none we can honor), ``modalities`` (``None`` when the entry
-    is text-only — declaring that adds nothing), ``temperature`` /
-    ``attachment`` (``True`` only when the entry says so, else ``None`` —
-    OpenCode's own default for both is false) and ``display_name`` (the
-    entry's human-readable ``name``, or ``None``).
+    Returns ``context_window`` (``limit.context``), ``variants`` (``{}`` when
+    the entry declares none we can honor), ``modalities`` (``None`` when the
+    entry is text-only — declaring that adds nothing) and ``display_name``
+    (the entry's human-readable ``name``, or ``None``).
     """
     limit = entry.get("limit") or {}
     context = limit.get("context") if isinstance(limit, dict) else None
@@ -219,13 +249,8 @@ def derive(entry: Dict[str, Any]) -> Dict[str, Any]:
         context = None
     return {
         "context_window": context,
-        "reasoning": bool(_reasoning_options(entry)),
         "variants": _derive_variants(entry),
         "modalities": _derive_modalities(entry),
-        # OpenCode's model config treats an absent flag as false, so only a
-        # declared ``true`` carries information.
-        "temperature": True if entry.get("temperature") is True else None,
-        "attachment": True if entry.get("attachment") is True else None,
         "display_name": _derive_display_name(entry),
     }
 

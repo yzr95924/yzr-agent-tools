@@ -268,7 +268,7 @@ def test_model_use_writes_stored_api_key_to_driver(yzr_paths):
     assert result.exit_code == 0, result.stdout
 
     written = json.loads(yzr_paths["opencode"].read_text())
-    assert written["provider"]["yzr-zai"]["options"]["apiKey"] == "sk-from-toml"
+    assert written["providers"]["yzr-zai"]["settings"]["apiKey"] == "sk-from-toml"
 
 
 def test_model_use_interactive_default_applies_all_drivers(yzr_paths):
@@ -285,7 +285,7 @@ def test_model_use_interactive_default_applies_all_drivers(yzr_paths):
     claude = json.loads(yzr_paths["settings"].read_text())
     assert claude["env"]["ANTHROPIC_AUTH_TOKEN"] == "K"
     opencode = json.loads(yzr_paths["opencode"].read_text())
-    assert opencode["provider"]["yzr-example"]["options"]["apiKey"] == "K"
+    assert opencode["providers"]["yzr-example"]["settings"]["apiKey"] == "K"
 
 
 def test_model_use_interactive_all_keyword(yzr_paths):

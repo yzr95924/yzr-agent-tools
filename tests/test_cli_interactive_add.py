@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-
+from _catalog_db import write_catalog_db as _write_catalog
 from model_switch.store import load_models, load_state, save_models
 
 from _cli_runner import invoke_cli as runner
@@ -45,8 +45,7 @@ def catalog(yzr_paths):
     selects `zai/glm-4.7`; the decoy provider must never appear in a
     host-filtered menu.
     """
-    yzr_paths["catalog"].parent.mkdir(parents=True, exist_ok=True)
-    yzr_paths["catalog"].write_text(json.dumps({
+    _write_catalog(yzr_paths["catalog"], {
         "zai": {"id": "zai", "name": "Z.AI",
                 "api": "https://api.z.ai/api/paas/v4",
                 "models": {"glm-5.3": _entry("GLM-5.3"),
@@ -54,7 +53,7 @@ def catalog(yzr_paths):
         "decoy": {"id": "decoy", "name": "Decoy Inc",
                   "api": "https://decoy.example/v1",
                   "models": {"glm-5.3": _entry("GLM-5.3")}},
-    }), encoding="utf-8")
+    })
     return yzr_paths
 
 
@@ -207,7 +206,6 @@ def test_wizard_picks_from_catalog_and_derives_fields(catalog):
     # The summary must mirror the entry that gets written.
     assert "About to add 'glm-4.7'" in result.stdout
     assert "context window  1M" in result.stdout
-    assert "reasoning       yes" in result.stdout
     assert "variants        low, high" in result.stdout
     assert "modalities      text+image" in result.stdout
     m = load_models(catalog["models"]).models["glm-4.7"]
@@ -215,28 +213,23 @@ def test_wizard_picks_from_catalog_and_derives_fields(catalog):
     assert m.base_url == ZAI_BASE
     assert m.api_key == "K"
     assert m.context_window == 1000000
-    assert m.extra["reasoning"] is True
     assert list(m.extra["variants"]) == ["low", "high"]
     assert m.extra["modalities"] == {"input": ["text", "image"],
                                      "output": ["text"]}
 
 
-def test_wizard_derives_capability_flags_and_display_name(yzr_paths):
-    """The catalog's capability flags (only when true) and the display name
-    are written to models.toml and shown in the summary — the summary reads
-    from the entry, so the two cannot drift."""
-    yzr_paths["catalog"].parent.mkdir(parents=True, exist_ok=True)
-    yzr_paths["catalog"].write_text(json.dumps({
+def test_wizard_derives_display_name(yzr_paths):
+    """The catalog's display name is written to models.toml and shown in the
+    summary — the summary reads from the entry, so the two cannot drift."""
+    _write_catalog(yzr_paths["catalog"], {
         "zai": {"id": "zai", "name": "Z.AI",
                 "api": "https://api.z.ai/api/paas/v4",
                 "models": {"glm-5.3": {
                     "name": "GLM-5.3",
                     "limit": {"context": 1000000},
                     "reasoning_options": [{"type": "effort", "values": ["low"]}],
-                    "temperature": True,
-                    "attachment": True,
                 }}},
-    }), encoding="utf-8")
+    })
 
     result = runner(["model", "add"], input="\n".join([
         ZAI_BASE, "K",
@@ -250,25 +243,21 @@ def test_wizard_derives_capability_flags_and_display_name(yzr_paths):
 
     assert result.exit_code == 0, result.stdout
     assert "display name    GLM-5.3" in result.stdout
-    assert "capabilities    temperature, attachment" in result.stdout
     m = load_models(yzr_paths["models"]).models["glm-5.3"]
     assert m.extra["display_name"] == "GLM-5.3"
-    assert m.extra["temperature"] is True
-    assert m.extra["attachment"] is True
 
 
 def test_wizard_omits_display_name_equal_to_the_upstream_id(yzr_paths):
     """A catalog name that just repeats the id must not be copied into
     models.toml — the picker label falls back to the key by itself."""
-    yzr_paths["catalog"].parent.mkdir(parents=True, exist_ok=True)
-    yzr_paths["catalog"].write_text(json.dumps({
+    _write_catalog(yzr_paths["catalog"], {
         "zai": {"id": "zai", "name": "Z.AI",
                 "api": "https://api.z.ai/api/paas/v4",
                 "models": {"glm-5.3": {
                     "name": "glm-5.3",
                     "limit": {"context": 1000000},
                 }}},
-    }), encoding="utf-8")
+    })
 
     result = runner(["model", "add"], input="\n".join([
         ZAI_BASE, "K",
@@ -661,9 +650,9 @@ def test_same_upstream_lands_in_one_provider_block(yzr_paths):
     assert result.exit_code == 0, result.stdout
 
     cfg = json.loads(yzr_paths["opencode"].read_text(encoding="utf-8"))
-    ours = [pid for pid in cfg["provider"] if pid.startswith("yzr-")]
+    ours = [pid for pid in cfg["providers"] if pid.startswith("yzr-")]
     assert ours == ["yzr-dashscope"], ours
-    assert sorted(cfg["provider"]["yzr-dashscope"]["models"]) == [
+    assert sorted(cfg["providers"]["yzr-dashscope"]["models"]) == [
         "deepseek-v4-flash", "qwen-max"]
 
 

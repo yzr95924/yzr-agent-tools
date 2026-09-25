@@ -6,9 +6,12 @@ writes into models.toml, so each rule gets an explicit case.
 """
 import json
 import socket
+import sqlite3
+from datetime import datetime
 
 import pytest
 
+from _catalog_db import CATALOG_KV_KEY, write_catalog_db
 from model_switch import catalog
 
 
@@ -47,27 +50,66 @@ def test_host_of_strips_scheme_and_path():
 
 # --- load_cache ----------------------------------------------------------------
 
-def test_load_cache_missing_file_reports_reason(tmp_path):
-    data, desc = catalog.load_cache(tmp_path / "nope.json")
+def _kv_db(path, value):
+    """A kv table with one raw (possibly bogus) snapshot value."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(path))
+    con.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)")
+    con.execute("INSERT INTO kv (key, value) VALUES (?, ?)", (CATALOG_KV_KEY, value))
+    con.commit()
+    con.close()
+    return path
+
+
+def test_load_cache_missing_db_reports_reason(tmp_path):
+    data, desc = catalog.load_cache(tmp_path / "nope.db")
     assert data is None
     assert "no catalog cache" in desc
 
 
-def test_load_cache_broken_json_reports_reason(tmp_path):
-    p = tmp_path / "models.json"
-    p.write_text("{ not json", encoding="utf-8")
+def test_load_cache_db_without_snapshot_row_reports_reason(tmp_path):
+    p = tmp_path / "opencode.db"
+    con = sqlite3.connect(str(p))
+    con.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)")
+    con.commit()
+    con.close()
+    data, desc = catalog.load_cache(p)
+    assert data is None
+    assert "no catalog cache" in desc
+
+
+def test_load_cache_not_a_sqlite_db_reports_reason(tmp_path):
+    p = tmp_path / "opencode.db"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"definitely not a database")
     data, desc = catalog.load_cache(p)
     assert data is None
     assert "unreadable" in desc
 
 
-def test_load_cache_returns_data_and_mtime_description(tmp_path):
-    p = tmp_path / "models.json"
-    p.write_text(json.dumps({"a": {"api": "https://a", "models": {}}}),
-                 encoding="utf-8")
+def test_load_cache_broken_envelope_reports_reason(tmp_path):
+    p = _kv_db(tmp_path / "opencode.db", "{ not json")
     data, desc = catalog.load_cache(p)
-    assert data == {"a": {"api": "https://a", "models": {}}}
-    assert "updated" in desc and str(p) in desc
+    assert data is None
+    assert "unreadable" in desc
+
+
+def test_load_cache_broken_body_reports_reason(tmp_path):
+    p = _kv_db(tmp_path / "opencode.db", json.dumps({"body": "{ nope"}))
+    data, desc = catalog.load_cache(p)
+    assert data is None
+    assert "unreadable" in desc
+
+
+def test_load_cache_returns_data_and_updated_description(tmp_path):
+    providers = {"a": {"api": "https://a", "models": {}}}
+    # A stamp from the envelope's epoch-ms `updatedAt` (2001-09-09), clearly
+    # distinct from the db file's fresh mtime.
+    p = write_catalog_db(tmp_path / "opencode.db", providers, updated_ms=1000000000000)
+    data, desc = catalog.load_cache(p)
+    assert data == providers
+    assert str(p) in desc
+    assert datetime.fromtimestamp(1000000000).strftime("%Y-%m-%d %H:%M") in desc
 
 
 # --- candidates / pick ---------------------------------------------------------
@@ -162,7 +204,6 @@ def test_derive_effort_tiers_ignore_toggle():
         modalities={"input": ["text", "image", "video", "pdf"], "output": ["text"]},
     ))
     assert fields["context_window"] == 1000000
-    assert fields["reasoning"] is True
     assert fields["variants"] == {
         "low": {"effort": "low", "thinking": {"type": "adaptive"}},
         "medium": {"effort": "medium", "thinking": {"type": "adaptive"}},
@@ -200,7 +241,6 @@ def test_derive_toggle_only_gets_no_tiers():
     entry = _entry(options=[{"type": "toggle"}])
     fields = catalog.derive(entry)
     assert fields["variants"] == {}
-    assert fields["reasoning"] is True
     assert catalog.no_tiers_declared(entry) is True
 
 
@@ -208,7 +248,6 @@ def test_derive_budget_only_gets_no_tiers():
     entry = _entry(options=[{"type": "budget_tokens", "min": 0, "max": 32768}])
     fields = catalog.derive(entry)
     assert fields["variants"] == {}
-    assert fields["reasoning"] is True
     assert catalog.no_tiers_declared(entry) is True
 
 
@@ -218,9 +257,8 @@ def test_derive_all_skippable_efforts_yield_no_tiers():
     assert catalog.no_tiers_declared(entry) is True
 
 
-def test_derive_without_options_is_not_reasoning():
+def test_derive_without_options_gets_no_tiers():
     fields = catalog.derive(_entry(limit={"context": 8192}))
-    assert fields["reasoning"] is False
     assert fields["variants"] == {}
     assert catalog.no_tiers_declared({}) is False
 
@@ -238,24 +276,6 @@ def test_derive_text_only_modalities_stay_undeclared():
 def test_derive_missing_or_invalid_context_is_none():
     assert catalog.derive(_entry())["context_window"] is None
     assert catalog.derive(_entry(limit={"context": 0}))["context_window"] is None
-
-
-def test_derive_capability_flags_only_when_true():
-    """OpenCode's model config treats an absent flag as false, so only a
-    declared ``true`` carries information; false/null/missing derive None."""
-    entry = _entry()
-    assert catalog.derive(entry)["temperature"] is None
-    assert catalog.derive(entry)["attachment"] is None
-    entry["temperature"] = False
-    entry["attachment"] = None
-    fields = catalog.derive(entry)
-    assert fields["temperature"] is None
-    assert fields["attachment"] is None
-    entry["temperature"] = True
-    entry["attachment"] = True
-    fields = catalog.derive(entry)
-    assert fields["temperature"] is True
-    assert fields["attachment"] is True
 
 
 def test_derive_display_name_from_entry_name():
@@ -358,14 +378,13 @@ def test_search_tolerates_malformed_provider_shapes():
 # --- no network, ever ----------------------------------------------------------
 
 def test_catalog_never_opens_a_socket(tmp_path, monkeypatch):
-    cache = tmp_path / "models.json"
-    cache.write_text(json.dumps(_cache({
+    cache = write_catalog_db(tmp_path / "opencode.db", _cache({
         "ours": ("https://ours.example.com/v1", {"m": _entry(
             options=_full_options(),
             limit={"context": 1000},
             modalities={"input": ["text", "image"], "output": ["text"]},
         )}),
-    })), encoding="utf-8")
+    }))
 
     def _boom(*_a, **_k):
         raise AssertionError("catalog code must never touch the network")

@@ -1,0 +1,43 @@
+#compdef opencode-plugins
+# zsh completion for opencode-plugins(1)
+#
+# Dynamic plugin-name candidates come from the hidden
+# `opencode-plugins _complete plugins` plumbing command.
+#
+# scripts/opencode-plugins.sh install symlinks this file into ~/.zfunc/
+# (added to fpath by the ~/.bashrc/~/.zshrc marker block).
+
+local curcontext="$curcontext" state line
+typeset -A opt_args
+
+local -a commands
+commands=(
+  'list:Show bundled plugins and their status'
+  'install:Copy plugin sources into OpenCode and register them'
+  'uninstall:Deregister and remove installed plugins'
+  'sync:Re-copy plugin sources after editing them'
+  'verify:Check install integrity'
+)
+
+local -a _op_plugins
+_op_plugins=(${(f)"$(opencode-plugins _complete plugins 2>/dev/null)"})
+
+_arguments -C \
+  '1:command:->command' \
+  '*::arg:->args'
+
+case $state in
+  command)
+    _describe -t commands 'opencode-plugins command' commands
+    ;;
+  args)
+    case $words[1] in
+      list)
+        _message 'no more arguments'
+        ;;
+      install|uninstall|sync|verify)
+        _describe -t plugins 'bundled plugin' _op_plugins
+        ;;
+    esac
+    ;;
+esac

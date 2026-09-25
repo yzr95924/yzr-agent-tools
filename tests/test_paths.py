@@ -5,7 +5,13 @@ XDG / HOME resolution; they don't touch any state on disk.
 """
 import pytest
 
-from model_switch.paths import config_dir, models_file, opencode_config_file, state_file
+from model_switch.paths import (
+    catalog_db_file,
+    config_dir,
+    models_file,
+    opencode_config_file,
+    state_file,
+)
 
 pytestmark = pytest.mark.no_isolation
 
@@ -45,3 +51,18 @@ def test_opencode_config_file_defaults_to_home_config(monkeypatch, tmp_path):
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert opencode_config_file() == tmp_path / ".config" / "opencode" / "opencode.json"
+
+
+# OpenCode 2.0's models.dev snapshot is a kv row in its SQLite database,
+# $XDG_DATA_HOME/opencode/opencode.db (default ~/.local/share/opencode/...).
+
+
+def test_catalog_db_file_uses_xdg_data_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    assert catalog_db_file() == tmp_path / "opencode" / "opencode.db"
+
+
+def test_catalog_db_file_defaults_to_home_local_share(monkeypatch, tmp_path):
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert catalog_db_file() == tmp_path / ".local" / "share" / "opencode" / "opencode.db"

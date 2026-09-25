@@ -53,7 +53,8 @@ def _strip_comments_and_heredocs(text: str) -> str:
 ROOT = Path(__file__).resolve().parents[1]
 MS_SH = ROOT / "scripts" / "model-switch.sh"
 MCP_SH = ROOT / "scripts" / "mcp-plugin-mgr.sh"
-SCRIPTS = (MS_SH, MCP_SH)
+OP_SH = ROOT / "scripts" / "opencode-plugins.sh"
+SCRIPTS = (MS_SH, MCP_SH, OP_SH)
 WRAPPER = ROOT / "bin" / "model-switch"
 PYPROJECT = ROOT / "pyproject.toml"
 

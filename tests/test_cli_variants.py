@@ -1,7 +1,7 @@
 """CLI-level tests for variant presets.
 
 `model use` materializes presets before rendering (in memory only) so
-OpenCode gets plain `variants` blocks; `model add`/`remove` rewrite
+OpenCode gets the V2 `variants` array; `model add`/`remove` rewrite
 models.toml through the dumper, which must keep the preset table and the
 per-model reference intact.
 """
@@ -30,7 +30,6 @@ MODELS_TOML = (
     'base_url = "https://api.example.com"\n'
     'api_key = "K1"\n'
     'context_window = 1000000\n'
-    'reasoning = true\n'
     'variants_preset = "z-effort"\n'
     '\n'
     '[[models]]\n'
@@ -56,19 +55,18 @@ def test_model_use_renders_expanded_variants(yzr_paths):
     assert r.exit_code == 0, r.stdout
 
     cfg = json.loads(yzr_paths["opencode"].read_text())
-    entry = cfg["provider"]["yzr-example"]["models"]["glm-5.3"]
-    assert entry["reasoning"] is True
-    # The preset's tiers are the whole cycle: built-in names OpenCode would
-    # otherwise merge in are muted in the rendered block.
-    rendered = entry["variants"]
-    assert {t: body for t, body in rendered.items()
-            if not body.get("disabled")} == {
-        "high": {"effort": "high"}, "max": {"effort": "max"}}
-    assert rendered["medium"] == {"disabled": True}
-    # A model without `reasoning = true` injects no built-ins, so its inline
-    # variants are rendered untouched.
-    inline = cfg["provider"]["yzr-kimi"]["models"]["inline"]
-    assert inline["variants"] == {"none": {"thinking": {"type": "disabled"}}}
+    entry = cfg["providers"]["yzr-example"]["models"]["glm-5.3"]
+    # The preset's tiers are the whole set, in declaration order — V2
+    # computes no built-ins for custom providers, so nothing is muted.
+    assert entry["variants"] == [
+        {"id": "high", "settings": {"effort": "high"}},
+        {"id": "max", "settings": {"effort": "max"}},
+    ]
+    # An inline declaration renders the same way.
+    inline = cfg["providers"]["yzr-kimi"]["models"]["inline"]
+    assert inline["variants"] == [
+        {"id": "none", "settings": {"thinking": {"type": "disabled"}}},
+    ]
 
 
 def test_model_use_keeps_preset_form_in_models_toml(yzr_paths):
@@ -103,13 +101,12 @@ def test_model_add_and_remove_keep_presets_and_references(yzr_paths):
     }
 
 
-def test_model_show_reports_reasoning_and_variants(yzr_paths):
+def test_model_show_reports_variants(yzr_paths):
     _seed_models(yzr_paths)
 
     r = runner(["model", "show", "glm-5_3-1m"])
 
     assert r.exit_code == 0, r.stdout
-    assert "reasoning:      true" in r.stdout
     assert "variants:       preset 'z-effort' -> high, max" in r.stdout
 
 
@@ -122,36 +119,16 @@ def test_model_show_reports_inline_variants(yzr_paths):
     assert "variants:       (inline) -> none" in r.stdout
 
 
-def test_model_show_marks_builtin_tiers_when_nothing_is_declared(yzr_paths):
-    """A reasoning model without a declaration still gets OpenCode's built-in
-    tiers, so an omitted variants line would read as "no tiers"."""
+def test_model_show_reports_no_variants_when_undeclared(yzr_paths):
+    """No declaration → no variant selection in OpenCode; say so instead of
+    leaving the line out (which would read as an oversight)."""
     _seed_models(yzr_paths, MODELS_TOML.replace(
         'variants_preset = "z-effort"\n', '', 1))
 
     r = runner(["model", "show", "glm-5_3-1m"])
 
     assert r.exit_code == 0, r.stdout
-    assert "reasoning:      true" in r.stdout
-    assert ("variants:       <none declared> "
-            "(OpenCode's built-in tiers apply)") in r.stdout
-
-
-def test_model_show_names_muted_tiers(yzr_paths):
-    """`disabled = true` tiers won't appear in OpenCode's cycle, so show must
-    not list them as if they were active."""
-    muted = MODELS_TOML.replace(
-        'variants_preset = "z-effort"',
-        'variants_preset = "z-effort"\n'
-        '\n[models.variants]\n'
-        'low = { disabled = true }',
-        1,
-    )
-    _seed_models(yzr_paths, muted)
-
-    r = runner(["model", "show", "glm-5_3-1m"])
-
-    assert r.exit_code == 0, r.stdout
-    assert "variants:       preset 'z-effort' -> high, max (disabled: low)" in r.stdout
+    assert "variants:       <none declared>" in r.stdout
 
 
 def test_model_show_ignores_other_models_broken_presets(yzr_paths):

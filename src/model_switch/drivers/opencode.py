@@ -5,6 +5,12 @@ OpenCode loads its global config from ``$XDG_CONFIG_HOME/opencode/opencode.json`
 Writing the wrong path means the config is silently ignored and OpenCode
 starts on its default model.
 
+The shapes written here are OpenCode **V2** native shapes. V2 still reads V1
+config, but it drops V1 model fields with a warning and normalizes the rest in
+memory, so this driver writes only what V2 actually consumes. The V1
+``provider`` map is still *read* — one sync reclaims the ``yzr-*`` blocks an
+older model-switch wrote there, then deletes the key if nothing else remains.
+
 Unlike Claude Code (a single model slot), OpenCode holds a **catalog**: every
 registered provider's models are listed in its model picker, and ``model``
 names the default. So model-switch mirrors *all* models from models.toml into
@@ -12,11 +18,11 @@ the ``yzr-*`` provider namespace and treats ``config["model"]`` as a pointer
 to the active one::
 
   {
-    "provider": {
+    "providers": {
       "yzr-zai": {
-        "npm": "@ai-sdk/anthropic",
+        "package": "@opencode/ai/providers/anthropic",
         "name": "yzr-zai",
-        "options": { "baseURL": "<base_url>/v1", "apiKey": "<resolved-key>" },
+        "settings": { "baseURL": "<base_url>/v1", "apiKey": "<resolved-key>" },
         "models": { "<model name>": {} }
       },
       "yzr-kimi": { ... }
@@ -45,67 +51,53 @@ preserved. ``sync_catalog()`` keeps the current default pointer unless it
 vanished (then it falls to the first remaining model, or drops the key when
 none are left).
 
-The resolved API key is written **verbatim** into ``options.apiKey`` — matching
-the claude-code driver and OpenCode's own convention for custom providers
-(OpenCode supports a ``{env:VAR}`` placeholder, but we don't use it: the key
-lives in the config file, so the file holds a secret; keep its permissions
-tight).
+The resolved API key is written **verbatim** into ``settings.apiKey`` —
+matching the claude-code driver and OpenCode's own convention for custom
+providers (OpenCode supports a ``{env:VAR}`` placeholder, but we don't use it:
+the key lives in the config file, so the file holds a secret; keep its
+permissions tight).
 
-``baseURL`` is **not** written verbatim: ``@ai-sdk/anthropic`` appends only
+``baseURL`` is **not** written verbatim: the Anthropic package appends only
 ``/messages`` to it (treating it as a prefix that already includes the API
 version), so the driver ensures it ends in a ``/v<N>`` segment. The model's
 ``base_url`` is stored without ``/v1`` — the form the claude-code driver
 wants, since Claude Code appends ``/v1`` itself; this driver appends ``/v1``
 when rendering for OpenCode, so the same stored value serves both agents.
 Without this, opencode requests ``.../anthropic/messages``, the upstream
-answers with a 404 wrapped in HTTP 200, and ai-sdk's SSE parser drops the
+answers with a 404 wrapped in HTTP 200, and the SSE parser drops the
 non-event body silently — a zero-token empty reply with no error event.
 
 ``Model.context_window`` is surfaced as ``limit.context``: a custom provider
 isn't on models.dev, so OpenCode can't infer the context budget and would fall
 back to a default. OpenCode's schema requires ``context`` and ``output``
-together (``limit.required == [context, output]``), so context is paired with a
-default ``output`` cap (``_DEFAULT_MAX_OUTPUT``). When ``context_window`` is
-unknown the whole ``limit`` block is omitted — a partial ``{limit:{context}}``
-fails validation and makes the model unavailable.
+together, so context is paired with a default ``output`` cap
+(``_DEFAULT_MAX_OUTPUT``). When ``context_window`` is unknown the whole
+``limit`` block is omitted — a partial ``{limit:{context}}`` fails validation
+and makes the model unavailable.
 
-``reasoning`` from a model entry marks the model as reasoning-capable
-(OpenCode gates some of its behaviour on that flag). ``variants`` declares the
-effort tiers OpenCode's variant cycle (ctrl+t, ``variant_cycle``) offers —
-each tier is an opaque payload OpenCode merges over its own request options.
-What the tiers are and which shapes an upstream accepts is user data in
-models.toml (optionally via ``[variants_presets]``, expanded by
-`model_switch.variants.expand`); this driver holds no per-model or per-gateway
-knowledge, so adding a model or an upstream never touches it.
+``variants`` declares the effort tiers OpenCode's variant selection
+(``provider/model#variant``) offers. V2 renders them as the array shape
+``[{ "id": <tier>, "settings": <payload> }, ...]``; the payload is user data
+from models.toml (optionally via ``[variants_presets]``, expanded by
+`model_switch.variants.expand`) and this driver holds no per-model or
+per-gateway knowledge, so adding a model or an upstream never touches it.
+OpenCode V2 computes no built-in tiers for custom providers, so the declared
+tiers are exactly the whole set — no muting, no merging. Declaration order is
+the cycle order.
 
-``temperature`` and ``attachment`` mirror the catalog's capability flags and
-are rendered only when ``true``: OpenCode treats an absent flag as false, so
-writing ``false`` adds nothing. ``temperature`` has a visible consumer — when
-false, OpenCode omits the parameter and a per-agent temperature never reaches
-the request; ``attachment`` feeds the model object's ``capabilities`` (the
-config default for a model OpenCode cannot look up is false). ``display_name``
-renders as the model-level ``name``, which is only the picker label: OpenCode
-falls back to the model key when it is absent, and both the key and ``api.id``
-stay the upstream id. A ``display_name`` equal to that id is skipped rather
-than repeated.
+``modalities`` from a model entry becomes the model's ``capabilities`` block
+(``input``/``output``) with ``tools`` always true. The block is emitted even
+for a model without declared modalities, because OpenCode's fallback for a
+model it cannot look up assumes image input — writing text-only explicitly is
+what keeps such a model text-only. Values use the config schema's modality
+enum and are validated locally (a bad value makes OpenCode reject the whole
+file). Declaring a modality the upstream doesn't actually accept turns the
+silent fallback into a hard request error, so entries opt in per model.
 
-Declaring ``variants`` makes the declaration authoritative. OpenCode *merges*
-user tiers over built-in ones it computes per model (matched on the rendered
-model key, the provider id or the base URL), so tiers nobody declared would
-otherwise show up in the cycle. `_mute_undeclared_builtins` renders those as
-``disabled`` — OpenCode drops disabled tiers right after the merge — so a
-reasoning model with a declared tier set offers exactly that set. A model
-without ``variants`` is left alone: OpenCode's built-ins apply untouched, and
-they are also the fallback for any tier name this driver does not know to
-mute.
-
-``modalities`` from a model entry declares which non-text message parts
-OpenCode is allowed to send (``input``) — an undeclared image/PDF part is
-replaced by an ERROR text prompt before the request, so the model never sees
-the attachment. Values use the config schema's modality enum and are validated
-locally (a bad value makes OpenCode reject the whole file). Declaring a
-modality the upstream doesn't actually accept turns that silent fallback into
-a hard request error, so entries opt in per model.
+``display_name`` renders as the model-level ``name``, which is only the picker
+label: OpenCode falls back to the model key when it is absent, and both the
+key and ``api.id`` stay the upstream id. A ``display_name`` equal to that id
+is skipped rather than repeated.
 """
 import re
 from pathlib import Path
@@ -114,7 +106,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from model_switch import paths
 from model_switch.drivers._atomic import atomic_write_json, read_json
 from model_switch.store import ModelEntry as Model
-from model_switch.store import BOOLEAN_FLAGS, provider_group_key
+from model_switch.store import provider_group_key
 
 
 PROVIDER_ID = "yzr"
@@ -123,9 +115,14 @@ PROVIDER_ID = "yzr"
 # the legacy forms `_is_owned_provider` reclaims).
 PROVIDER_PREFIX = "yzr-"
 
-# Without `npm`, OpenCode reports "Provider not found" and silently falls back
-# to its default model.
-NPM_ADAPTER = "@ai-sdk/anthropic"
+# The V2 providers key and the V1 one this driver used to write. Owned blocks
+# are reclaimed from both; only the V2 key is written.
+PROVIDER_KEY = "providers"
+LEGACY_PROVIDER_KEY = "provider"
+
+# Without `package`, OpenCode reports "Provider not found" and silently falls
+# back to its default model.
+PACKAGE = "@opencode/ai/providers/anthropic"
 
 # baseURL must carry a version segment; see the module docstring.
 _VERSION_SEGMENT = re.compile(r"/v\d+$")
@@ -136,142 +133,83 @@ _VERSION_SEGMENT = re.compile(r"/v\d+$")
 # models.dev MiniMax-M3; upgrade to a per-model field when output must vary.
 _DEFAULT_MAX_OUTPUT = 131_072
 
-# OpenCode's modality enum for the model block; this tuple also orders the
-# values in rendered messages.
+# OpenCode's modality enum for the capabilities block; this tuple also orders
+# the values in rendered messages.
 _MODALITY_VALUES = ("text", "audio", "image", "video", "pdf")
-
-# The tier names OpenCode's built-in rules can inject for NPM_ADAPTER models
-# (1.18.31 snapshot; the contract consuming this list is in the module
-# docstring). Deliberately a superset, and explicitly not a whitelist — a
-# declared tier name is an arbitrary string. For this npm adapter the built-ins
-# contribute low/medium/high/xhigh/max (kimi/moonshot, matched on provider id,
-# api id *or* base URL, and claude >= 4.7), low/medium/high/max (opus/sonnet
-# 4.6), low/medium/high (opus 4.5), none/thinking (minimax-m3) and high/max
-# (non-claude fallback). Muting a name that was never injected is a no-op, so
-# erring wide only costs a few ``{disabled: true}`` keys; a tier a later
-# OpenCode adds stays unmuted (today's behaviour, not a regression).
-#
-# Do not try to dodge these rules by renaming the provider group: the
-# kimi/moonshot match also reads the base URL, and the fallback that replaces
-# it brings its own request baseline. See the module docstring.
-_INJECTABLE_TIER_NAMES = (
-    "none", "thinking", "low", "medium", "high", "xhigh", "max",
-)
 
 
 def _base_url_for_ai_sdk(base_url):
-    """Render ``model.base_url`` into the baseURL ``@ai-sdk/anthropic`` expects."""
+    """Render ``model.base_url`` into the baseURL the package expects."""
     base = base_url.rstrip("/")
     if not _VERSION_SEGMENT.search(base):
         base += "/v1"
     return base
 
 
-def _render_modalities(model: Model) -> Optional[Dict[str, List[str]]]:
-    """Validate and render ``model.extra['modalities']``, or None when unset.
+def _render_capabilities(model: Model) -> Dict[str, Any]:
+    """Render the model-level ``capabilities`` block.
 
-    Shaped like the config schema: ``{ input = [...], output = [...] }`` with
-    values from `_MODALITY_VALUES`. Unknown keys, unknown modality names and
-    empty lists fail locally — OpenCode rejects the whole config file on a
-    schema violation, which would take every model down, not just this one.
+    ``tools`` is always true (every model-switch entry is an agent model), and
+    the block is always emitted: OpenCode's fallback for an unknown model
+    claims image input, while an undeclared ``modalities`` here means
+    text-only. ``model.extra['modalities']`` is validated like the config
+    schema would — unknown keys, unknown modality names and empty lists fail
+    locally, because OpenCode rejects the whole config file on a schema
+    violation, taking every model down, not just this one.
     """
+    inputs = ["text"]
+    outputs = ["text"]
     value = model.extra.get("modalities")
-    if value is None:
-        return None
-    where = "model {!r}".format(model.model_id)
-    if not isinstance(value, dict):
-        raise ValueError(
-            "{}: modalities must be a table like "
-            '{{ input = ["text"], output = ["text"] }}, got {}.'.format(
-                where, type(value).__name__))
-    out: Dict[str, List[str]] = {}
-    for key, items in value.items():
-        if key not in ("input", "output"):
+    if value is not None:
+        where = "model {!r}".format(model.model_id)
+        if not isinstance(value, dict):
             raise ValueError(
-                "{}: modalities.{!r} is not a known key (allowed: input, "
-                "output).".format(where, key))
-        if not isinstance(items, list) or not items:
+                "{}: modalities must be a table like "
+                '{{ input = ["text"], output = ["text"] }}, got {}.'.format(
+                    where, type(value).__name__))
+        if not value:
             raise ValueError(
-                "{}: modalities.{} must be a non-empty list (omit the key "
-                "instead).".format(where, key))
-        for item in items:
-            if item not in _MODALITY_VALUES:
+                "{}: modalities must not be empty (omit the key "
+                "instead).".format(where))
+        for key, items in value.items():
+            if key not in ("input", "output"):
                 raise ValueError(
-                    "{}: modalities.{} contains {!r} (allowed: {}).".format(
-                        where, key, item, ", ".join(_MODALITY_VALUES)))
-        out[key] = list(items)
-    if not out:
-        raise ValueError(
-            "{}: modalities must not be empty (omit the key instead).".format(
-                where))
-    return out
-
-
-def _render_optional_flag(model: Model, key: str) -> bool:
-    """Validate ``model.extra[key]`` as a boolean flag; render only ``True``.
-
-    OpenCode treats an omitted flag as false, so ``false`` and absent render
-    the same (nothing). Anything else is rejected locally — OpenCode rejects
-    the *whole* config file on a schema violation, taking every model down.
-    """
-    value = model.extra.get(key)
-    if value is None or value is False:
-        return False
-    if value is not True:
-        raise ValueError(
-            "model {!r}: {} must be true or false, got {!r}.".format(
-                model.model_id, key, value))
-    return True
-
-
-def _mute_undeclared_builtins(variants: Dict[str, Any]) -> Dict[str, Any]:
-    """Return `variants` plus ``{disabled: True}`` for omitted built-in tiers.
-
-    Never mutates the input: `variants.expand_model` hands back the registry's
-    own entry — and therefore its own ``variants`` dict — for a model without
-    a preset reference, so mutating it here would leak into the in-memory
-    registry and into the next `save_models`.
-    """
-    muted = dict(variants)
-    for tier in _INJECTABLE_TIER_NAMES:
-        if tier not in muted:
-            muted[tier] = {"disabled": True}
-    return muted
+                    "{}: modalities.{!r} is not a known key (allowed: input, "
+                    "output).".format(where, key))
+            if not isinstance(items, list) or not items:
+                raise ValueError(
+                    "{}: modalities.{} must be a non-empty list (omit the key "
+                    "instead).".format(where, key))
+            for item in items:
+                if item not in _MODALITY_VALUES:
+                    raise ValueError(
+                        "{}: modalities.{} contains {!r} (allowed: {}).".format(
+                            where, key, item, ", ".join(_MODALITY_VALUES)))
+        inputs = list(value.get("input") or ["text"])
+        outputs = list(value.get("output") or ["text"])
+    return {"tools": True, "input": inputs, "output": outputs}
 
 
 def _render_model_entry(model: Model) -> Dict[str, Any]:
-    """Render the per-model object stored under ``provider.<id>.models``.
+    """Render the per-model object stored under ``providers.<id>.models``.
 
-    ``reasoning`` and the capability flags (``temperature``/``attachment``)
-    are passed through. A ``variants`` table is rendered with the undeclared
-    built-in tiers muted when the model is a reasoning one (see
-    `_mute_undeclared_builtins`), so it is exactly what ctrl+t offers;
-    without ``reasoning`` there are no built-ins to mute and the table passes
-    through as before. A ``variants`` value may have been materialized from a
-    preset upstream of here. ``modalities`` is validated by
-    `_render_modalities`, the capability flags by `_render_optional_flag`;
-    ``display_name`` becomes the model-level ``name`` unless it repeats the
-    upstream id; ``limit`` appears only when ``context_window`` is known.
-    With nothing set this returns ``{}`` — the same shape as before those
-    fields existed.
+    A ``variants`` table becomes the V2 array shape, one entry per declared
+    tier in declaration order (which is the cycle order OpenCode offers);
+    its values were shape-checked by `variants.expand` and are passed through
+    as the entry's ``settings``. ``capabilities`` is rendered by
+    `_render_capabilities`; ``display_name`` becomes the model-level ``name``
+    unless it repeats the upstream id; ``limit`` appears only when
+    ``context_window`` is known. With nothing set this returns just the
+    capabilities block — every model declares text-only unless told otherwise.
     """
     entry: Dict[str, Any] = {}
-    if model.extra.get("reasoning") is True:
-        entry["reasoning"] = True
     variants = model.extra.get("variants")
-    if isinstance(variants, dict) and variants:
-        # Built-ins are only computed for reasoning models; without the flag
-        # the declared table is already the whole cycle, so it passes through.
-        entry["variants"] = (
-            _mute_undeclared_builtins(variants) if entry.get("reasoning")
-            else variants
-        )
-    modalities = _render_modalities(model)
-    if modalities is not None:
-        entry["modalities"] = modalities
-    for flag in BOOLEAN_FLAGS:
-        if _render_optional_flag(model, flag):
-            entry[flag] = True
+    if variants:
+        entry["variants"] = [
+            {"id": tier, "settings": payload}
+            for tier, payload in variants.items()
+        ]
+    entry["capabilities"] = _render_capabilities(model)
     display_name = model.extra.get("display_name")
     if display_name is not None:
         if not isinstance(display_name, str) or not display_name.strip():
@@ -435,6 +373,17 @@ def _is_owned_provider(provider_id: str) -> bool:
     return provider_id == PROVIDER_ID or provider_id.startswith(PROVIDER_PREFIX)
 
 
+def _without_owned(block: Any) -> Dict[str, Any]:
+    """Return `block` minus the ``yzr-*`` providers model-switch owns.
+
+    A missing or non-dict block reads as empty; foreign entries pass through
+    untouched so a user's own providers survive every reconcile.
+    """
+    if not isinstance(block, dict):
+        return {}
+    return {k: v for k, v in block.items() if not _is_owned_provider(k)}
+
+
 class OpenCodeDriver:
     name = "opencode"
     supports_catalog = True
@@ -451,9 +400,9 @@ class OpenCodeDriver:
         """Render everything a write would render, without writing.
 
         Raises the same `ValueError` the write path would (bad modalities /
-        flags, conflicting provider declarations, duplicate names), so
-        `model use` can fail before any driver's config is touched. Optional
-        protocol method — see `drivers.base.AgentDriver`.
+        display names, conflicting provider declarations, duplicate names),
+        so `model use` can fail before any driver's config is touched.
+        Optional protocol method — see `drivers.base.AgentDriver`.
         """
         if active is not None and not active.api_key:
             raise ValueError(
@@ -495,28 +444,34 @@ class OpenCodeDriver:
         """Update `config` in place with the mirrored ``yzr-*`` namespace.
 
         Pure computation: nothing is read or written here, so `validate`
-        can run the same rendering the write path runs (see `apply`).
+        can run the same rendering the write path runs (see `apply`). Owned
+        blocks are stripped from both the V2 ``providers`` key and the legacy
+        V1 ``provider`` key — a pre-V2 file is migrated by the same call, and
+        the legacy key is dropped entirely once nothing is left in it.
         """
-        providers = {
-            k: v for k, v in config.get("provider", {}).items()
-            if not _is_owned_provider(k)
-        }
+        legacy = _without_owned(config.get(LEGACY_PROVIDER_KEY))
+        if legacy:
+            config[LEGACY_PROVIDER_KEY] = legacy
+        else:
+            config.pop(LEGACY_PROVIDER_KEY, None)
+
+        providers = _without_owned(config.get(PROVIDER_KEY))
         keyed = [m for m in models if m.api_key]  # no key → unusable block
         pid_by_key, groups, refs = _provider_layout(keyed)
         for key in sorted(groups, key=lambda k: pid_by_key[k]):
             _declared, base_url, api_key = key
             members = sorted(groups[key], key=lambda m: m.name)
             providers[pid_by_key[key]] = {
-                "npm": NPM_ADAPTER,
+                "package": PACKAGE,
                 "name": pid_by_key[key],
-                "options": {
+                "settings": {
                     "baseURL": _base_url_for_ai_sdk(base_url),
                     "apiKey": api_key,
                 },
                 "models": {m.name: _render_model_entry(m) for m in members},
             }
 
-        config["provider"] = providers
+        config[PROVIDER_KEY] = providers
         default = self._resolve_default(config.get("model"), keyed, refs,
                                         active_id)
         if default is None:
@@ -557,11 +512,13 @@ class OpenCodeDriver:
         if not config:
             return {}
         out = {"model": config.get("model", "")}
-        providers = sorted(
-            k for k in config.get("provider", {}) if _is_owned_provider(k)
-        )
-        if providers:
-            out["catalog"] = ", ".join(providers)
+        owned = set()
+        for key in (PROVIDER_KEY, LEGACY_PROVIDER_KEY):
+            block = config.get(key)
+            if isinstance(block, dict):
+                owned.update(k for k in block if _is_owned_provider(k))
+        if owned:
+            out["catalog"] = ", ".join(sorted(owned))
         return out
 
 

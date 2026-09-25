@@ -1,14 +1,15 @@
 """CLI integration tests for `model align` and catalog-derived `model add`.
 
-The catalog cache is a fixture file (never the real one — conftest isolates
-`paths.catalog_cache_file` into tmp), so these tests are deterministic and
-offline. `align` writes models.toml and re-renders opencode.json; `add`
+The catalog cache is a fixture database (never the real one — conftest
+isolates `paths.catalog_db_file` into tmp), so these tests are deterministic
+and offline. `align` writes models.toml and re-renders opencode.json; `add`
 derives fields when a host-matching catalog entry exists.
 """
 import json
 
 import pytest
 
+from _catalog_db import write_catalog_db as _write_catalog
 from model_switch.store import load_models
 
 from _cli_runner import invoke_cli as runner
@@ -17,11 +18,6 @@ from _cli_runner import invoke_cli as runner
 @pytest.fixture
 def yzr_paths(_isolate_yzr_state):
     return _isolate_yzr_state
-
-
-def _write_catalog(path, providers):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(providers), encoding="utf-8")
 
 
 def _entry(options, context=1000000, modalities=None):
@@ -41,7 +37,6 @@ def _write_models(path, text):
 MODEL_TOML = (
     "[[models]]\n"
     'provider = "fixture"\n'
-    "reasoning = true\n"
     'model_id = "m"\n'
     'name = "fixture-model"\n'
     'base_url = "https://api.fixture.com/anthropic"\n'
@@ -80,24 +75,20 @@ def test_align_updates_inline_fields_and_renders(yzr_paths):
         "medium": {"effort": "medium", "thinking": {"type": "adaptive"}},
     }
     assert m.extra["modalities"] == {"input": ["text", "image"], "output": ["text"]}
-    # The agent-facing render picked the new tiers up, with the built-in tier
-    # names OpenCode could inject muted around them.
+    # The agent-facing render picked the new tiers up: declared tiers are the
+    # whole set, in declaration order.
     cfg = json.loads(yzr_paths["opencode"].read_text())
-    entry = cfg["provider"]["yzr-fixture"]["models"]["fixture-model"]
-    rendered = entry["variants"]
-    assert [t for t, body in rendered.items() if not body.get("disabled")] == [
-        "low", "medium"]
+    entry = cfg["providers"]["yzr-fixture"]["models"]["fixture-model"]
+    assert [v["id"] for v in entry["variants"]] == ["low", "medium"]
     assert entry["limit"]["context"] == 500000
-    assert entry["modalities"]["input"] == ["text", "image"]
+    assert entry["capabilities"]["input"] == ["text", "image"]
 
 
-def test_align_derives_capability_flags_and_display_name(yzr_paths):
-    """Temperature/attachment (only when true) and the human-readable name
-    are derived like the other catalog fields — and a second run is a no-op."""
+def test_align_derives_display_name(yzr_paths):
+    """The human-readable name is derived like the other catalog fields —
+    and a second run is a no-op."""
     _write_models(yzr_paths["models"], MODEL_TOML)
     entry = _entry([{"type": "effort", "values": ["low"]}], context=500000)
-    entry["temperature"] = True
-    entry["attachment"] = True
     entry["name"] = "Fixture Model"
     _write_catalog(yzr_paths["catalog"], {
         "fixture": {"api": "https://api.fixture.com/compatible-mode/v1",
@@ -108,17 +99,11 @@ def test_align_derives_capability_flags_and_display_name(yzr_paths):
     result = runner(["model", "align"])
 
     assert result.exit_code == 0, result.stdout
-    assert "+temperature" in result.stdout
-    assert "+attachment" in result.stdout
     assert "display_name→Fixture Model" in result.stdout
     m = load_models(yzr_paths["models"]).models["m"]
-    assert m.extra["temperature"] is True
-    assert m.extra["attachment"] is True
     assert m.extra["display_name"] == "Fixture Model"
     cfg = json.loads(yzr_paths["opencode"].read_text())
-    rendered = cfg["provider"]["yzr-fixture"]["models"]["fixture-model"]
-    assert rendered["temperature"] is True
-    assert rendered["attachment"] is True
+    rendered = cfg["providers"]["yzr-fixture"]["models"]["fixture-model"]
     assert rendered["name"] == "Fixture Model"
 
     again = runner(["model", "align"])
@@ -126,13 +111,10 @@ def test_align_derives_capability_flags_and_display_name(yzr_paths):
     assert "no change" in again.stdout
 
 
-def test_align_skips_capability_flags_that_are_false_or_absent(yzr_paths):
-    """OpenCode reads an absent flag as false, so ``false``/missing derive
-    nothing; a display name equal to the upstream id is not repeated."""
+def test_align_skips_display_name_equal_to_the_upstream_id(yzr_paths):
+    """A display name equal to the upstream id is not repeated."""
     _write_models(yzr_paths["models"], MODEL_TOML)
     entry = _entry([{"type": "effort", "values": ["low"]}], context=500000)
-    entry["temperature"] = False
-    entry["attachment"] = None
     entry["name"] = "fixture-model"   # same as the upstream id
     _write_catalog(yzr_paths["catalog"], {
         "fixture": {"api": "https://api.fixture.com/compatible-mode/v1",
@@ -144,13 +126,9 @@ def test_align_skips_capability_flags_that_are_false_or_absent(yzr_paths):
 
     assert result.exit_code == 0, result.stdout
     m = load_models(yzr_paths["models"]).models["m"]
-    assert "temperature" not in m.extra
-    assert "attachment" not in m.extra
     assert "display_name" not in m.extra
     cfg = json.loads(yzr_paths["opencode"].read_text())
-    rendered = cfg["provider"]["yzr-fixture"]["models"]["fixture-model"]
-    assert "temperature" not in rendered
-    assert "attachment" not in rendered
+    rendered = cfg["providers"]["yzr-fixture"]["models"]["fixture-model"]
     assert "name" not in rendered
 
 
@@ -249,7 +227,6 @@ def test_add_derives_fields_from_catalog(yzr_paths):
     assert result.exit_code == 0, result.stdout
     m = load_models(yzr_paths["models"]).models["m"]
     assert m.context_window == 500000
-    assert m.extra["reasoning"] is True
     assert list(m.extra["variants"]) == ["low", "medium"]
     assert m.extra["modalities"] == {"input": ["text", "image"], "output": ["text"]}
 

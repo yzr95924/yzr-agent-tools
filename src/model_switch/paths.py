@@ -33,12 +33,18 @@ def opencode_config_file() -> Path:
     return _config_base() / "opencode" / "opencode.json"
 
 
-def catalog_cache_file() -> Path:
+def catalog_db_file() -> Path:
     """OpenCode's local models.dev snapshot, maintained by OpenCode itself.
+
+    OpenCode >= 2.0 stores the fetched catalog in its SQLite database
+    ``$XDG_DATA_HOME/opencode/opencode.db`` (default
+    ``~/.local/share/opencode/opencode.db``), table ``kv``, key
+    ``models-dev:catalog``; the value is a JSON envelope whose ``body`` is
+    the provider map as a JSON string.
 
     Read-only for model-switch: we derive catalog-aligned fields from it but
     never write it and never fetch the catalog over the network.
     """
-    cache_base = os.environ.get("XDG_CACHE_HOME")
-    base = Path(cache_base) if cache_base else Path.home() / ".cache"
-    return base / "opencode" / "models.json"
+    data_base = os.environ.get("XDG_DATA_HOME")
+    base = Path(data_base) if data_base else Path.home() / ".local" / "share"
+    return base / "opencode" / "opencode.db"
