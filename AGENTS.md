@@ -261,19 +261,20 @@ CLI(`mcp-plugin-mgr`)，与 model-switch 同构：一份规范注册表(`~/.conf
 
 - `claude-code` 写 `~/.claude.json` 的 `mcpServers`(**不是** `~/.claude/settings.json`——后者归
   model-switch；两者是不同文件）。http→`{type:http,url,headers?}`,stdio→`{type:stdio,command,args,env}`。
-- `opencode` 写 `opencode.json` 的 `mcp`。词表不同：http→`{type:remote,url,enabled:true,headers?}`,
-  stdio→`{type:local,command:[cmd]+args,enabled:true,environment?}`(`command` 是 cmd+args 合并的数组，
-  env 字段叫 `environment`）。
+- `opencode` 写 `opencode.json` 的 `mcp.servers`(OpenCode V2 原生位置；旧版直接写 `mcp.<name>` 的
+  V1 条目按名回收，用户手写/未操作过的条目不碰，`list` 视图仍能看到)。词表不同：
+  http→`{type:remote,url,disabled:false,headers?}`,stdio→`{type:local,command:[cmd]+args,disabled:false,environment?}`
+  (`command` 是 cmd+args 合并的数组，env 字段叫 `environment`)。
 - `qodercli` 写 `~/.qoder/settings.json` 的 `mcpServers`(**与 Claude Code 同键名、不同文件**；同文件还
   有 model/ui/permissions/git/security，均不动）。词表接近 Claude Code 但有差异（对齐 `qodercli mcp add`
   实测产出):http→`{url,type:"http",headers?}`,stdio→`{command,args,env?}`——**stdio 不写 `type` 字段、空 env
   省略 `env` 键**（Claude Code 则恒写 `type:"stdio"` 与 `env` 对象）。Qoder CLI 的 MCP 功能是纯客户端配置（与
   [[qodercli-driver-not-feasible]] 记的 model-switch 云转发不可行是两回事——那个针对推理上游，这个针对 MCP 服务注册）。
 
-`BaseMcpDriver` 实现通用 read/list/add/remove/set_enabled(只动 `self._KEY` 那段，保留文件里其它键——Claude Code 的
-userID/onboarding、OpenCode 的 provider/model/$schema、Qoder CLI 的 model/ui/permissions）；子类只设 `_KEY` + `render(entry)`（有原生启停 flag 的再加 `native_disable=True` + `_flag_mutation` + `flag_state`）。V2 命令面
+`BaseMcpDriver` 实现通用 read/list/add/remove/set_enabled(只动 `self._KEY` 那段——server map 若嵌一层用 `_SUBKEY` 声明——保留文件里其它键——Claude Code 的
+userID/onboarding、OpenCode 的 provider/model/$schema、Qoder CLI 的 model/ui/permissions）；子类只设 `_KEY`(可选 `_SUBKEY`) + `render(entry)`（有原生启停 flag 的再加 `native_disable=True` + `_flag_mutation` + `flag_state`）。V2 命令面
 **增删查 + 启停 + test 探活**(init/add/list/remove/enable/disable/test/presets/status)。启停统一为「registry 记 `enabled`（缺省 true,false 才落盘）+ driver 翻译」:
-OpenCode 翻 `enabled` 原地、Qoder CLI 加/删 `disabled` 原地（均 `native_disable=True`，外来键全保），Claude Code 无全局 flag
+OpenCode 翻 `disabled` 原地、Qoder CLI 加/删 `disabled` 原地（均 `native_disable=True`，外来键全保），Claude Code 无全局 flag
 故**删条目**（registry 留全量 → `enable` 无需重配）；写前对无原生 flag 的 driver 做 drift 比对，列出 `+仅 agent 侧有`/`~值不同` 并**警告不阻断**。
 `add` 固定为「显式启用」（`--force` 覆盖时 `enabled` 复位 true）。不做 per-project 停用与 sync 全量重投影。内置 preset:`outline` + `memos` + `agent-html-drop`（均 http，需 --url/--token）；
 任意 http/stdio MCP 不在 preset 里也能用 flag 配。`test` 命令(`probe.py`)对**每种传输一套流程**:

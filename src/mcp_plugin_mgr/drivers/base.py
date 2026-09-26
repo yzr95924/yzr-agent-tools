@@ -2,16 +2,17 @@
 
 A driver encapsulates two things about one agent:
   1. WHERE its MCP-server map lives (Claude Code: ~/.claude.json `mcpServers`;
-     OpenCode: opencode.json `mcp`).
+     OpenCode: opencode.json `mcp.servers`).
   2. the VOCABULARY it uses (Claude Code: type http/stdio, separate
      command+args+env; OpenCode: type remote/local, combined command array,
      `environment` instead of `env`).
 
 `BaseMcpDriver` implements the generic read/list/has/add/remove over a JSON
-file that keeps its server map under one top-level key (`_KEY`); it touches
-only that key and preserves every other key in the file. Subclasses set
-`name`, `_KEY`, a default `config_path`, and implement `render(entry)` to map
-a canonical ServerEntry into the agent's shape.
+file that keeps its server map under one top-level key (`_KEY`), optionally
+nested one level deeper (`_SUBKEY`); it touches only that key and preserves
+every other key in the file. Subclasses set `name`, `_KEY` (and `_SUBKEY`),
+a default `config_path`, and implement `render(entry)` to map a canonical
+ServerEntry into the agent's shape.
 """
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -26,6 +27,7 @@ except ImportError:  # Python <3.8
     class Protocol:  # type: ignore[no-redef]
         pass
 
+from mcp_plugin_mgr.drivers._atomic import atomic_write_json
 from mcp_plugin_mgr.store import ServerEntry
 
 
@@ -55,10 +57,13 @@ class BaseMcpDriver:
     """
     name: str = ""
     _KEY: str = ""
+    # Optional nesting level below _KEY holding the server map itself
+    # (OpenCode: `mcp.servers`).
+    _SUBKEY: Optional[str] = None
     config_path: Optional[Path] = None
-    # True when the agent has a native disabled flag (OpenCode: `enabled`,
-    # Qoder CLI: `disabled`) that can be flipped in place; False when the only
-    # way to switch a server off is to remove it from the map.
+    # True when the agent has a native disable flag (OpenCode / Qoder CLI:
+    # `disabled`) that can be flipped in place; False when the only way to
+    # switch a server off is to remove it from the map.
     native_disable: bool = False
 
     def __init__(self, config_path: Optional[Path] = None) -> None:
@@ -76,32 +81,54 @@ class BaseMcpDriver:
             return {}
         return _json_loads(text)
 
+    def _read_server_map(self, config: dict) -> Dict[str, dict]:
+        """The server map inside a parsed config; {} when absent or malformed.
+
+        Read-only counterpart of `_get_server_map`: never creates containers,
+        so lookups on junk values (a non-dict `_KEY`) simply miss.
+        """
+        outer = config.get(self._KEY)
+        if not isinstance(outer, dict):
+            return {}
+        if self._SUBKEY is None:
+            return outer
+        servers = outer.get(self._SUBKEY)
+        return servers if isinstance(servers, dict) else {}
+
+    def _get_server_map(self, config: dict) -> dict:
+        """The server map inside `config` for mutation, creating containers."""
+        outer = config.get(self._KEY)
+        if not isinstance(outer, dict):
+            outer = {}
+            config[self._KEY] = outer
+        if self._SUBKEY is None:
+            return outer
+        servers = outer.get(self._SUBKEY)
+        if not isinstance(servers, dict):
+            servers = {}
+            outer[self._SUBKEY] = servers
+        return servers
+
     def list_servers(self) -> Dict[str, dict]:
-        return dict(self._read().get(self._KEY, {}))
+        return dict(self._read_server_map(self._read()))
 
     def has_server(self, name: str) -> bool:
         return name in self.list_servers()
 
     def add_server(self, name: str, entry: ServerEntry) -> None:
-        from mcp_plugin_mgr.drivers._atomic import atomic_write_json
 
         config = self._read()
-        servers = config.get(self._KEY, {})
-        if not isinstance(servers, dict):
-            servers = {}
+        servers = self._get_server_map(config)
         servers[name] = self.render(entry)
-        config[self._KEY] = servers
         atomic_write_json(self.config_path, config)  # type: ignore[arg-type]
 
     def remove_server(self, name: str) -> bool:
-        from mcp_plugin_mgr.drivers._atomic import atomic_write_json
 
         config = self._read()
-        servers = config.get(self._KEY, {})
-        if not isinstance(servers, dict) or name not in servers:
+        servers = self._read_server_map(config)
+        if name not in servers:
             return False
         del servers[name]
-        config[self._KEY] = servers
         atomic_write_json(self.config_path, config)  # type: ignore[arg-type]
         return True
 
@@ -134,8 +161,8 @@ class BaseMcpDriver:
         """`mutate(obj) -> changed` for the agent's native disable flag.
 
         Only drivers with `native_disable = True` implement this; it is where
-        each agent's vocabulary lives (OpenCode: `enabled`; Qoder CLI:
-        `disabled`).
+        each agent's vocabulary lives (OpenCode / Qoder CLI: `disabled`,
+        OpenCode V1 used the inverse `enabled`).
         """
         raise NotImplementedError
 
@@ -146,19 +173,13 @@ class BaseMcpDriver:
         "changed" (file rewritten), "unchanged" (no write) or "missing"
         (this agent has no such server).
         """
-        from mcp_plugin_mgr.drivers._atomic import atomic_write_json
 
         config = self._read()
-        servers = config.get(self._KEY, {})
-        if not isinstance(servers, dict):
-            return "missing"
-        obj = servers.get(name)
+        obj = self._read_server_map(config).get(name)
         if not isinstance(obj, dict):
             return "missing"
         if not mutate(obj):
             return "unchanged"
-        servers[name] = obj
-        config[self._KEY] = servers
         atomic_write_json(self.config_path, config)  # type: ignore[arg-type]
         return "changed"
 
@@ -169,7 +190,7 @@ class BaseMcpDriver:
         """Native disable flag as the agent spells it, for CLI messages.
 
         Empty for drivers without one. Overridden by flag-flipping drivers
-        (OpenCode: enabled=true/false; Qoder CLI: disabled=false/true).
+        (OpenCode / Qoder CLI: disabled=false/true).
         """
         return ""
 

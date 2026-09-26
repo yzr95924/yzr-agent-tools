@@ -30,8 +30,8 @@ def test_add_outline_preset_applies_to_all_drivers():
     }
 
     oc = json.loads(paths.opencode_config_file().read_text())
-    assert oc["mcp"]["outline"] == {
-        "type": "remote", "url": "https://my/mcp", "enabled": True,
+    assert oc["mcp"]["servers"]["outline"] == {
+        "type": "remote", "url": "https://my/mcp", "disabled": False,
         "headers": {"Authorization": "Bearer tok"},
     }
 
@@ -67,8 +67,8 @@ def test_add_memos_preset_applies_to_all_drivers():
         "headers": {"Authorization": "Bearer memos_tok"},
     }
     oc = json.loads(paths.opencode_config_file().read_text())
-    assert oc["mcp"]["memos"] == {
-        "type": "remote", "url": "https://memos.example.com/mcp", "enabled": True,
+    assert oc["mcp"]["servers"]["memos"] == {
+        "type": "remote", "url": "https://memos.example.com/mcp", "disabled": False,
         "headers": {"Authorization": "Bearer memos_tok"},
     }
 
@@ -102,7 +102,7 @@ def test_add_manual_stdio_with_command_string():
     }
     oc = json.loads(paths.opencode_config_file().read_text())
     # OpenCode combines executable + args into one command array.
-    assert oc["mcp"]["mystd"]["command"] == ["uvx", "--from", "X", "run"]
+    assert oc["mcp"]["servers"]["mystd"]["command"] == ["uvx", "--from", "X", "run"]
 
 
 def test_add_manual_stdio_missing_command_errors():
@@ -235,13 +235,14 @@ def test_disable_then_enable_roundtrips_without_reconfig():
     r = run(["disable", "memos", "--all-drivers"])
     assert r.exit_code == 0, r.stdout
     assert load_servers(paths.servers_file()).servers["memos"].enabled is False
-    # Per-agent vocabulary is named in the output.
-    assert "enabled=false" in r.stdout      # opencode
-    assert "disabled=true" in r.stdout      # qodercli
+    # Per-agent result is named in the output (opencode and qodercli share
+    # the `disabled` vocabulary).
+    assert "opencode: disabled=true" in r.stdout
+    assert "qodercli: disabled=true" in r.stdout
 
     # opencode: native flag, entry and its other keys stay in place.
-    assert json.loads(oc.read_text())["mcp"]["memos"]["enabled"] is False
-    assert json.loads(oc.read_text())["mcp"]["memos"]["url"] == "https://memos.example.com/mcp"
+    assert json.loads(oc.read_text())["mcp"]["servers"]["memos"]["disabled"] is True
+    assert json.loads(oc.read_text())["mcp"]["servers"]["memos"]["url"] == "https://memos.example.com/mcp"
     # claude-code / qodercli: no native global flag (claude) or disabled marker.
     assert "memos" not in json.loads(cj.read_text()).get("mcpServers", {})
     assert json.loads(qd.read_text())["mcpServers"]["memos"]["disabled"] is True
@@ -282,7 +283,7 @@ def test_disable_without_tty_writes_only_default_driver():
     assert "outline" not in cj.get("mcpServers", {})
     # Other drivers untouched: still enabled.
     oc = json.loads(paths.opencode_config_file().read_text())
-    assert oc["mcp"]["outline"]["enabled"] is True
+    assert oc["mcp"]["servers"]["outline"]["disabled"] is False
 
 
 def test_disable_warns_on_drift_but_continues():
@@ -300,7 +301,7 @@ def test_disable_warns_on_drift_but_continues():
     assert "timeout" in r.stdout
     # Warning is not a blocker: the disable still happened everywhere.
     assert "memos" not in json.loads(cj.read_text()).get("mcpServers", {})
-    assert json.loads(paths.opencode_config_file().read_text())["mcp"]["memos"]["enabled"] is False
+    assert json.loads(paths.opencode_config_file().read_text())["mcp"]["servers"]["memos"]["disabled"] is True
 
 
 def test_enable_warns_on_drift_then_overwrites():
@@ -322,14 +323,14 @@ def test_disable_does_not_warn_for_foreign_keys_on_flag_flip_drivers():
     run(["add", "outline", "--url", "https://x", "--token", "t", "--driver", "opencode"])
     oc = paths.opencode_config_file()
     data = json.loads(oc.read_text())
-    data["mcp"]["outline"]["timeout"] = 30000
+    data["mcp"]["servers"]["outline"]["timeout"] = 30000
     oc.write_text(json.dumps(data, indent=2) + "\n")
 
     r = run(["disable", "outline", "--driver", "opencode"])
     assert r.exit_code == 0, r.stdout
     assert "drift" not in r.stdout
     # In-place flag flip keeps the hand-added key.
-    assert json.loads(oc.read_text())["mcp"]["outline"]["timeout"] == 30000
+    assert json.loads(oc.read_text())["mcp"]["servers"]["outline"]["timeout"] == 30000
 
 
 def test_list_shows_disabled_state():

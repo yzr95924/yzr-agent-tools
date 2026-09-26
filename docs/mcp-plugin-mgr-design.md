@@ -14,12 +14,12 @@ Outline wiki。
 | | Claude Code | OpenCode | Qoder CLI |
 | --- | --- | --- | --- |
 | 文件 | `~/.claude.json` | `$XDG/opencode/opencode.json` | `~/.qoder/settings.json` |
-| 键 | `mcpServers` | `mcp` | `mcpServers` |
+| 键 | `mcpServers` | `mcp.servers`（V2 原生；V2 也读 V1 的 `mcp.<name>`,本工具会按名回收旧条目） | `mcpServers` |
 | http type | `http` | `remote` | `http` |
 | stdio type | `stdio` | `local` | （不写） |
 | stdio 命令 | `command`(str) + `args`(list) 分开 | `command`（list,cmd+args 合并） | `command` + `args` 分开 |
 | env 字段 | `env` | `environment` | `env` |
-| 启停 | 无原生 flag：在/不在 map 里 | 显式 `enabled` 字段 | 显式 `disabled` 字段 |
+| 启停 | 无原生 flag：在/不在 map 里 | 显式 `disabled` 字段（OpenCode V1 用反义的 `enabled`) | 显式 `disabled` 字段 |
 
 且这两个文件都还承载别的关键状态（Claude Code 的 onboarding/projects/telemetry;OpenCode 的
 `provider`/`model`/`$schema`),driver 必须**只改自己那一段，其余原样保留**。
@@ -40,30 +40,35 @@ src/mcp_plugin_mgr/
 │   ├── base.py          McpDriver Protocol + BaseMcpDriver(通用 read/list/add/remove/set_enabled)+ DriverRegistry
 │   ├── _atomic.py       atomic_write_json(自包含副本)
 │   ├── claude_code.py   ~/.claude.json -> mcpServers(无原生 flag,disable=删条目)
-│   ├── opencode.py      opencode.json -> mcp(native_disable: enabled 原地翻)
+│   ├── opencode.py      opencode.json -> mcp.servers(native_disable: disabled 原地翻;按名回收旧 V1 条目)
 │   └── qoder_cli.py     ~/.qoder/settings.json -> mcpServers(native_disable: disabled 原地加/删)
 └── README.md            用户文档
 ```
 
 **翻译表**（driver 的核心职责，代码即此表的真源）：
 
-| 规范(ServerEntry) | Claude Code `mcpServers` | OpenCode `mcp` | Qoder CLI `mcpServers` |
+| 规范(ServerEntry) | Claude Code `mcpServers` | OpenCode `mcp.servers` | Qoder CLI `mcpServers` |
 | --- | --- | --- | --- |
-| `transport=http`, url, headers | `{type:http, url, headers?}` | `{type:remote, url, enabled:true, headers?}` | `{url, type:http, headers?}` |
-| `transport=stdio`, command, args[], env{} | `{type:stdio, command, args, env}` | `{type:local, command:[cmd]+args, enabled:true, environment?}` | `{command, args, env?}`（无 `type`） |
-| `enabled=false` | 删掉该键（无原生 flag） | `enabled:false` 原地翻 | `disabled:true` 原地加 |
-| `enabled=true` | 用 registry 重渲染写回 | `enabled:true` 原地翻 | `disabled` 键删掉 |
+| `transport=http`, url, headers | `{type:http, url, headers?}` | `{type:remote, url, disabled:false, headers?}` | `{url, type:http, headers?}` |
+| `transport=stdio`, command, args[], env{} | `{type:stdio, command, args, env}` | `{type:local, command:[cmd]+args, disabled:false, environment?}` | `{command, args, env?}`（无 `type`） |
+| `enabled=false` | 删掉该键（无原生 flag） | `disabled:true` 原地翻 | `disabled:true` 原地加 |
+| `enabled=true` | 用 registry 重渲染写回 | `disabled:false` 原地翻 | `disabled` 键删掉 |
 
 启停的**控制流在 base**(`set_enabled`：先查 `native_disable`，再摆 `flagged`/`absent`/`written`
 三态；`_update_server` 只在 flag 真变时落盘),**词表在 driver**(`_flag_mutation` 返回 mutate 闭包：
-OpenCode 翻 `enabled`,Qoder CLI 加/删 `disabled`——后者 1.1.21 实测对齐 `qodercli mcp disable/enable`
-的产出）。Claude Code 无原生 flag（其 `/mcp` 面板的停用是按项目写 `disabledMcpServers`），故删条目；
+OpenCode / Qoder CLI 均用 `disabled`(OpenCode V1 词表曾是反义的 `enabled`,driver 读写时换算；
+Qoder CLI 1.1.21 实测对齐 `qodercli mcp disable/enable` 的产出）。Claude Code 无原生 flag
+（其 `/mcp` 面板的停用是按项目写 `disabledMcpServers`），故删条目；
 只有它需要在写前做 drift 比对（`_drift_report`：列出 `+ 仅 agent 侧有` / `~ 值不同`，容器值不打印
 以免回显 token，非阻断）。
 
-`BaseMcpDriver` 实现通用的 read/list/has/add/remove/set_enabled（只动 `self._KEY` 那段，保留其它键）；子类只
-设 `name` / `_KEY` / 默认 `config_path`，并实现 `render(entry)`(有原生启停 flag 的再加
-`native_disable = True` + `_flag_mutation` + `flag_state`）。与 model-switch 不同：model-switch
+`BaseMcpDriver` 实现通用的 read/list/has/add/remove/set_enabled（只动 `self._KEY` 那段——
+server map 嵌一层的用 `_SUBKEY` 声明，如 OpenCode 的 `mcp.servers`——保留其它键）；子类只
+设 `name` / `_KEY`(可选 `_SUBKEY`)/ 默认 `config_path`，并实现 `render(entry)`(有原生启停
+flag 的再加 `native_disable = True` + `_flag_mutation` + `flag_state`)。OpenCode driver 另
+重写 add/remove/set_enabled 入口做 **V1 旧条目按名回收**(`_migrate_legacy`:旧版工具直接写在
+`mcp.<name>` 的条目挪进 `mcp.servers`,同名处原生条目为准、只删旧副本；从未被操作过的名字——
+含用户手写条目——一概不碰),`list_servers` 则把仍可被 V2 读到的 V1 条目换算进视图。与 model-switch 不同：model-switch
 的 `apply()` 每个 driver 差异大，所以各自独立；这里的增删查与启停控制流对三个 agent 完全一致，
 故抽出共享基类，只在词表(render / flag)上分叉。
 
@@ -119,9 +124,10 @@ description = "..."
 ## 6. 范围 / 取舍
 
 - **增删查 + 启停 + test 探活**:`init/add/list/remove/enable/disable/presets/status/test`。
-  V1 曾回避 enable/disable（各 agent 语义不对称），V2 统一为「registry 记 `enabled`(缺省 true,
+  命令面首版曾回避 enable/disable（各 agent 语义不对称），现统一为「registry 记 `enabled`(缺省 true,
   false 才落盘)+ driver 翻译」:
-  - OpenCode:`enabled` 原地翻（实测 `opencode mcp` 无 enable/disable 子命令，只能改配置）；
+  - OpenCode:`mcp.servers.<name>.disabled` 原地翻（实测 `opencode mcp` 无 enable/disable 子命令，
+    只能改配置；OpenCode V1 词表 `enabled` 由 driver 读写时换算，旧条目按名回收，见 §2）；
   - Qoder CLI:`disabled` 原地加/删（1.1.21 实测 `qodercli mcp disable/enable` 的落盘形式，逐字节对齐）；
   - Claude Code：无全局 flag（`/mcp` 面板的停用是按项目写 `disabledMcpServers`），故删条目；
     registry 留全量 → `enable` 无需重配。启用前做 **drift 比对**(live vs `render(entry)`),

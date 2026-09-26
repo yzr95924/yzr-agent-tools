@@ -9,7 +9,8 @@ driver 负责把统一的「服务定义」渲染成该 agent 的字段与位置
 ## 它解决什么
 
 - Claude Code 的 MCP 服务在 `~/.claude.json` 的 `mcpServers`;OpenCode 的在
-  `~/.config/opencode/opencode.json` 的 `mcp`;Qoder CLI 的在 `~/.qoder/settings.json` 的
+  `~/.config/opencode/opencode.json` 的 `mcp.servers`(V2 原生位置；V1 直接挂 `mcp` 下的
+  旧条目在下次对该服务做操作时按名自动回收);Qoder CLI 的在 `~/.qoder/settings.json` 的
   `mcpServers`（与 Claude Code 同键名、不同文件）。**位置不同、字段名不同、type 词表不同**
   (Claude Code: `http`/`stdio`;OpenCode: `remote`/`local`，且 `command` 是 cmd+args 合并的
   数组，env 字段叫 `environment`;Qoder CLI: 接近 Claude Code，但 stdio **不写 `type` 字段**、
@@ -52,7 +53,7 @@ mcp-plugin-mgr add outline --url ... --token ... --all-drivers --auto-allow
 写入结果：
 
 - Claude Code `~/.claude.json` → `mcpServers.outline = {"type":"http","url":...,"headers":{"Authorization":"Bearer ..."}}`
-- OpenCode `~/.config/opencode/opencode.json` → `mcp.outline = {"type":"remote","url":...,"enabled":true,"headers":{...}}`
+- OpenCode `~/.config/opencode/opencode.json` → `mcp.servers.outline = {"type":"remote","url":...,"disabled":false,"headers":{...}}`
 - Qoder CLI `~/.qoder/settings.json` → `mcpServers.outline = {"url":...,"type":"http","headers":{...}}`
 
 重启 agent 即加载：
@@ -159,7 +160,7 @@ mcp-plugin-mgr disable memos --no-apply       # 只改 servers.toml,暂不动 ag
 
 | agent | disable 落盘 | 说明 |
 | --- | --- | --- |
-| OpenCode | `mcp.<name>.enabled: false`（原地翻） | 条目保留；你手加的 `timeout` / `oauth` 等键不动 |
+| OpenCode | `mcp.servers.<name>.disabled: true`（原地翻） | 条目保留；你手加的 `timeout` / `oauth` 等键不动 |
 | Qoder CLI | `mcpServers.<name>.disabled: true`（原地加） | 对齐 `qodercli mcp disable` 自己的产出，其余键不动 |
 | Claude Code | 删掉 `mcpServers.<name>` | 它没有全局 disable flag（`/mcp` 面板的停用只按项目记进 `disabledMcpServers`） |
 
