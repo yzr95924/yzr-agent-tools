@@ -3,7 +3,7 @@
 OpenCode holds a multi-model catalog: model-switch groups models by
 (base_url, api_key) upstream and mirrors each group into a `yzr-<host-slug>`
 provider under the V2-native `providers` key, with `config["model"]` as the
-default pointer. The V1 `provider` key is reclaimed, never written.
+default pointer.
 """
 import json
 from pathlib import Path
@@ -210,43 +210,6 @@ def test_apply_preserves_unrelated_providers_and_keys(driver, glm_ctx):
     assert _pid(glm_ctx) in cfg["providers"]   # our provider added
     assert "existing" in cfg["providers"]      # foreign provider preserved
     assert cfg["username"] == "alice"          # foreign top-level key preserved
-
-
-# --- legacy V1 `provider` key: reclaimed, never written -----------------------
-
-
-def test_apply_migrates_owned_blocks_out_of_the_legacy_key(driver, glm_ctx):
-    """A pre-V2 file holds our blocks under `provider`; one sync moves them to
-    `providers` and drops the emptied legacy key entirely."""
-    legacy = {
-        "provider": {
-            "yzr-kimi": {"npm": "@ai-sdk/anthropic",
-                         "options": {"apiKey": "OLD_KEY"}},
-        },
-        "model": "yzr-kimi/k3",
-    }
-    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
-    driver.apply(models=[glm_ctx], active=glm_ctx)
-    cfg = json.loads(driver.settings_path.read_text())
-    assert "provider" not in cfg
-    assert _pid(glm_ctx) in cfg["providers"]
-    assert cfg["model"] == "{}/{}".format(_pid(glm_ctx), glm_ctx.name)
-
-
-def test_apply_keeps_foreign_entries_in_the_legacy_key(driver, glm_ctx):
-    """A user's own V1 provider block is not ours to delete — the legacy key
-    survives with the owned ids stripped out."""
-    legacy = {
-        "provider": {
-            "yzr-glm": {"options": {"apiKey": "OLD_KEY"}},
-            "mine": {"npm": "@ai-sdk/openai-compatible"},
-        },
-    }
-    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
-    driver.apply(models=[glm_ctx], active=glm_ctx)
-    cfg = json.loads(driver.settings_path.read_text())
-    assert list(cfg["provider"]) == ["mine"]
-    assert _pid(glm_ctx) in cfg["providers"]
 
 
 # --- apply: baseURL /v1 adaptation -----------------------------------------
@@ -499,29 +462,14 @@ def test_sync_catalog_drops_default_when_no_models(driver):
     assert cfg["providers"] == {}
 
 
-def test_sync_catalog_reclaims_legacy_single_slot_provider(driver):
-    """An upgrade from the old single-slot `yzr` provider is reclaimed (with
-    its key) and re-rendered under the grouped scheme."""
-    legacy = {
-        "provider": {"yzr": {"options": {"apiKey": "OLD_KEY"}}},
-        "model": "yzr/glm-4",
+def test_sync_catalog_reclaims_handwritten_ids_under_our_prefix(driver):
+    """A `yzr-*` entry the current render does not produce is reclaimed —
+    the whole namespace is ours, which is what backs the README's warning
+    against hand-writing providers under this prefix."""
+    seed = {
+        "providers": {"yzr-glm": {"settings": {"apiKey": "K"}}},
     }
-    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
-    models = _models()
-    driver.sync_catalog(models)
-    cfg = json.loads(driver.settings_path.read_text())
-    assert "yzr" not in cfg["providers"]
-    assert _pid(models[0]) in cfg["providers"]
-    assert cfg["providers"][_pid(models[0])]["settings"]["apiKey"] == "K1"
-
-
-def test_sync_catalog_reclaims_per_model_ids_from_pre_grouping_scheme(driver):
-    """Old `yzr-<model_id>` blocks are owned ids too and must be reclaimed
-    when the grouping scheme re-renders."""
-    legacy = {
-        "provider": {"yzr-glm": {"options": {"apiKey": "OLD_KEY"}}},
-    }
-    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
+    driver.settings_path.write_text(json.dumps(seed), encoding="utf-8")
     models = _models()
     driver.sync_catalog(models)
     cfg = json.loads(driver.settings_path.read_text())
@@ -592,14 +540,6 @@ def test_current_reports_default_and_catalog(driver):
     assert "catalog" in cur
     assert _pid(models[0]) in cur["catalog"]
     assert _pid(models[1]) in cur["catalog"]
-
-
-def test_current_reports_owned_blocks_from_the_legacy_key(driver):
-    """Before the first sync after upgrading, the file still holds V1 blocks —
-    `current()` must still report the catalog instead of pretending it's empty."""
-    legacy = {"provider": {"yzr-kimi": {"options": {"apiKey": "K"}}}}
-    driver.settings_path.write_text(json.dumps(legacy), encoding="utf-8")
-    assert "yzr-kimi" in driver.current()["catalog"]
 
 
 # --- variants: declared tiers are the whole set ------------------------------

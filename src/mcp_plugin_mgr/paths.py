@@ -50,7 +50,7 @@ def opencode_config_file() -> Path:
     """OpenCode's global config ($XDG_CONFIG_HOME/opencode/opencode.json).
 
     OpenCode reads MCP servers from the top-level ``mcp`` key here. The same
-    file also holds ``provider``/``model`` (owned by model-switch) and
+    file also holds ``providers``/``model`` (owned by model-switch) and
     ``$schema`` — those keys are disjoint from ``mcp``, so the two tools
     coexist without conflict as long as each preserves unknown keys.
     """

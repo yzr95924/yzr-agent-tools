@@ -91,20 +91,12 @@ def test_add_nests_under_servers_and_preserves_foreign_keys(driver):
     assert data["$schema"] == "https://opencode.ai/config.json"
     assert data["model"] == "yzr-zai/glm"
     assert data["providers"]["yzr-zai"]["package"] == "@opencode/ai/providers/anthropic"
-    # A foreign V1 entry under mcp (not the name we operate on) is left alone.
+    # A sibling entry under `mcp` (outside the `servers` map) is not ours.
     assert data["mcp"]["existing"]["url"] == "https://old"
     assert data["mcp"]["servers"]["outline"] == {
         "type": "remote", "url": "https://x/mcp", "disabled": False,
         "headers": {"Authorization": "Bearer t"},
     }
-
-
-def test_add_reclaims_legacy_entry_of_same_name(driver):
-    _write(driver, {"mcp": {"outline": {"type": "remote", "url": "https://old", "enabled": True}}})
-    driver.add_server("outline", _http())
-    data = _read(driver)
-    assert "outline" not in data["mcp"]
-    assert data["mcp"]["servers"]["outline"]["url"] == "https://x/mcp"
 
 
 def test_remove_is_idempotent(driver):
@@ -113,24 +105,7 @@ def test_remove_is_idempotent(driver):
     assert driver.remove_server("outline") is False
 
 
-def test_remove_clears_legacy_only_entry(driver):
-    _write(driver, {"mcp": {"outline": {"type": "remote", "url": "https://old", "enabled": True}}})
-    assert driver.remove_server("outline") is True
-    assert "outline" not in _read(driver)["mcp"]
-    assert "outline" not in _read(driver)["mcp"].get("servers", {})
-
-
 # --- set_enabled (native flag, in place) -------------------------------------
-
-def _v1_entry():
-    # V1 shape the old driver wrote: enabled flag + a foreign key added by
-    # hand that must survive migration and flag flips.
-    return {
-        "type": "remote", "url": "https://x/mcp", "enabled": True,
-        "headers": {"Authorization": "Bearer t"},
-        "timeout": 30000,
-    }
-
 
 def test_set_enabled_false_flips_flag_in_place_and_preserves_foreign_keys(driver):
     _write(driver, {
@@ -171,38 +146,6 @@ def test_set_enabled_true_flips_flag_back_in_place(driver):
     assert entry["timeout"] == 30000
 
 
-def test_disable_migrates_legacy_entry_and_keeps_its_extra_keys(driver):
-    # Upgrade path: the entry on disk is still the V1 shape (enabled=true);
-    # disabling must move it under mcp.servers as disabled=true, not deny it
-    # as "absent".
-    _write(driver, {"model": "yzr-zai/glm", "mcp": {"outline": _v1_entry()}})
-    action = driver.set_enabled("outline", _http(), False)
-    data = _read(driver)
-
-    assert action == "flagged"
-    assert "outline" not in data["mcp"]
-    entry = data["mcp"]["servers"]["outline"]
-    assert entry["disabled"] is True
-    assert "enabled" not in entry
-    assert entry["timeout"] == 30000
-    assert entry["url"] == "https://x/mcp"
-    assert data["model"] == "yzr-zai/glm"
-
-
-def test_native_entry_wins_when_legacy_sibling_exists(driver):
-    # V2 precedence: when both shapes name the same server, native rules.
-    # Migration must not let the stale V1 copy overwrite the native entry.
-    _write(driver, {"mcp": {
-        "outline": {"type": "remote", "url": "https://stale", "enabled": True},
-        "servers": {"outline": {"type": "remote", "url": "https://live", "disabled": True}},
-    }})
-    driver.set_enabled("outline", _http(), False)
-    data = _read(driver)
-    assert "outline" not in data["mcp"]
-    assert data["mcp"]["servers"]["outline"]["url"] == "https://live"
-    assert data["mcp"]["servers"]["outline"]["disabled"] is True
-
-
 def test_set_enabled_false_on_absent_server_is_noop(driver):
     cp = _write(driver, {"mcp": {"servers": {"outline": {
         "type": "remote", "url": "https://x/mcp", "disabled": False}}}})
@@ -228,29 +171,6 @@ def test_set_enabled_true_adds_missing_flag_on_hand_written_entry(driver):
     assert _read(driver)["mcp"]["servers"]["outline"]["disabled"] is False
 
 
-# --- V1 entries stay visible to list / has ------------------------------------
-
-def test_list_servers_merges_legacy_v1_entries(driver):
-    _write(driver, {"mcp": {
-        "servers": {"new": {"type": "remote", "url": "https://new", "disabled": False}},
-        "old": {"type": "remote", "url": "https://old", "enabled": False},
-    }})
-    servers = driver.list_servers()
-    assert sorted(servers) == ["new", "old"]
-    # The V1 entry reads back in V2 vocabulary.
-    assert servers["old"]["disabled"] is True
-    assert "enabled" not in servers["old"]
-    assert driver.has_server("old") is True
-
-
-def test_list_servers_native_entry_wins_over_legacy_same_name(driver):
-    _write(driver, {"mcp": {
-        "old": {"type": "remote", "url": "https://stale", "enabled": True},
-        "servers": {"old": {"type": "remote", "url": "https://live", "disabled": True}},
-    }})
-    assert driver.list_servers()["old"]["url"] == "https://live"
-
-
 # --- degenerate names ----------------------------------------------------------
 
 def test_server_named_servers_does_not_eat_the_container(driver):
@@ -261,7 +181,7 @@ def test_server_named_servers_does_not_eat_the_container(driver):
     assert data["mcp"]["servers"]["keep"]["url"] == "https://k"
     assert data["mcp"]["servers"]["servers"]["url"] == "https://mine"
     # The container is only ever read as the map itself — its `servers`
-    # member is a real server here, not a stray V1 entry.
+    # member is a real server, not the container.
     assert sorted(driver.list_servers()) == ["keep", "servers"]
 
 

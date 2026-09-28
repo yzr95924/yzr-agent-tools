@@ -5,11 +5,8 @@ OpenCode loads its global config from ``$XDG_CONFIG_HOME/opencode/opencode.json`
 Writing the wrong path means the config is silently ignored and OpenCode
 starts on its default model.
 
-The shapes written here are OpenCode **V2** native shapes. V2 still reads V1
-config, but it drops V1 model fields with a warning and normalizes the rest in
-memory, so this driver writes only what V2 actually consumes. The V1
-``provider`` map is still *read* — one sync reclaims the ``yzr-*`` blocks an
-older model-switch wrote there, then deletes the key if nothing else remains.
+The shapes written here are OpenCode **V2** native shapes (OpenCode >= 2.0):
+this driver writes only what V2 actually consumes.
 
 Unlike Claude Code (a single model slot), OpenCode holds a **catalog**: every
 registered provider's models are listed in its model picker, and ``model``
@@ -43,9 +40,9 @@ the group — and model *names* must be unique within a group, since they key
 the provider's ``models`` map.
 
 Reconciliation is a mirror: ``apply()`` / ``sync_catalog()`` rewrite the whole
-``yzr-*`` namespace from models.toml, deleting any ``yzr-*`` provider (or the
-legacy single-slot ``yzr``) that is no longer registered — so a removed model's
-provider block, including its plaintext key, disappears from disk. Everything
+``yzr-*`` namespace from models.toml, deleting any ``yzr-*`` provider that is
+no longer registered — so a removed model's provider block, including its
+plaintext key, disappears from disk. Everything
 outside the ``yzr-*`` namespace (other providers, ``$schema``, user blocks) is
 preserved. ``sync_catalog()`` keeps the current default pointer unless it
 vanished (then it falls to the first remaining model, or drops the key when
@@ -109,16 +106,11 @@ from model_switch.store import ModelEntry as Model
 from model_switch.store import provider_group_key
 
 
-PROVIDER_ID = "yzr"
-
-# The provider namespace model-switch owns (grouped `yzr-<slug>` blocks plus
-# the legacy forms `_is_owned_provider` reclaims).
+# The provider namespace model-switch owns: grouped `yzr-<slug>` blocks.
 PROVIDER_PREFIX = "yzr-"
 
-# The V2 providers key and the V1 one this driver used to write. Owned blocks
-# are reclaimed from both; only the V2 key is written.
+# The V2 providers key.
 PROVIDER_KEY = "providers"
-LEGACY_PROVIDER_KEY = "provider"
 
 # Without `package`, OpenCode reports "Provider not found" and silently falls
 # back to its default model.
@@ -366,11 +358,11 @@ def _provider_layout(models: List[Model]) -> Tuple[Dict[_GroupKey, str], Dict[_G
 def _is_owned_provider(provider_id: str) -> bool:
     """Whether model-switch owns (and may reclaim) this provider id.
 
-    Covers the grouped ``yzr-<slug>`` ids, the pre-grouping per-model
-    ``yzr-<model_id>`` ids, and the legacy single-slot ``yzr``, so upgrades
-    migrate automatically.
+    The whole ``yzr-*`` namespace is model-switch's: reconcile reclaims any
+    ``yzr-*`` the current render does not produce, hand-written entries
+    included — users must not define providers under this prefix.
     """
-    return provider_id == PROVIDER_ID or provider_id.startswith(PROVIDER_PREFIX)
+    return provider_id.startswith(PROVIDER_PREFIX)
 
 
 def _without_owned(block: Any) -> Dict[str, Any]:
@@ -444,17 +436,8 @@ class OpenCodeDriver:
         """Update `config` in place with the mirrored ``yzr-*`` namespace.
 
         Pure computation: nothing is read or written here, so `validate`
-        can run the same rendering the write path runs (see `apply`). Owned
-        blocks are stripped from both the V2 ``providers`` key and the legacy
-        V1 ``provider`` key — a pre-V2 file is migrated by the same call, and
-        the legacy key is dropped entirely once nothing is left in it.
+        can run the same rendering the write path runs (see `apply`).
         """
-        legacy = _without_owned(config.get(LEGACY_PROVIDER_KEY))
-        if legacy:
-            config[LEGACY_PROVIDER_KEY] = legacy
-        else:
-            config.pop(LEGACY_PROVIDER_KEY, None)
-
         providers = _without_owned(config.get(PROVIDER_KEY))
         keyed = [m for m in models if m.api_key]  # no key → unusable block
         pid_by_key, groups, refs = _provider_layout(keyed)
@@ -512,11 +495,9 @@ class OpenCodeDriver:
         if not config:
             return {}
         out = {"model": config.get("model", "")}
-        owned = set()
-        for key in (PROVIDER_KEY, LEGACY_PROVIDER_KEY):
-            block = config.get(key)
-            if isinstance(block, dict):
-                owned.update(k for k in block if _is_owned_provider(k))
+        block = config.get(PROVIDER_KEY)
+        owned = ({k for k in block if _is_owned_provider(k)}
+                 if isinstance(block, dict) else set())
         if owned:
             out["catalog"] = ", ".join(sorted(owned))
         return out

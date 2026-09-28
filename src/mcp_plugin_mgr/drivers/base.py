@@ -161,8 +161,7 @@ class BaseMcpDriver:
         """`mutate(obj) -> changed` for the agent's native disable flag.
 
         Only drivers with `native_disable = True` implement this; it is where
-        each agent's vocabulary lives (OpenCode / Qoder CLI: `disabled`,
-        OpenCode V1 used the inverse `enabled`).
+        each agent's vocabulary lives (OpenCode / Qoder CLI: `disabled`).
         """
         raise NotImplementedError
 
