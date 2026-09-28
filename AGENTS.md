@@ -175,12 +175,11 @@ src/
   `settings.baseURL` 由 driver 自动补 `/v1`(该 package 只在 baseURL 后追加 `/messages`，而
   store 里 `base_url` 不带 /v1——那正是 claude-code driver 要的形式；语义差异封装在各自
   driver);`settings.apiKey` 直接写明文 key(**不用** `{env:VAR}` 占位符；密钥落盘，注意文件
-  权限）。旧版 V1 的顶层 `provider` 键**只读不写**:reconcile 会把其中 `yzr-*` 的旧块剥掉
-  （剥空则删键），外来条目原样保留。**`context_window` 已知时写 `limit` 块**：自定义 provider
+  权限）。**`context_window` 已知时写 `limit` 块**：自定义 provider
   不在 models.dev,OpenCode 无从得知上下文限额，须显式声明 `limit.context`；但 OpenCode
   schema 要求 `limit` 存在时 `context` 与 `output` 成对（缺 `output` 拒载整份配置），我们只追踪
   `context_window`，故 `output` 配习惯级常量（`131_072`，对齐 models.dev MiniMax-M3）。`context_window`
-  未知时整块 `limit` 省略（写半截 `{limit:{context}}` 会让配置校验失败、模型不可用）。V1 的
+  未知时整块 `limit` 省略（写半截 `{limit:{context}}` 会让配置校验失败、模型不可用）。
   `reasoning`/`attachment`/`temperature` model 字段 V2 已移除（加载时忽略并告警），driver 不再
   渲染。
 
@@ -196,7 +195,7 @@ src/
 - `claude-code`（单槽，`supports_catalog=False`）：`apply(models, active)` 只渲染 `active`,
   写 `env` 块 + 顶层 `model`。无渲染期校验，故不实现 `validate`。
 - `opencode`(catalog,`supports_catalog=True`):`apply` = 全量 reconcile——把 `models.toml`
-  全部模型镜像成 `yzr-<model_id>` 的 provider(每模型一个，`baseURL`/`apiKey` 是 provider
+  全部模型按上游分组镜像成 `yzr-<slug>` 的 provider(每组一个，`baseURL`/`apiKey` 是 provider
   级字段、不同上游不能共用一个块),`config["model"]` 只作默认指针。`sync_catalog(registry)`
   在 add/remove/import 时触发，同样全量 reconcile 但保留有效默认指针（悬空则落剩余第一个 /
   无剩余删键);`create=False` 时不凭空创建不存在的 `opencode.json`。渲染拆成纯计算的
@@ -219,8 +218,7 @@ payload 内容不校验。`variants.py` 与 `drivers/opencode.py`
 `[{"id": <档名>, "settings": <payload>}, ...]`,**声明顺序即数组顺序 = ctrl+t 循环顺序**;
 payload 原样进 `settings`，由 OpenCode 的 provider package 翻进请求（实测：`settings.effort`
 → `output_config.effort`,`settings.thinking` → 请求 body 的 `thinking`）。OpenCode V2 对自建
-provider **不计算家族内置档位**，所以声明即全集，没有静音/深合并机制（V1 时代的
-`_INJECTABLE_TIER_NAMES` 与 `{disabled:true}` 静音已随迁移删除）；未声明 `variants` 的模型
+provider **不计算家族内置档位**，所以声明即全集，没有静音/深合并机制；未声明 `variants` 的模型
 渲染不出档位，`ctrl+t` 只有未选档 Default（走 provider 基线，kimi 基线即 `effort = "high"`）。
 `model show` 的 variants 行列的就是声明的档位（顺序即循环顺序），未声明时打印 `<none declared>`。
 
@@ -244,7 +242,7 @@ Pro/Allegretto+，超出套餐服务端 401）。
 
 **Catalog 变更即同步**:`model add/remove/import` 也写 agent 配置（不只 `use`），保证
 `models.toml` 变更后任何 agent 配置里都不存在已删除模型的 key——opencode 靠全量 reconcile
-（删 `yzr-*` 命名空间里不在 registry 的 provider，含旧版裸 `yzr`，天然迁移），claude-code 靠
+（删 `yzr-*` 命名空间里不在 registry 的 provider），claude-code 靠
 `remove`/`import replace` 删到 active 时 `clear()`(清四个自有键 + 顶层 `model`，同时清
 `active_main`）。`yzr-*` 命名空间归 model-switch 管，用户别在之前缀自建 provider。
 
@@ -261,8 +259,7 @@ CLI(`mcp-plugin-mgr`)，与 model-switch 同构：一份规范注册表(`~/.conf
 
 - `claude-code` 写 `~/.claude.json` 的 `mcpServers`(**不是** `~/.claude/settings.json`——后者归
   model-switch；两者是不同文件）。http→`{type:http,url,headers?}`,stdio→`{type:stdio,command,args,env}`。
-- `opencode` 写 `opencode.json` 的 `mcp.servers`(OpenCode V2 原生位置；旧版直接写 `mcp.<name>` 的
-  V1 条目按名回收，用户手写/未操作过的条目不碰，`list` 视图仍能看到)。词表不同：
+- `opencode` 写 `opencode.json` 的 `mcp.servers`(OpenCode V2 原生位置)。词表不同：
   http→`{type:remote,url,disabled:false,headers?}`,stdio→`{type:local,command:[cmd]+args,disabled:false,environment?}`
   (`command` 是 cmd+args 合并的数组，env 字段叫 `environment`)。
 - `qodercli` 写 `~/.qoder/settings.json` 的 `mcpServers`(**与 Claude Code 同键名、不同文件**；同文件还

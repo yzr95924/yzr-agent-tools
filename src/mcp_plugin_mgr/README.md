@@ -9,8 +9,7 @@ driver 负责把统一的「服务定义」渲染成该 agent 的字段与位置
 ## 它解决什么
 
 - Claude Code 的 MCP 服务在 `~/.claude.json` 的 `mcpServers`;OpenCode 的在
-  `~/.config/opencode/opencode.json` 的 `mcp.servers`(V2 原生位置；V1 直接挂 `mcp` 下的
-  旧条目在下次对该服务做操作时按名自动回收);Qoder CLI 的在 `~/.qoder/settings.json` 的
+  `~/.config/opencode/opencode.json` 的 `mcp.servers`(V2 原生位置);Qoder CLI 的在 `~/.qoder/settings.json` 的
   `mcpServers`（与 Claude Code 同键名、不同文件）。**位置不同、字段名不同、type 词表不同**
   (Claude Code: `http`/`stdio`;OpenCode: `remote`/`local`，且 `command` 是 cmd+args 合并的
   数组，env 字段叫 `environment`;Qoder CLI: 接近 Claude Code，但 stdio **不写 `type` 字段**、

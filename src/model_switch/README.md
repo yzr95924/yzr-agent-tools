@@ -227,10 +227,9 @@ model-switch status --driver opencode
 
 OpenCode driver 往 OpenCode 的全局配置 `~/.config/opencode/opencode.json`
 (`providers.<yzr-*>`)里写 **OpenCode V2 的原生形状**(需要
-OpenCode ≥ 2.0;V1 已不再支持）：顶层 `providers` 键、`package:
+OpenCode ≥ 2.0）：顶层 `providers` 键、`package:
 @opencode/ai/providers/anthropic`、provider 级 `settings`(含 `baseURL`/`apiKey`),
-并把解析出的 API key 直接写入——密钥是落盘的，请把文件权限收紧。旧版 V1 的 `provider` 键
-只读不写：一次 sync 会把里面 `yzr-*` 的旧块迁走，键空则删，别人的条目原样保留。模型定义
+并把解析出的 API key 直接写入——密钥是落盘的，请把文件权限收紧。模型定义
 (`models.toml`)在 Claude Code 和 OpenCode driver 之间共享，所以切换 agent 不用重新注册模型。
 
 **OpenCode 是 catalog 型 agent。** 与 Claude Code 的单槽不同，OpenCode 的模型 picker
@@ -269,8 +268,7 @@ host 派生。两条路径都不会猜——同上游同 key 的两个 provider 
 - `config["model"]` 默认指针：指向的模型还在就保持；被删了则落到剩余模型的第一个；一个都不
   剩就删掉该键。**默认指针只会被 `model use` 改动**——add/remove/import 的 reconcile 从不
   碰你手动设的外来默认模型。
-- `yzr-*` 命名空间归 model-switch 管：任何 `yzr-*` 前缀（含旧版单槽的裸 `yzr` 和旧版
-  每模型一个的 `yzr-<model_id>`）都会被 reconcile 回收，请别在这个前缀下自建 provider。
+- `yzr-*` 命名空间归 model-switch 管：任何 `yzr-*` 都会被 reconcile 回收，请别在这个前缀下自建 provider。
   `yzr-*` 之外的一切原样保留。
 - 镜像只作用于已存在的 `opencode.json`:`model add` 不会凭空创建一个你没用过的全局配置文件，
   只有 `model use --driver opencode`（或 interactive all）才创建它。
@@ -333,9 +331,8 @@ variants_preset = "z-effort"
   `effort = "high"` 被 Anthropic package 翻成 `output_config.effort`（Kimi 文档定义的形状），
   `thinking = { type = "adaptive" }` 原样进请求 body;payload 内容不校验，写错了表现为请求
   行为不对而不是配置拒载。
-- **没有内置档位，也就没有「删不掉的叶子键」问题。** V1 时代 OpenCode 会把家族内置档位与你
-  声明的做叶子级深合并（kimi 的 `thinking: adaptive`、`effort: high` 会漏进来）；V2 对自建
-  provider 不算内置，声明的数组就是全部。
+- **没有内置档位，也就没有「删不掉的叶子键」问题。** OpenCode V2 对自建 provider 不算
+  内置档位，声明的数组就是全部。
 - **`[variants_presets.*]` 是顶层表**，模型条目里引用它；对 `models.toml` 的任何重写
   (`model add/remove/import`)会保留它，但 dumper 会把它排到文件末尾（合法，只是位置变化）。
 
@@ -408,8 +405,8 @@ catalog 条目的人类可读名由 `model align` / `model add` 导出到 `displ
 `display_name` 只是标签：model 块的 **key 与发往上游的模型 id 始终是 upstream id**，改它
 不会动请求里的模型名。
 
-> V1 的 `temperature` / `attachment` 能力位在 OpenCode V2 已被 schema 移除（加载时忽略并告警），
-> model-switch 不再导出或渲染它们；旧 `models.toml` 里残留的这两个键是惰性数据，不影响任何
+> OpenCode V2 的 schema 没有 `temperature` / `attachment` 能力位（加载时忽略并告警），
+> model-switch 不导出也不渲染它们；旧 `models.toml` 里残留的这两个键是惰性数据，不影响任何
 > 行为，可以随手删。
 
 ### 与 OpenCode 内置对齐（自动）
