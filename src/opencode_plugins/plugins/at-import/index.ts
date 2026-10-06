@@ -15,13 +15,14 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
 
+const ID = "at-import"
 const MAX_DEPTH = 5
 const MAX_FILE_BYTES = 64 * 1024
 const MAX_TOTAL_BYTES = 256 * 1024
 
 function heartbeatPath(): string {
   const base = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")
-  return join(base, "opencode-plugins", "at-import-heartbeat.json")
+  return join(base, "opencode-plugins", ID + "-heartbeat.json")
 }
 
 function writeHeartbeat(record: Record<string, unknown>): void {
@@ -148,7 +149,7 @@ function makeExpand(state: {
 }
 
 export default {
-  id: "at-import",
+  id: ID,
   async setup(ctx: any) {
     const chain = agentsFiles(ctx)
     if (chain.length === 0) return

@@ -10,6 +10,7 @@ resolves against the directory of the config file that declares it — i.e.
 exactly `plugins_target_dir()/<name>`.
 """
 import hashlib
+import os
 import shutil
 from pathlib import Path
 from typing import Dict, List
@@ -100,8 +101,7 @@ def _entry_matches(entry, name: str) -> bool:
     text = _entry_target(entry)
     if not text:
         return False
-    dst = str(target_dir(name))
-    return text == entry_for(name) or text.rstrip("/") == dst or text.endswith("://" + dst)
+    return text == entry_for(name) or text.rstrip("/") == str(target_dir(name))
 
 
 def _set_registered(name: str, want: bool) -> bool:
@@ -141,10 +141,20 @@ def install(name: str) -> str:
         raise RegistryError("Unknown plugin (not bundled): {0}".format(name))
     was = status(name)
     dst = target_dir(name)
-    if dst.exists():
-        shutil.rmtree(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_dir(name), dst)
+    staging = dst.with_name(dst.name + ".staging")
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(source_dir(name), staging)
+    # Swap through a renamed backup: the visible target never exists half-copied.
+    old = dst.with_name(dst.name + ".old")
+    if dst.exists():
+        if old.exists():
+            shutil.rmtree(old)
+        os.rename(dst, old)
+    os.rename(staging, dst)
+    if old.exists():
+        shutil.rmtree(old, ignore_errors=True)  # best-effort; swap already done
     _set_registered(name, True)
     return "updated" if was in ("drift", "installed") else "installed"
 

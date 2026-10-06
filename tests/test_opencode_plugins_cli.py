@@ -113,6 +113,26 @@ def test_install_recognizes_absolute_entry_as_registered():
     assert registry.is_registered("demo")
 
 
+def test_other_form_entries_are_not_treated_as_ours():
+    _bundle("demo")
+    dst = str(paths.plugins_target_dir() / "demo")
+    paths.opencode_config_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.opencode_config_file().write_text(json.dumps({"plugins": ["file://" + dst]}))
+    assert not registry.is_registered("demo")
+    run(["uninstall", "demo"])
+    assert _config()["plugins"] == ["file://" + dst]
+
+
+def test_install_replaces_target_without_leftover_temp_dirs():
+    _bundle("demo", "// v1\n")
+    run(["install", "demo"])
+    _bundle("demo", "// v2\n")
+    run(["install", "demo"])
+    dst = paths.plugins_target_dir()
+    assert (dst / "demo" / "index.ts").read_text() == "// v2\n"
+    assert sorted(d.name for d in dst.iterdir() if d.is_dir()) == ["demo"]
+
+
 # ---- sync -------------------------------------------------------------------
 
 def test_sync_recopies_drifted_source():

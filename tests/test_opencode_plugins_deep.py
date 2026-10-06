@@ -28,7 +28,7 @@ def _write_heartbeat(**over) -> None:
         "error": None,
     }
     record.update(over)
-    p = deep.heartbeat_file()
+    p = deep.heartbeat_file("at-import")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(record) + "\n", encoding="utf-8")
     # heartbeat mtime must reflect "fired just now" for the fresh-case tests
@@ -39,16 +39,15 @@ def _write_heartbeat(**over) -> None:
 # ---- judge: pure decision table ---------------------------------------------
 
 def _facts(**over):
-    facts = {
-        "plugin_mtime": 1000.0,
-        "heartbeat": {"opencodeVersion": "2.0.15", "error": None},
-        "heartbeat_exists": True,
-        "heartbeat_mtime": 2000.0,
-        "opencode_version": "2.0.15",
-        "listed": True,
-    }
-    facts.update(over)
-    return facts
+    defaults = deep.Facts(
+        plugin_mtime=1000.0,
+        heartbeat={"opencodeVersion": "2.0.15", "error": None},
+        heartbeat_exists=True,
+        heartbeat_mtime=2000.0,
+        opencode_version="2.0.15",
+        listed=True,
+    )
+    return defaults._replace(**over)
 
 
 def test_judge_healthy():

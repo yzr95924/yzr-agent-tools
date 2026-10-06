@@ -189,7 +189,7 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     monkeypatch.setattr(op_paths, "bundled_plugins_dir", lambda: op_bundled_p)
     # The real machine carries a live heartbeat (written by the running
     # opencode's at-import plugin) — deep checks must never read it in tests.
-    monkeypatch.setattr(op_deep, "heartbeat_file", lambda: op_heartbeat_p)
+    monkeypatch.setattr(op_deep, "heartbeat_file", lambda _plugin_id: op_heartbeat_p)
 
     paths_dict = {
         "config_dir": cfg_dir,

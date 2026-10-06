@@ -130,37 +130,17 @@ def _do_verify(names: List[str], deep: bool = False) -> int:
             problems.append("install state: {0}".format(st))
         if not registry.is_registered(name):
             problems.append("not registered in {0}".format(paths.opencode_config_file()))
-        notes = []  # type: List[str]
         if deep and not problems:
-            version = deep_mod.current_opencode_version()
-            if version is None:
-                notes.append("opencode not on PATH — live checks skipped")
-            hb_path = deep_mod.heartbeat_file()
-            problems.extend(
-                deep_mod.judge({
-                    "plugin_mtime": _mtime(registry.target_dir(name) / "index.ts"),
-                    "heartbeat": deep_mod.read_heartbeat(),
-                    "heartbeat_exists": hb_path.exists(),
-                    "heartbeat_mtime": _mtime(hb_path),
-                    "opencode_version": version,
-                    "listed": deep_mod.plugin_list_contains(name) if version else None,
-                })
-            )
-        for note in notes:
-            print("{0}: note: {1}".format(name, note))
+            facts = deep_mod.collect_facts(name)
+            if facts.opencode_version is None:
+                print("{0}: note: opencode not on PATH — live checks skipped".format(name))
+            problems.extend(deep_mod.judge(facts))
         if problems:
             rc = 1
             print("{0}: FAIL ({1})".format(name, "; ".join(problems)))
         else:
             print("{0}: OK{1}".format(name, " (deep)" if deep else ""))
     return rc
-
-
-def _mtime(path) -> Optional[float]:
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return None
 
 
 def main(argv: Optional[List[str]] = None) -> int:
