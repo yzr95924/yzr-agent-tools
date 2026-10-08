@@ -1,1 +1,0 @@
-- [Never touch real configs in tests](never-touch-real-configs-in-tests.md) — tests must always run against tmp paths; never rely on real `~/.claude/settings.json`, real `~/.config/...`, etc.
