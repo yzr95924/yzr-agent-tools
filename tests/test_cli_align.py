@@ -20,10 +20,12 @@ def yzr_paths(_isolate_yzr_state):
     return _isolate_yzr_state
 
 
-def _entry(options, context=1000000, modalities=None):
+def _entry(reasoning, context=1000000, modalities=None, api=None):
     e = {
-        "reasoning_options": options,
+        "capabilities": {"reasoning": reasoning},
         "limit": {"context": context, "output": 131072},
+        "api": api or {"messages":
+                       {"base_url": "https://api.fixture.com/anthropic/v1"}},
     }
     if modalities is not None:
         e["modalities"] = {"input": modalities, "output": ["text"]}
@@ -47,13 +49,11 @@ MODEL_TOML = (
 
 CATALOG = {
     "fixture": {
-        "api": "https://api.fixture.com/compatible-mode/v1",
         "models": {
             "fixture-model": _entry(
-                [{"type": "toggle"},
-                 {"type": "effort", "values": ["low", "medium"]}],
+                {"supported": True, "toggle": True, "effort": ["low", "medium"]},
                 context=500000,
-                modalities=["text", "image", "video"],
+                modalities=["text", "image/jpeg", "video/mp4"],
             ),
         },
     },
@@ -88,11 +88,10 @@ def test_align_derives_display_name(yzr_paths):
     """The human-readable name is derived like the other catalog fields —
     and a second run is a no-op."""
     _write_models(yzr_paths["models"], MODEL_TOML)
-    entry = _entry([{"type": "effort", "values": ["low"]}], context=500000)
+    entry = _entry({"supported": True, "effort": ["low"]}, context=500000)
     entry["name"] = "Fixture Model"
     _write_catalog(yzr_paths["catalog"], {
-        "fixture": {"api": "https://api.fixture.com/compatible-mode/v1",
-                    "models": {"fixture-model": entry}},
+        "fixture": {"models": {"fixture-model": entry}},
     })
     runner(["model", "use", "m", "--driver", "opencode"])
 
@@ -114,11 +113,10 @@ def test_align_derives_display_name(yzr_paths):
 def test_align_skips_display_name_equal_to_the_upstream_id(yzr_paths):
     """A display name equal to the upstream id is not repeated."""
     _write_models(yzr_paths["models"], MODEL_TOML)
-    entry = _entry([{"type": "effort", "values": ["low"]}], context=500000)
+    entry = _entry({"supported": True, "effort": ["low"]}, context=500000)
     entry["name"] = "fixture-model"   # same as the upstream id
     _write_catalog(yzr_paths["catalog"], {
-        "fixture": {"api": "https://api.fixture.com/compatible-mode/v1",
-                    "models": {"fixture-model": entry}},
+        "fixture": {"models": {"fixture-model": entry}},
     })
     runner(["model", "use", "m", "--driver", "opencode"])
 
@@ -170,12 +168,12 @@ def test_align_is_idempotent(yzr_paths):
 def test_align_single_model_with_pin_resolves_conflict(yzr_paths):
     _write_models(yzr_paths["models"], MODEL_TOML)
     _write_catalog(yzr_paths["catalog"], {
-        "a": {"api": "https://api.fixture.com/v1",
-              "models": {"fixture-model": _entry(
-                  [{"type": "effort", "values": ["low"]}], context=111)}},
-        "b": {"api": "https://api.fixture.com/v2",
-              "models": {"fixture-model": _entry(
-                  [{"type": "effort", "values": ["high"]}], context=222)}},
+        "a": {"models": {"fixture-model": _entry(
+            {"supported": True, "effort": ["low"]}, context=111,
+            api={"messages": {"base_url": "https://api.fixture.com/v1"}})}},
+        "b": {"models": {"fixture-model": _entry(
+            {"supported": True, "effort": ["high"]}, context=222,
+            api={"messages": {"base_url": "https://api.fixture.com/v2"}})}},
     })
 
     conflict = runner(["model", "align"])
@@ -249,12 +247,12 @@ def test_add_no_catalog_skips_derivation(yzr_paths):
 
 def test_add_conflict_never_guesses(yzr_paths):
     _write_catalog(yzr_paths["catalog"], {
-        "a": {"api": "https://api.fixture.com/v1",
-              "models": {"fixture-model": _entry(
-                  [{"type": "effort", "values": ["low"]}], context=111)}},
-        "b": {"api": "https://api.fixture.com/v2",
-              "models": {"fixture-model": _entry(
-                  [{"type": "effort", "values": ["high"]}], context=222)}},
+        "a": {"models": {"fixture-model": _entry(
+            {"supported": True, "effort": ["low"]}, context=111,
+            api={"messages": {"base_url": "https://api.fixture.com/v1"}})}},
+        "b": {"models": {"fixture-model": _entry(
+            {"supported": True, "effort": ["high"]}, context=222,
+            api={"messages": {"base_url": "https://api.fixture.com/v2"}})}},
     })
     result = runner([
         "model", "add", "m",

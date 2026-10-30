@@ -66,11 +66,12 @@ non-event body silently — a zero-token empty reply with no error event.
 
 ``Model.context_window`` is surfaced as ``limit.context``: a custom provider
 isn't on models.dev, so OpenCode can't infer the context budget and would fall
-back to a default. OpenCode's schema requires ``context`` and ``output``
-together, so context is paired with a default ``output`` cap
-(``_DEFAULT_MAX_OUTPUT``). When ``context_window`` is unknown the whole
-``limit`` block is omitted — a partial ``{limit:{context}}`` fails validation
-and makes the model unavailable.
+back to a default. The V2 config schema no longer marks ``limit.output``
+required, but an omitted ``output`` decodes to ``0`` inside OpenCode — and
+``0`` feeds budget-tier generation and context math there — so context stays
+paired with a default ``output`` cap (``_DEFAULT_MAX_OUTPUT``). When
+``context_window`` is unknown the whole ``limit`` block is omitted: a lone
+``context`` would pin ``output`` to ``0`` instead of leaving it unset.
 
 ``variants`` declares the effort tiers OpenCode's variant selection
 (``provider/model#variant``) offers. V2 renders them as the array shape
@@ -86,10 +87,11 @@ the cycle order.
 (``input``/``output``) with ``tools`` always true. The block is emitted even
 for a model without declared modalities, because OpenCode's fallback for a
 model it cannot look up assumes image input — writing text-only explicitly is
-what keeps such a model text-only. Values use the config schema's modality
-enum and are validated locally (a bad value makes OpenCode reject the whole
-file). Declaring a modality the upstream doesn't actually accept turns the
-silent fallback into a hard request error, so entries opt in per model.
+what keeps such a model text-only. Values use the coarse modality names
+OpenCode's input gate compares (it collapses MIME types to these when loading
+its catalog) and are validated locally (a bad value makes OpenCode reject the
+whole file). Declaring a modality the upstream doesn't actually accept turns
+the silent fallback into a hard request error, so entries opt in per model.
 
 ``display_name`` renders as the model-level ``name``, which is only the picker
 label: OpenCode falls back to the model key when it is absent, and both the
@@ -109,7 +111,6 @@ from model_switch.store import provider_group_key
 # The provider namespace model-switch owns: grouped `yzr-<slug>` blocks.
 PROVIDER_PREFIX = "yzr-"
 
-# The V2 providers key.
 PROVIDER_KEY = "providers"
 
 # Without `package`, OpenCode reports "Provider not found" and silently falls
@@ -119,14 +120,15 @@ PACKAGE = "@opencode/ai/providers/anthropic"
 # baseURL must carry a version segment; see the module docstring.
 _VERSION_SEGMENT = re.compile(r"/v\d+$")
 
-# Default max-output cap paired with every emitted ``limit.context``, because
-# OpenCode's schema forces ``context`` and ``output`` to appear together while
-# model-switch tracks only context. Aligns with OpenCode's bundled
-# models.dev MiniMax-M3; upgrade to a per-model field when output must vary.
+# Max-output cap paired with every emitted ``limit.context``: OpenCode decodes
+# an omitted ``output`` as 0, and 0 feeds its budget-tier generation and
+# context math. Aligns with OpenCode's bundled models.dev MiniMax-M3; upgrade
+# to a per-model field when output must vary.
 _DEFAULT_MAX_OUTPUT = 131_072
 
-# OpenCode's modality enum for the capabilities block; this tuple also orders
-# the values in rendered messages.
+# The coarse modality names OpenCode's input gate matches with
+# ``startswith`` (its own catalog loader collapses MIME types to these); this
+# tuple also orders the values in rendered messages.
 _MODALITY_VALUES = ("text", "audio", "image", "video", "pdf")
 
 

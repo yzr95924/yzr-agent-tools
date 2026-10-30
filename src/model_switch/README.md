@@ -412,9 +412,11 @@ catalog 条目的人类可读名由 `model align` / `model add` 导出到 `displ
 ### 与 OpenCode 内置对齐（自动）
 
 OpenCode 自己维护一份 models.dev 快照（OpenCode 2.0 起存在其 SQLite 数据库
-`~/.local/share/opencode/opencode.db` 的 `kv` 表里，约每小时刷新），
-它也是 OpenCode 推导内置模型字段的同一份数据。model-switch **只读这份缓存、不联网**，
-从中导出 context window、档位（variants）、modalities 与 display_name：
+`~/.local/share/opencode/opencode.db` 的 `kv` 表里，键 `models-dev:v2:catalog`，2.2 起
+为 V2 结构——model 条目自带 `api` 路由、`capabilities.reasoning` 与 MIME 类型的
+`modalities`，约每小时刷新），它也是 OpenCode 推导内置模型字段的同一份数据。
+model-switch **只读这份缓存、不联网**，从中导出 context window、档位（variants）、
+modalities 与 display_name：
 
 ```bash
 # 新增：只要本地名 + base_url + api_key;TTY 下 model id 从 catalog 菜单里选，
@@ -429,25 +431,28 @@ model-switch model align
 
 | catalog 字段 | models.toml |
 | --- | --- |
-| `reasoning_options` 的 `effort.values` | 每值一档 `<v> = { effort = "<v>", thinking = { type = "adaptive" } }`；`none` 翻成 `none = { thinking = { type = "disabled" } }`（Anthropic 的 effort 枚举没有 `none`，而这正是 Kimi 文档给 `none` 的定义），`minimal` 跳过（没有对应形状，硬翻会名不副实） |
-| `reasoning_options` 的 `toggle` | 不造档位（OpenCode 自己的推导在有 effort 时也丢弃 toggle），想要关思考的档位就手写一档 `off = { thinking = { type = "disabled" } }` |
+| `capabilities.reasoning.effort` | 每值一档 `<v> = { effort = "<v>", thinking = { type = "adaptive" } }`；`none` 翻成 `none = { thinking = { type = "disabled" } }`（Anthropic 的 effort 枚举没有 `none`，而这正是 Kimi 文档给 `none` 的定义），`minimal` 跳过（没有对应形状，硬翻会名不副实） |
+| `capabilities.reasoning.toggle` | 不造档位（OpenCode 自己的推导在有 effort 时也丢弃 toggle），想要关思考的档位就手写一档 `off = { thinking = { type = "disabled" } }` |
 | `limit.context` | `context_window`（按模型/套餐的最大值，如 kimi `k3` 是 `1048576`——需要 Pro/Allegretto 及以上套餐，超出套餐的上下文服务端返回 401） |
-| `modalities.input` | `modalities`，剔掉 `video`/`audio`（Anthropic messages 无这两种 part） |
+| `modalities.input` | `modalities`：MIME 归并为粗粒度（`image/*`→`image`、`application/pdf`→`pdf`，与 OpenCode 装载 catalog 时的归并一致——直接写 MIME 反而会挂掉它的输入门禁），再剔掉 `video`/`audio`（Anthropic messages 无这两种 part） |
 | `name` | `display_name`（仅当与 upstream id 不同才写，见上一节） |
-| 只有 `budget_tokens` 或只有 toggle 声明 | 不造档位（打印提示，需要就手写） |
+| 只有 `budget` 或只有 toggle 声明 | 不造档位（打印提示，需要就手写） |
 
 选择哪条 catalog 条目的规则：先按 base_url 的 **host** 收敛（同名模型常挂在几十个
-provider 下且声明互相冲突）；host 匹配剩多条时，只有**推导结果逐字相同**才取字典序第一，
-否则**拒绝并列出候选**，要求用 `--catalog-provider <id>` 钉选——绝不自动猜（猜错会静默
-配错档位）。向导里的 `all <关键词>` 是这条规则唯一的放宽口子，且由你**主动**输入：工具自己
-从不挑一个 host 不匹配的 provider，宽搜选中时还会打印 note 提醒字段来源。看候选、手工核对
-时的原命令仍然可用：
+provider 下且声明互相冲突）——条目自带的各 `api` 路由里，任一路由的 host 与 base_url 的
+host **完全相等**才算命中（子串会把 `coding.dashscope.aliyuncs.com` 错配给
+`dashscope.aliyuncs.com`，两个是不同产品）；host 匹配剩多条时，只有**推导结果逐字相同**
+才取字典序第一，否则**拒绝并列出候选**，要求用 `--catalog-provider <id>` 钉选——绝不自动
+猜（猜错会静默配错档位）。快照里 `type` 非 `chat` 的条目（image/decision）不参与：会话只
+用 chat 模型。向导里的 `all <关键词>` 是这条规则唯一的放宽口子，且由你**主动**输入：工具
+自己从不挑一个 host 不匹配的 provider，宽搜选中时还会打印 note 提醒字段来源。看候选、
+手工核对时的原命令仍然可用：
 
 ```bash
 sqlite3 ~/.local/share/opencode/opencode.db \
-  "select json_extract(value,'\$.body') from kv where key='models-dev:catalog'" \
+  "select json_extract(value,'\$.body') from kv where key='models-dev:v2:catalog'" \
 | jq -r 'to_entries[] | .value.models["qwen3.8-max"] as $m | select($m)
-         | "\(.key)  api=\(.value.api)  reasoning=\($m.reasoning_options|tostring)  limit=\($m.limit|tostring)"'
+         | "\(.key)  api=\($m.api|to_entries|map("\(.key)=\(.value.base_url)")|join(" "))  reasoning=\($m.capabilities.reasoning|tostring)  limit=\($m.limit|tostring)"'
 ```
 
 对齐的口径：对齐的对象是 **models.dev 官方 provider 条目**。OpenCode V2 对自建 provider
@@ -456,12 +461,13 @@ sqlite3 ~/.local/share/opencode/opencode.db \
 - **`none` / `minimal` 不照抄**：Anthropic 的 effort 枚举没有这两个值。`none` 翻成关思考档
   （`{thinking:{type:"disabled"}}`，Kimi 文档对 K2.x 的定义），`minimal` 跳过——硬翻会名
   不副实。
-- **`interleaved` 不写**：条目里的值（`{field: "reasoning_content"}`）是 OpenAI 兼容端点取
-  reasoning 文本用的字段；Anthropic 路径由 `anthropic-beta: interleaved-thinking-2025-05-14`
+- **各路由的 `compatibility.reasoning_field` 不写**：那是 OpenAI 兼容端点取 reasoning
+  文本用的字段；Anthropic 路径由 `anthropic-beta: interleaved-thinking-2025-05-14`
   头处理，OpenCode 的 Anthropic package 会自己加（实测请求头可见）。
 - **`cost` / `family` / `release_date` 不写**：纯显示/元数据（价格还会过期）；`structured_output`
   则是**写不了**——OpenCode 的 model 配置 schema 没有这个字段。
-- 官方条目的 `limit.output` 不复刻，统一 `131072`：线上 `max_tokens = min(limit.output,
+- 官方条目的 `limit.output` 不复刻，统一 `131072`：配置里省略 `output` 会被 OpenCode
+  解码成 `0`、参与 budget 档位与 context 计算，而线上 `max_tokens = min(limit.output,
   32000)`，catalog 值再大也是 32000，请求实际一样。
 
 已知限制（设计如此）：catalog 描述的是各 provider **声明**的端点（通常是其 OpenAI 兼容

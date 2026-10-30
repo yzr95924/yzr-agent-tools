@@ -39,8 +39,8 @@ def catalog_db_file() -> Path:
     OpenCode >= 2.0 stores the fetched catalog in its SQLite database
     ``$XDG_DATA_HOME/opencode/opencode.db`` (default
     ``~/.local/share/opencode/opencode.db``), table ``kv``, key
-    ``models-dev:catalog``; the value is a JSON envelope whose ``body`` is
-    the provider map as a JSON string.
+    ``models-dev:v2:catalog`` (the V2 layout since OpenCode 2.2); the value
+    is a JSON envelope whose ``body`` is the provider map as a JSON string.
 
     Read-only for model-switch: we derive catalog-aligned fields from it but
     never write it and never fetch the catalog over the network.

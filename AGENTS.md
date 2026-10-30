@@ -66,8 +66,10 @@ tmp、用 tmp 路径替换 registry 里的 driver 单例、teardown 时用 mtime
 - OpenCode 侧按 **V2 原生形状**：MCP 写 `mcp.servers`、stdio 的环境变量键是
   `environment` 不是 `env`；V1 兼容路径已删除，不要加回去。
 - model-switch 的 opencode driver 从 OpenCode 的 sqlite catalog
-  （`$XDG_DATA_HOME/opencode/opencode.db`，表 `kv`、键 `models-dev:catalog`）派生模型
-  字段：**只读、不发网络请求**。
+  （`$XDG_DATA_HOME/opencode/opencode.db`，表 `kv`、键 `models-dev:v2:catalog`，OpenCode
+  2.2 起的 V2 结构：model 层 `api` 路由、`capabilities.reasoning`、MIME `modalities`）
+  派生模型字段：**只读、不发网络请求**；host 按 netloc 精确相等匹配，只取
+  `type == "chat"` 的条目。
 
 ## 跨会话记忆（索引）
 

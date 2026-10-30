@@ -1,13 +1,15 @@
 """Fixture writer for OpenCode's catalog cache (its SQLite database).
 
-Mirrors the real v2.0 shape: table ``kv``, row ``models-dev:catalog`` whose
+Mirrors the real v2.2 shape: table ``kv``, row ``models-dev:v2:catalog`` whose
 value is a JSON envelope carrying the provider map as a JSON string in
-``body``.
+``body``. Providers carry no ``api`` of their own — every model entry holds
+its own ``api`` route dict, ``capabilities.reasoning`` block and MIME-typed
+``modalities``.
 """
 import json
 import sqlite3
 
-CATALOG_KV_KEY = "models-dev:catalog"
+CATALOG_KV_KEY = "models-dev:v2:catalog"
 
 
 def write_catalog_db(path, providers, updated_ms=1790181352116):

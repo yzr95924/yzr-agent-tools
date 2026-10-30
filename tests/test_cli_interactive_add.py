@@ -28,12 +28,16 @@ def _add_with_input(extra_args, inputs):
     return runner(args, input="\n".join(inputs) + "\n")
 
 
-def _entry(name="GLM-5.3", context=1000000):
+def _entry(name="GLM-5.3",
+           base_url="https://api.z.ai/api/anthropic/v1"):
     return {
+        "type": "chat",
         "name": name,
-        "limit": {"context": context},
-        "reasoning_options": [{"type": "effort", "values": ["low", "high"]}],
-        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "limit": {"context": 1000000},
+        "capabilities": {"reasoning": {
+            "supported": True, "effort": ["low", "high"]}},
+        "modalities": {"input": ["text", "image/jpeg"], "output": ["text"]},
+        "api": {"messages": {"base_url": base_url}},
     }
 
 
@@ -47,12 +51,11 @@ def catalog(yzr_paths):
     """
     _write_catalog(yzr_paths["catalog"], {
         "zai": {"id": "zai", "name": "Z.AI",
-                "api": "https://api.z.ai/api/paas/v4",
                 "models": {"glm-5.3": _entry("GLM-5.3"),
                            "glm-4.7": _entry("GLM-4.7")}},
         "decoy": {"id": "decoy", "name": "Decoy Inc",
-                  "api": "https://decoy.example/v1",
-                  "models": {"glm-5.3": _entry("GLM-5.3")}},
+                  "models": {"glm-5.3": _entry("GLM-5.3",
+                                               base_url="https://decoy.example/v1")}},
     })
     return yzr_paths
 
@@ -222,13 +225,14 @@ def test_wizard_derives_display_name(yzr_paths):
     """The catalog's display name is written to models.toml and shown in the
     summary — the summary reads from the entry, so the two cannot drift."""
     _write_catalog(yzr_paths["catalog"], {
-        "zai": {"id": "zai", "name": "Z.AI",
-                "api": "https://api.z.ai/api/paas/v4",
-                "models": {"glm-5.3": {
-                    "name": "GLM-5.3",
-                    "limit": {"context": 1000000},
-                    "reasoning_options": [{"type": "effort", "values": ["low"]}],
-                }}},
+        "zai": {"id": "zai", "name": "Z.AI", "models": {"glm-5.3": {
+            "type": "chat",
+            "name": "GLM-5.3",
+            "limit": {"context": 1000000},
+            "capabilities": {"reasoning": {"supported": True,
+                                           "effort": ["low"]}},
+            "api": {"messages": {"base_url": "https://api.z.ai/api/anthropic/v1"}},
+        }}},
     })
 
     result = runner(["model", "add"], input="\n".join([
@@ -251,12 +255,12 @@ def test_wizard_omits_display_name_equal_to_the_upstream_id(yzr_paths):
     """A catalog name that just repeats the id must not be copied into
     models.toml — the picker label falls back to the key by itself."""
     _write_catalog(yzr_paths["catalog"], {
-        "zai": {"id": "zai", "name": "Z.AI",
-                "api": "https://api.z.ai/api/paas/v4",
-                "models": {"glm-5.3": {
-                    "name": "glm-5.3",
-                    "limit": {"context": 1000000},
-                }}},
+        "zai": {"id": "zai", "name": "Z.AI", "models": {"glm-5.3": {
+            "type": "chat",
+            "name": "glm-5.3",
+            "limit": {"context": 1000000},
+            "api": {"messages": {"base_url": "https://api.z.ai/api/anthropic/v1"}},
+        }}},
     })
 
     result = runner(["model", "add"], input="\n".join([
@@ -776,20 +780,24 @@ def test_wizard_unknown_host_can_still_search_every_provider(catalog):
     assert m.name == "glm-5.3"
 
 
-def test_wizard_refuses_a_base_url_without_a_host(catalog):
-    """A schemeless base URL has no host to scope by, and `catalog.search`
-    reads "" as 'no filter' — offering the whole catalog as if it were the
-    user's upstream, with nothing tagged foreign. Refuse the picker instead."""
+def test_wizard_scopes_a_bare_host_base_url(catalog):
+    """A scheme-less base URL still has a usable host (models.dev declares
+    some of its own base_urls that way too), so the picker scopes to it and
+    the decoy on another host stays out of the menu. The URL is stored
+    verbatim — fixing the scheme stays the user's job."""
     result = runner(["model", "add", "demo"], input="\n".join([
-        "dashscope.aliyuncs.com/apps/anthropic", "K",  # no scheme
-        "m",                                          # model id, typed by hand
-        "", "", "y",
+        "api.z.ai/api/anthropic",  # no scheme, but the host is clear
+        "K",
+        "glm", "1",                # → zai/glm-4.7
+        "", "", "",                # upstream id, context window, description
+        "y",
     ]) + "\n")
     assert result.exit_code == 0, result.stdout
-    assert "has no host" in result.stdout
-    assert "Search models" not in result.stdout
+    assert "decoy" not in result.stdout
+    assert "Search models" in result.stdout
     m = load_models(catalog["models"]).models["demo"]
-    assert m.base_url == "dashscope.aliyuncs.com/apps/anthropic"
-    assert m.name == "m"
+    assert m.base_url == "api.z.ai/api/anthropic"
+    assert m.name == "glm-4.7"
+    assert m.context_window == 1000000
 
 
