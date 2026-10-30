@@ -1,498 +1,82 @@
-"""Unit tests for catalog-derivation from OpenCode's models.dev cache.
-
-Pure functions with injected data — no file I/O except `load_cache`, no
-network anywhere (asserted). The mapping rules decide what model-switch
-writes into models.toml, so each rule gets an explicit case.
-
-Fixtures mirror the V2 snapshot layout OpenCode >= 2.2 stores: model entries
-carry their own ``api`` routes, a ``capabilities.reasoning`` block and
-MIME-typed ``modalities``.
-"""
-import json
-import socket
-import sqlite3
-from datetime import datetime
-
-import pytest
-
-from _catalog_db import CATALOG_KV_KEY, write_catalog_db
+"""Tests for catalog lookup of canonical Chat Completions providers."""
 from model_switch import catalog
+from _catalog_db import write_catalog_db
 
 
-def _route(base_url):
-    """One ``api`` family entry."""
-    return {"base_url": base_url}
+def _route(base_url, package):
+    return {"base_url": base_url, "sdk": {"opencodeai": package}}
 
 
-def _entry(reasoning=None, limit=None, modalities=None,
-           api=None, type=None):
-    entry = {}
-    if type is not None:
-        entry["type"] = type
-    if reasoning is not None:
-        entry["capabilities"] = {"reasoning": reasoning}
-    if limit is not None:
-        entry["limit"] = limit
-    if modalities is not None:
-        entry["modalities"] = modalities
-    if api is not None:
-        entry["api"] = api
-    return entry
+def _entry(api):
+    return {"type": "chat", "api": api}
 
 
-def _full_reasoning():
-    return {"supported": True, "toggle": True,
-            "effort": ["low", "medium", "xhigh"],
-            "budget": {"min": 0, "max": 262144}}
+def test_default_route_uses_the_first_packaged_api():
+    entry = _entry({
+        "messages": {"base_url": "https://ours.example/anthropic"},
+        "chat-completions": _route(
+            "https://ours.example/v1", "@opencode/ai/p/chat"),
+    })
+    assert catalog.default_route(entry) == (
+        "chat-completions", "https://ours.example/v1")
 
 
-def _cache(providers):
-    return {p: {"id": p, "name": p, "models": models}
-            for p, models in providers.items()}
+def test_model_candidates_only_accept_chat_completions_default_routes():
+    data = {
+        "ours": {"models": {"m": _entry({
+            "chat-completions": _route("https://ours.example/v1", "@p/a"),
+        })}},
+        "messages-first": {"models": {"m": _entry({
+            "messages": _route("https://ours.example/anthropic", "@p/m"),
+            "chat-completions": _route("https://ours.example/v1", "@p/a"),
+        })}},
+    }
+    assert [c.provider for c in catalog.model_candidates(data, "m")] == [
+        "ours"]
 
 
-# --- host_of -------------------------------------------------------------------
-
-def test_host_of_strips_scheme_and_path():
-    assert catalog.host_of("https://api.z.ai/api/anthropic") == "api.z.ai"
-    assert catalog.host_of("HTTPS://API.Z.AI/x") == "api.z.ai"
-    assert catalog.host_of("") == ""
-    assert catalog.host_of(None) == ""
-
-
-def test_host_of_parses_bare_hosts_without_a_scheme():
-    """models.dev declares some base_urls as bare hosts; urlsplit would treat
-    those as paths, so they are re-parsed as protocol-relative."""
-    assert catalog.host_of("api.moonshot.ai") == "api.moonshot.ai"
-    assert catalog.host_of("api.moonshot.ai/v1") == "api.moonshot.ai"
-
-
-# --- load_cache ----------------------------------------------------------------
-
-def _kv_db(path, value):
-    """A kv table with one raw (possibly bogus) snapshot value."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(path))
-    con.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)")
-    con.execute("INSERT INTO kv (key, value) VALUES (?, ?)", (CATALOG_KV_KEY, value))
-    con.commit()
-    con.close()
-    return path
+def test_pick_requires_a_pin_when_candidates_are_ambiguous():
+    data = {
+        "a": {"models": {"m": _entry({
+            "chat-completions": _route("https://a.example/v1", "@p/a"),
+        })}},
+        "b": {"models": {"m": _entry({
+            "chat-completions": _route("https://b.example/v1", "@p/b"),
+        })}},
+    }
+    cands = catalog.model_candidates(data, "m")
+    picked = catalog.pick(cands)
+    assert picked.candidate is None
+    assert "ambiguous" in picked.reason
+    assert catalog.pick(cands, pin="b").candidate.provider == "b"
 
 
-def test_load_cache_missing_db_reports_reason(tmp_path):
-    data, desc = catalog.load_cache(tmp_path / "nope.db")
-    assert data is None
-    assert "no catalog cache" in desc
+def test_lookup_resolves_a_canonical_provider_and_model():
+    data = {
+        "zai-coding-plan": {"models": {"glm-5.3": _entry({
+            "chat-completions": _route(
+                "https://api.z.ai/api/coding/paas/v4", "@p/zai"),
+        })}},
+    }
+    candidate = catalog.lookup(data, "zai-coding-plan", "glm-5.3")
+    assert candidate.provider == "zai-coding-plan"
+    assert candidate.base_url == "https://api.z.ai/api/coding/paas/v4"
+    assert catalog.lookup(data, "zai-coding-plan", "missing") is None
 
 
-def test_load_cache_db_without_snapshot_row_reports_reason(tmp_path):
-    p = tmp_path / "opencode.db"
-    con = sqlite3.connect(str(p))
-    con.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)")
-    con.commit()
-    con.close()
-    data, desc = catalog.load_cache(p)
-    assert data is None
-    assert "no catalog cache" in desc
-
-
-def test_load_cache_not_a_sqlite_db_reports_reason(tmp_path):
-    p = tmp_path / "opencode.db"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(b"definitely not a database")
-    data, desc = catalog.load_cache(p)
-    assert data is None
-    assert "unreadable" in desc
-
-
-def test_load_cache_broken_envelope_reports_reason(tmp_path):
-    p = _kv_db(tmp_path / "opencode.db", "{ not json")
-    data, desc = catalog.load_cache(p)
-    assert data is None
-    assert "unreadable" in desc
-
-
-def test_load_cache_broken_body_reports_reason(tmp_path):
-    p = _kv_db(tmp_path / "opencode.db", json.dumps({"body": "{ nope"}))
-    data, desc = catalog.load_cache(p)
-    assert data is None
-    assert "unreadable" in desc
-
-
-def test_load_cache_returns_data_and_updated_description(tmp_path):
-    providers = {"a": {"models": {}}}
-    # A stamp from the envelope's epoch-ms `updatedAt` (2001-09-09), clearly
-    # distinct from the db file's fresh mtime.
-    p = write_catalog_db(tmp_path / "opencode.db", providers, updated_ms=1000000000000)
-    data, desc = catalog.load_cache(p)
+def test_load_cache_reads_opencode_snapshot(tmp_path):
+    providers = {
+        "ours": {"models": {"m": _entry({
+            "chat-completions": _route("https://ours.example/v1", "@p/a"),
+        })}},
+    }
+    db = write_catalog_db(tmp_path / "opencode.db", providers)
+    data, desc = catalog.load_cache(db)
     assert data == providers
-    assert str(p) in desc
-    assert datetime.fromtimestamp(1000000000).strftime("%Y-%m-%d %H:%M") in desc
+    assert "updated" in desc
 
 
-# --- candidates / pick ---------------------------------------------------------
-
-def test_candidates_marks_host_match_and_sorts():
-    data = _cache({
-        "zzz-other": {"m": _entry(api={"messages": _route("https://other.example.com/v1")})},
-        "aaa-ours": {"m": _entry(api={"messages": _route("https://ours.example.com/v1")})},
-        "no-model": {},
-    })
-    cands = catalog.candidates(data, "m", "https://ours.example.com/anthropic")
-    assert [c.provider for c in cands] == ["aaa-ours", "zzz-other"]
-    assert [c.host_match for c in cands] == [True, False]
-
-
-def test_candidates_host_match_requires_equality_not_substring():
-    """Per-model hosts made a substring rule match sibling products
-    (coding.dashscope… vs dashscope…); equality keeps them apart."""
-    data = _cache({
-        "coding-plan": {"m": _entry(api={"messages": _route("https://coding.dashscope.example/v1")})},
-        "plain": {"m": _entry(api={"messages": _route("https://dashscope.example/v1")})},
-    })
-    cands = catalog.candidates(data, "m", "https://dashscope.example/anthropic")
-    assert [(c.provider, c.host_match) for c in cands] == [
-        ("coding-plan", False), ("plain", True)]
-
-
-def test_candidates_match_any_api_family_host():
-    """The vendor is identified by the host, whichever route declares it."""
-    data = _cache({
-        "ours": {"m": _entry(api={"chat-completions": _route("https://ours.example.com/v1")})},
-    })
-    cands = catalog.candidates(data, "m", "https://ours.example.com/x")
-    assert cands[0].host_match is True
-    # The pin-hint api prefers the Anthropic-compatible route when present.
-    assert cands[0].api == "https://ours.example.com/v1"
-
-
-def test_candidates_match_bare_host_base_urls():
-    data = _cache({
-        "moonshot": {"m": _entry(api={"messages": _route("api.moonshot.example")})},
-    })
-    cands = catalog.candidates(data, "m", "https://api.moonshot.example/v1")
-    assert cands[0].host_match is True
-
-
-def test_candidates_ignore_non_chat_entries():
-    """The V2 snapshot also carries image/decision models; only chat models
-    can serve sessions, so they never become candidates."""
-    data = _cache({
-        "img": {"m": _entry(type="image",
-                            api={"images": _route("https://ours.example.com/v1")})},
-        "chat": {"m": _entry(api={"messages": _route("https://ours.example.com/v1")})},
-    })
-    assert [c.provider for c in catalog.candidates(data, "m", "https://ours.example.com")] \
-        == ["chat"]
-
-
-def test_pick_single_host_match_wins_over_non_matching():
-    data = _cache({
-        "aaa-trap": {"m": _entry(api={"messages": _route("https://other.example.com/v1")})},
-        "zzz-ours": {"m": _entry(api={"messages": _route("https://ours.example.com/v1")})},
-    })
-    picked = catalog.pick(catalog.candidates(data, "m", "https://ours.example.com"))
-    assert picked.candidate.provider == "zzz-ours"
-    assert "host match" in picked.reason
-
-
-def test_pick_accepts_identical_host_matches_deterministically():
-    entry = _entry(reasoning=_full_reasoning(),
-                  api={"messages": _route("https://z.example.com/v1")})
-    other = _entry(reasoning=_full_reasoning(),
-                   api={"messages": _route("https://z.example.com/v2")})
-    data = _cache({"b-plan": {"m": entry}, "a-plan": {"m": other}})
-    picked = catalog.pick(catalog.candidates(data, "m", "https://z.example.com"))
-    assert picked.candidate.provider == "a-plan"  # alphabetical, stable
-    assert [c.provider for c in picked.alternatives] == ["b-plan"]
-    assert "agree" in picked.reason
-
-
-def test_pick_refuses_conflicting_host_matches():
-    data = _cache({
-        "a": {"m": _entry(reasoning={"supported": True, "effort": ["low"]},
-                          api={"messages": _route("https://z.example.com/v1")})},
-        "b": {"m": _entry(reasoning={"supported": True, "effort": ["high"]},
-                          api={"messages": _route("https://z.example.com/v2")})},
-    })
-    picked = catalog.pick(catalog.candidates(data, "m", "https://z.example.com"))
-    assert picked.candidate is None
-    assert "conflicting" in picked.reason
-    assert len(picked.alternatives) == 2
-
-
-@pytest.mark.parametrize("data, base_url, pin, reason_substr, alternatives", [
-    pytest.param(
-        _cache({"a": {"m": _entry(api={"messages": _route("https://other.example.com/v1")})}}),
-        "https://ours.example.com", None, "no candidate api host", ["a"],
-        id="no-host-match"),
-    pytest.param(
-        _cache({"a": {"m": _entry(api={"messages": _route("https://z.example.com/v1")})}}),
-        "https://z.example.com", "nope", "nope", ["a"],
-        id="unknown-pin"),
-    pytest.param({}, "https://ours.example.com", None, "no entry", [],
-                 id="no-candidates"),
-])
-def test_pick_refusals(data, base_url, pin, reason_substr, alternatives):
-    kwargs = {"pin": pin} if pin is not None else {}
-    picked = catalog.pick(catalog.candidates(data, "m", base_url), **kwargs)
-    assert picked.candidate is None
-    assert reason_substr in picked.reason
-    assert [c.provider for c in picked.alternatives] == alternatives
-
-
-def test_pick_pin_wins_even_with_conflicts():
-    data = _cache({
-        "a": {"m": _entry(reasoning={"supported": True, "effort": ["low"]},
-                          api={"messages": _route("https://z.example.com/v1")})},
-        "b": {"m": _entry(reasoning={"supported": True, "effort": ["high"]},
-                          api={"messages": _route("https://z.example.com/v2")})},
-    })
-    picked = catalog.pick(catalog.candidates(data, "m", "https://z.example.com"),
-                          pin="b")
-    assert picked.candidate.provider == "b"
-    assert "pinned" in picked.reason
-
-
-# --- derive --------------------------------------------------------------------
-
-def test_derive_effort_tiers_ignore_toggle():
-    """OpenCode's own derivation emits effort tiers only, dropping the
-    toggle, so we drop it too — a declared toggle must not add a tier."""
-    fields = catalog.derive(_entry(
-        reasoning=_full_reasoning(),
-        limit={"context": 1000000, "output": 131072},
-        modalities={"input": ["text", "image/jpeg", "video/mp4", "application/pdf"],
-                    "output": ["text"]},
-    ))
-    assert fields["context_window"] == 1000000
-    assert fields["variants"] == {
-        "low": {"effort": "low", "thinking": {"type": "adaptive"}},
-        "medium": {"effort": "medium", "thinking": {"type": "adaptive"}},
-        "xhigh": {"effort": "xhigh", "thinking": {"type": "adaptive"}},
-    }
-    # MIME types collapse to the coarse forms; video is dropped: the
-    # Anthropic wire format has no such part.
-    assert fields["modalities"] == {"input": ["text", "image", "pdf"],
-                                    "output": ["text"]}
-
-
-def test_derive_effort_only_lists_effort_tiers():
-    fields = catalog.derive(_entry(
-        reasoning={"supported": True, "effort": ["low", "high", "max"]}))
-    assert list(fields["variants"]) == ["low", "high", "max"]
-
-
-def test_derive_none_effort_becomes_thinking_off():
-    """`none` has no Anthropic effort slot, so it is translated to the shape
-    every gateway calls thinking-off — and keeps its name."""
-    fields = catalog.derive(_entry(
-        reasoning={"supported": True, "effort": ["none", "minimal", "low"]}))
-    assert fields["variants"] == {
-        "none": {"thinking": {"type": "disabled"}},
-        "low": {"effort": "low", "thinking": {"type": "adaptive"}},
-    }
-
-
-def test_derive_skips_minimal_effort_value():
-    fields = catalog.derive(_entry(
-        reasoning={"supported": True, "effort": ["minimal", "low"]}))
-    assert list(fields["variants"]) == ["low"]
-
-
-def test_derive_toggle_only_gets_no_tiers():
-    entry = _entry(reasoning={"supported": True, "toggle": True})
-    fields = catalog.derive(entry)
-    assert fields["variants"] == {}
-    assert catalog.no_tiers_declared(entry) is True
-
-
-def test_derive_budget_only_gets_no_tiers():
-    entry = _entry(reasoning={"supported": True,
-                             "budget": {"min": 0, "max": 32768}})
-    fields = catalog.derive(entry)
-    assert fields["variants"] == {}
-    assert catalog.no_tiers_declared(entry) is True
-
-
-def test_derive_supported_only_gets_no_tiers():
-    """Reasoning support without knobs declares no tiers to mirror."""
-    entry = _entry(reasoning={"supported": True})
-    assert catalog.derive(entry)["variants"] == {}
-    assert catalog.no_tiers_declared(entry) is True
-
-
-def test_derive_all_skippable_efforts_yield_no_tiers():
-    entry = _entry(reasoning={"supported": True, "effort": ["minimal"]})
-    assert catalog.derive(entry)["variants"] == {}
-    assert catalog.no_tiers_declared(entry) is True
-
-
-def test_derive_without_reasoning_gets_no_tiers():
-    fields = catalog.derive(_entry(limit={"context": 8192}))
-    assert fields["variants"] == {}
-    assert catalog.no_tiers_declared({}) is False
-
-
-def test_no_tiers_declared_false_when_reasoning_unsupported():
-    """An explicit `supported: false` declares the absence of reasoning, not
-    options that failed to yield tiers."""
-    assert catalog.no_tiers_declared(
-        _entry(reasoning={"supported": False})) is False
-
-
-def test_no_tiers_declared_false_when_a_tier_derives():
-    assert catalog.no_tiers_declared(
-        _entry(reasoning={"supported": True, "effort": ["minimal", "low"]})) is False
-
-
-def test_derive_text_only_modalities_stay_undeclared():
-    fields = catalog.derive(_entry(modalities={"input": ["text"], "output": ["text"]}))
-    assert fields["modalities"] is None
-
-
-def test_derive_collapses_duplicate_mimes_to_one_coarse_modality():
-    fields = catalog.derive(_entry(modalities={
-        "input": ["text", "image/png", "image/jpeg", "image/gif"],
-        "output": ["text"]}))
-    assert fields["modalities"] == {"input": ["text", "image"], "output": ["text"]}
-
-
-def test_derive_missing_or_invalid_context_is_none():
-    assert catalog.derive(_entry())["context_window"] is None
-    assert catalog.derive(_entry(limit={"context": 0}))["context_window"] is None
-
-
-def test_derive_display_name_from_entry_name():
-    entry = _entry()
-    entry["name"] = "  Kimi K3  "
-    assert catalog.derive(entry)["display_name"] == "Kimi K3"
-    entry["name"] = "   "
-    assert catalog.derive(entry)["display_name"] is None
-    assert catalog.derive(_entry())["display_name"] is None
-    assert catalog.derive(_entry(limit={"output": 100}))["context_window"] is None
-
-
-def test_derive_modalities_without_text_input_is_none():
-    fields = catalog.derive(_entry(modalities={"input": ["video/mp4"],
-                                               "output": ["text"]}))
-    assert fields["modalities"] is None
-
-
-def test_derive_drops_output_modalities_the_anthropic_path_cannot_produce():
-    """Entries describe OpenAI-compatible endpoints too, where a TTS model
-    may declare audio output — this path only ever returns text."""
-    fields = catalog.derive(_entry(
-        modalities={"input": ["text", "image/png"], "output": ["audio/wav"]}))
-    assert fields["modalities"] == {"input": ["text", "image"], "output": ["text"]}
-
-
-# --- search --------------------------------------------------------------------
-
-def _search_cache():
-    zai = "https://api.z.ai/api/anthropic/v1"
-    kimi = "https://api.kimi.com/coding/v1"
-    decoy = "https://decoy.example/v1"
-    return {
-        "zai": {
-            "id": "zai", "name": "Z.AI",
-            "models": {
-                "glm-5.3": _entry(limit={"context": 1000000},
-                                  api={"messages": _route(zai)}),
-                "glm-4.7": _entry(api={"messages": _route(zai)}),
-                "text-only": _entry(api={"messages": _route(zai)}),
-            },
-        },
-        "kimi-for-coding": {
-            "id": "kimi-for-coding", "name": "Kimi For Coding",
-            "models": {"k3": _entry(api={"messages": _route(kimi)})},
-        },
-        "decoy": {
-            "id": "decoy", "name": "Decoy",
-            "models": {"glm-5.3": _entry(api={"messages": _route(decoy)})},
-        },
-    }
-
-
-def test_search_returns_everything_sorted_without_query():
-    data = _search_cache()
-    rows = catalog.search(data)
-    assert [(r.provider, r.model) for r in rows] == [
-        ("decoy", "glm-5.3"),
-        ("kimi-for-coding", "k3"),
-        ("zai", "glm-4.7"),
-        ("zai", "glm-5.3"),
-        ("zai", "text-only"),
-    ]
-    assert rows[0].entry is data["decoy"]["models"]["glm-5.3"]
-
-
-def test_search_excludes_non_chat_models():
-    data = _search_cache()
-    data["zai"]["models"]["wan-image"] = _entry(
-        type="image", api={"images": _route("https://api.z.ai/api/v1")})
-    assert "wan-image" not in [r.model for r in catalog.search(data)]
-    assert "wan-image" not in [r.model for r in catalog.search(data, "", host="api.z.ai")]
-
-
-def test_search_matches_model_id_case_insensitively():
-    rows = catalog.search(_search_cache(), "GLM")
-    assert [(r.provider, r.model) for r in rows] == [
-        ("decoy", "glm-5.3"), ("zai", "glm-4.7"), ("zai", "glm-5.3")]
-
-
-def test_search_matches_provider_id_and_display_name():
-    assert [r.model for r in catalog.search(_search_cache(), "kimi")] == ["k3"]
-    assert [r.model for r in catalog.search(_search_cache(), "z.a")] == [
-        "glm-4.7", "glm-5.3", "text-only"]
-
-
-def test_search_requires_all_tokens():
-    """Multi-token queries narrow instead of OR-ing the tokens."""
-    assert [r.model for r in catalog.search(_search_cache(), "zai glm-5")] == [
-        "glm-5.3"]
-    assert catalog.search(_search_cache(), "zai k3") == []
-
-
-def test_search_host_filter_keeps_only_that_upstream():
-    rows = catalog.search(_search_cache(), "", host="api.z.ai")
-    assert [(r.provider, r.model) for r in rows] == [
-        ("zai", "glm-4.7"), ("zai", "glm-5.3"), ("zai", "text-only")]
-    assert catalog.search(_search_cache(), "", host="nowhere.example") == []
-
-
-def test_search_host_filter_uses_equality_not_substring():
-    assert catalog.search(_search_cache(), "", host="api.z.ai.co") == []
-
-
-def test_search_matches_model_display_name():
-    data = _search_cache()
-    data["zai"]["models"]["glm-4.7"]["name"] = "Legacy Falcon"
-    assert [r.model for r in catalog.search(data, "falcon")] == ["glm-4.7"]
-
-
-def test_search_tolerates_malformed_provider_shapes():
-    rows = catalog.search({"broken": None, "nouser": {"name": "x"}})
-    assert rows == []
-
-
-# --- no network, ever ----------------------------------------------------------
-
-def test_catalog_never_opens_a_socket(tmp_path, monkeypatch):
-    cache = write_catalog_db(tmp_path / "opencode.db", _cache({
-        "ours": {"m": _entry(
-            reasoning=_full_reasoning(),
-            limit={"context": 1000},
-            modalities={"input": ["text", "image/png"], "output": ["text"]},
-            api={"messages": _route("https://ours.example.com/v1")},
-        )},
-    }))
-
-    def _boom(*_a, **_k):
-        raise AssertionError("catalog code must never touch the network")
-
-    monkeypatch.setattr(socket, "socket", _boom)
-    data, _desc = catalog.load_cache(cache)
-    picked = catalog.pick(catalog.candidates(data, "m", "https://ours.example.com"))
-    assert catalog.derive(picked.candidate.entry)["context_window"] == 1000
+def test_load_cache_reports_missing_database(tmp_path):
+    data, desc = catalog.load_cache(tmp_path / "missing.db")
+    assert data is None
+    assert "no catalog cache" in desc

@@ -2,7 +2,7 @@
 
 Claude Code stores user-scope MCP servers under the top-level ``mcpServers``
 key of ~/.claude.json — NOT ~/.claude/settings.json (that file holds
-env/model/theme and is owned by model-switch). ~/.claude.json also holds
+env/model/theme, which this tool preserves). ~/.claude.json also holds
 onboarding flags, project history, telemetry counters, etc.; we touch only
 ``mcpServers`` and preserve every other key, so the running session is never
 disturbed.

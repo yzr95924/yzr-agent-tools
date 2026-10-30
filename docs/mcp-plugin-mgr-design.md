@@ -4,10 +4,10 @@
 
 ## 1. 定位
 
-`mcp-plugin-mgr` 是 `yzr-agent-tools` 的第三个工具，与 `model-switch` 同构：**一个统一概念
-（MCP 服务），多个 agent(Claude Code / OpenCode)，每个 agent 一个 driver 负责把规范定义翻译成
-该 agent 的字段、位置与词表**。model-switch 管的是「模型」，本工具管的是「MCP 服务」，起点是
-Outline wiki。
+`mcp-plugin-mgr` 是 `yzr-agent-tools` 的第三个工具：**一个统一概念（MCP 服务），多个
+agent(Claude Code / OpenCode)，每个 agent 一个 driver 负责把规范定义翻译成该 agent 的字段、
+位置与词表**。model-switch 现在只服务 OpenCode 的模型切换，本工具管的是三个 agent 的
+「MCP 服务」，起点是 Outline wiki。
 
 要解决的具体不一致：
 
@@ -64,8 +64,8 @@ OpenCode / Qoder CLI 均用 `disabled`(Qoder CLI 1.1.21 实测对齐 `qodercli m
 `BaseMcpDriver` 实现通用的 read/list/has/add/remove/set_enabled（只动 `self._KEY` 那段——
 server map 嵌一层的用 `_SUBKEY` 声明，如 OpenCode 的 `mcp.servers`——保留其它键）；子类只
 设 `name` / `_KEY`(可选 `_SUBKEY`)/ 默认 `config_path`，并实现 `render(entry)`(有原生启停
-flag 的再加 `native_disable = True` + `_flag_mutation` + `flag_state`)。与 model-switch 不同：model-switch
-的 `apply()` 每个 driver 差异大，所以各自独立；这里的增删查与启停控制流对三个 agent 完全一致，
+flag 的再加 `native_disable = True` + `_flag_mutation` + `flag_state`)。与 model-switch 的渲染层
+不同：model-switch 只面向 OpenCode；这里的增删查与启停控制流对三个 agent 完全一致，
 故抽出共享基类，只在词表(render / flag)上分叉。
 
 ## 3. 数据模型
@@ -89,7 +89,7 @@ description = "..."
 ```
 
 未知顶层键 → `ServerRegistry.extra_top`；未知每服务键 → `ServerEntry.extra`；落盘原样回写
-（与 model-switch/store.py 同纪律）。`transport` / http 的 `url` / stdio 的 `command` 在 load 与
+（与 model-switch 的 JSON 注册表同纪律）。`transport` / http 的 `url` / stdio 的 `command` 在 load 与
 显式 `validate()` 时强校验。
 
 **preset**:`presets/` 包，每 plugin 一个文件(`outline.py` / `memos.py` / `agent_html_drop.py`),`__init__` 聚合成 `PRESETS`(按 `preset.name`
@@ -101,7 +101,7 @@ description = "..."
 
 ## 4. 选 agent 的 UX
 
-完全复用 model-switch `model use` 的 `_resolve_drivers`:`--all-drivers` → 全部；`--driver NAME`
+本工具自持一套选择逻辑：`--all-drivers` → 全部；`--driver NAME`
 → 单个；有 TTY 省略 → 交互（回车=全部）；无 TTY 省略 → 默认 `claude-code`（避免脚本意外改多 agent）。
 
 ## 5. 测试隔离（关键）
@@ -131,7 +131,7 @@ description = "..."
     registry 还原，这点在警告里明说。
   - 不做 per-project 停用（`--scope project` 之类）与 `sync` 全量重投影；`add` 语义固定为
     「显式启用」（`--force` 覆盖时 `enabled` 复位 true）。
-- **明文 token**：同 model-switch 本地信任模型；注意 `servers.toml` 与 agent 配置文件权限。
+- **明文 token**：本地信任模型与 model-switch 一致；注意 `servers.toml` 与 agent 配置文件权限。
 - **install/uninstall**:`TOOLS` 数组各加一行；wrapper / 补全 symlink 逻辑通用，无需改。
 
 ## 7. 探活(`test` / `probe.py`)
@@ -161,7 +161,8 @@ Claude Code auto-mode classifier 对「已批准 + 新内容改写」保守，ou
 `~/.claude/settings.json#permissions.allow`，分类器即跳过二次判断。`remove <name> --auto-allow` 反向清理。
 
 - 条目来源：preset 自带 `allow_tools`（outline 实测的 15 个；agent-html-drop 6 个，含写大 HTML 的 `upload_html`）→ 否则回退 server 级通配 `mcp__<name>`。
-- 写入用 `allow.py`:`add_allowed_tools` / `remove_allowed_tools`,**只动 `permissions` 键**，保留 `env`/`model`/`theme`
-  （model-switch 的键）——同 opencode.json 那样按 key 分权共享 `settings.json`。原子写 + 合并去重。
-- 与 model-switch 共享 `~/.claude/settings.json`：两者各管不同键、保留其余，顺序执行不丢字段（单用户 CLI 无并发）。
+- 写入用 `allow.py`:`add_allowed_tools` / `remove_allowed_tools`,**只动 `permissions` 键**，保留
+  `env`/`model`/`theme` 等其余键——同 opencode.json 那样按 key 分权共享 `settings.json`。原子写 + 合并去重。
+- `~/.claude/settings.json` 可能同时承载 Claude Code 自身与用户手写的键；本工具只改
+  `permissions.allow`，保留其余，顺序执行不丢字段（单用户 CLI 无并发）。
 - opt-in（默认关）；`--no-apply` 时跳过（不碰 registry 以外的任何东西）。Claude Code 权限层专属，OpenCode 无此机制。

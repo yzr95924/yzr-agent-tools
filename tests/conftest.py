@@ -10,8 +10,7 @@ would wedge the current Claude Code session. So:
   1. Every test runs with HOME pointed at a tmp dir.
   2. model-switch's path functions are redirected to tmp.
   3. mcp-plugin-mgr's path functions are redirected to tmp.
-  4. The claude-code driver singleton in the registry is replaced with
-     one that points at a tmp settings file.
+  4. mcp-plugin-mgr's driver singletons are replaced with tmp-path ones.
   5. Before the test exits, the real `~/.claude/settings.json` (and
      any other tracked real configs) is verified to be untouched
      (mtime + content hash match pre-test snapshot).
@@ -28,9 +27,6 @@ from pathlib import Path
 import pytest
 
 from model_switch import paths
-from model_switch.drivers.base import registry
-from model_switch.drivers.claude_code import ClaudeCodeDriver
-from model_switch.drivers.opencode import OpenCodeDriver
 
 
 # Real paths we MUST NOT touch during tests. Tracked for integrity checks.
@@ -101,25 +97,14 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     cfg_dir = tmp_path / "model-switch-cfg"
     cfg_dir.mkdir()
     models_p = cfg_dir / "models.toml"
-    state_p = cfg_dir / "state.toml"
     settings_p = tmp_path / ".claude" / "settings.json"
     opencode_p = tmp_path / ".config" / "opencode" / "opencode.json"
     catalog_p = tmp_path / ".local" / "share" / "opencode" / "opencode.db"
 
     monkeypatch.setattr(paths, "config_dir", lambda: cfg_dir)
     monkeypatch.setattr(paths, "models_file", lambda: models_p)
-    monkeypatch.setattr(paths, "state_file", lambda: state_p)
     monkeypatch.setattr(paths, "opencode_config_file", lambda: opencode_p)
     monkeypatch.setattr(paths, "catalog_db_file", lambda: catalog_p)
-
-    # Replace any pre-existing claude-code driver in the registry with
-    # one pointing at the tmp settings path. (Earlier auto-registration
-    # would have created one pointed at the real ~/.claude/settings.json.)
-    registry._drivers["claude-code"] = ClaudeCodeDriver(settings_path=settings_p)
-    # Same for opencode: its default path now resolves to the real
-    # ~/.config/opencode/opencode.json, so lazy registration MUST be
-    # pre-empted with a tmp-path driver.
-    registry._drivers["opencode"] = OpenCodeDriver(settings_path=opencode_p)
 
     # Redirect mcp-plugin-mgr's own paths into tmp. Import lazily so this
     # conftest doesn't pull in mcp_plugin_mgr when only other tools are
@@ -152,18 +137,6 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     mcp_registry._drivers["opencode"] = OpenCodeMcpDriver(config_path=opencode_p)
     mcp_registry._drivers["qodercli"] = QoderCliMcpDriver(config_path=qoder_settings_p)
 
-    paths_dict = {
-        "config_dir": cfg_dir,
-        "models": models_p,
-        "state": state_p,
-        "settings": settings_p,
-        "opencode": opencode_p,
-        "mcp_cfg_dir": mcp_cfg_dir,
-        "mcp_servers": mcp_servers_p,
-        "claude_json": claude_json_p,
-        "qoder_settings": qoder_settings_p,
-    }
-
     # Redirect yzr-agent-style's three target instruction files into tmp.
     # Import lazily so this conftest doesn't pull in yzr_agent_style when only
     # other tools are exercised.
@@ -194,7 +167,6 @@ def _isolate_yzr_state(tmp_path: Path, monkeypatch, request):
     paths_dict = {
         "config_dir": cfg_dir,
         "models": models_p,
-        "state": state_p,
         "settings": settings_p,
         "opencode": opencode_p,
         "catalog": catalog_p,

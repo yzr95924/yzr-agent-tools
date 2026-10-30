@@ -1,70 +1,24 @@
 """argparse-based CLI for model-switch.
 
-Three jobs live here: the `model add` wizard (catalog picker, provider
-grouping, upstream-id confirmation), the write paths (`use` / `remove` /
-`import` / `align`, which keep models.toml and every agent config in step),
-and read-only reporting (`list` / `show` / `status`). Config knowledge lives
-in `store`, `catalog`, `variants` and the drivers — this module orchestrates
-and prompts.
-
-V1+ ships with `claude-code` (default) and `opencode` drivers, both
-registered lazily on first use.
+The registry (``models.toml``) maps ``yzr-*`` provider IDs onto built-in
+OpenCode providers through ``canonical_provider``. Every write mirrors it into
+``opencode.json``; model definitions themselves are inherited from OpenCode,
+never copied into the registry.
 
 Output goes to stdout; errors to stderr. Exit codes:
   0 = success
-  1 = user error (bad flag, missing model, missing api_key)
+  1 = user error (bad reference, missing credentials, unresolved catalog)
   2 = argparse error (unknown command / flag)
 """
 import argparse
-import datetime
+import json
 import sys
-from pathlib import Path
-from typing import Any, Callable, Dict, List, NoReturn, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from model_switch import catalog, paths, ui
-from model_switch.drivers.base import registry
-from model_switch.store import (
-    ModelEntry,
-    Registry,
-    State,
-    StoreError,
-    load_models,
-    load_state,
-    provider_group_key,
-    save_models,
-    save_state,
-    upstream_key,
-)
-from model_switch.variants import (
-    PRESET_REF_KEY,
-    VARIANTS_KEY,
-    VariantsError,
-    expand,
-    expand_model,
-)
+from model_switch import catalog, opencode, paths, store, ui
 
 
-def _ensure_default_registered() -> None:
-    """Register the built-in drivers lazily on first use.
-
-    Lazy registration avoids import-time side effects that would create a
-    driver pointed at the real ~/.claude/settings.json (a test-isolation
-    hazard). Tests that want a tmp-path driver should populate the
-    registry BEFORE the first CLI invocation.
-    """
-    from model_switch.drivers.claude_code import ClaudeCodeDriver
-    from model_switch.drivers.opencode import OpenCodeDriver
-
-    if ClaudeCodeDriver.name not in registry.list():
-        registry.register(ClaudeCodeDriver())
-    if OpenCodeDriver.name not in registry.list():
-        registry.register(OpenCodeDriver())
-
-
-def _die(message) -> NoReturn:
-    """The single failure path for user errors; ``message`` may be an
-    exception or a plain string. Delegates to `ui.fail`, so the CLI and the
-    ui module cannot drift into two ``Error:`` shapes."""
+def _die(message) -> None:
     ui.fail(message)
 
 
@@ -73,211 +27,32 @@ def _interactive(args: argparse.Namespace) -> bool:
     return sys.stdin.isatty() and not args.yes
 
 
-def _resolve_driver(name: Optional[str]):
-    """Return the named driver, or the default if name is None/empty."""
-    _ensure_default_registered()
-    if name:
-        try:
-            return registry.get(name)
-        except KeyError as e:
-            _die(e)
-    driver = registry.default()
-    if driver is None:
-        _die("no agent driver registered.")
-    return driver
-
-
-def _resolve_drivers(args) -> list:
-    """Resolve which driver(s) to apply to.
-
-    Precedence:
-      1. `--all-drivers` → every registered driver.
-      2. `--driver NAME` → that single driver.
-      3. Interactive TTY prompt → comma-separated names (Enter = all).
-      4. Non-TTY / no prompt → default driver (`claude-code`).
-    """
-    _ensure_default_registered()
-    available = registry.list()
-    if args.all_drivers:
-        return [_resolve_driver(n) for n in available]
-    if args.driver_name:
-        return [_resolve_driver(args.driver_name)]
-    if sys.stdin.isatty() and available:
-        # Interactive prompt — defaults to ALL registered drivers, so hitting
-        # Enter switches every agent at once (the common case: you want the
-        # new model everywhere). Name a subset to scope it, e.g. "claude-code".
-        print(f"Available drivers: {', '.join(available)}")
-        try:
-            raw = input(
-                "Apply to which driver(s)? "
-                "(comma-separated, 'all' or Enter for all): "
-            ).strip()
-        except EOFError:
-            # Ctrl-D, or a piped session that ran out of answers: treat it
-            # like Enter — the documented default — instead of a traceback.
-            raw = ""
-        if not raw or raw.lower() == "all":
-            return [_resolve_driver(n) for n in available]
-        names = [n.strip() for n in raw.split(",") if n.strip()]
-        for n in names:
-            if n not in available:
-                _die(f"unknown driver {n!r}. Available: {available}")
-        return [_resolve_driver(n) for n in names]
-    # Non-interactive (no TTY): keep the old single-driver default so CI
-    # scripts don't unexpectedly write multiple agent configs.
-    return [_resolve_driver(None)]
-
-
-def _resolve_api_key(model) -> str:
-    """Return the model's API key (stored plaintext in models.toml)."""
-    if model.api_key:
-        return model.api_key
-    _die(f"model {model.model_id!r} has no api_key in models.toml.")
-
-
-def _registered_drivers() -> list:
-    """Return every registered driver instance (defaults registered first)."""
-    _ensure_default_registered()
-    return [registry.get(n) for n in registry.list()]
-
-
-def _expand_or_die(reg: Registry,
-                   only: Optional[ModelEntry] = None) -> List[ModelEntry]:
-    """Materialize variant-preset references, or exit with a clear error.
-
-    `only` narrows expansion to one model (`model show` shouldn't trip over
-    a different model's broken preset); the default expands the whole
-    registry, which is what every write path wants.
-
-    Expansion is in-memory only (see `model_switch.variants`) — `save_models`
-    must always be handed the original Registry.
-    """
-    try:
-        return [expand_model(reg, only)] if only is not None else expand(reg)
-    except VariantsError as e:
-        _die(e)
-
-
-def _sync_catalog(reg: Registry) -> None:
-    """Mirror `reg` (the full models.toml registry) into every
-    catalog-capable driver — currently OpenCode. Reconcile keeps each
-    driver's default pointer unless it vanished. Single-slot drivers
-    (claude-code) are skipped; missing agent configs are left alone (a
-    targeted `model use` creates them).
-
-    Takes the Registry (not just the model list) so variant presets declared
-    at the top level can be expanded before rendering. Each driver validates
-    its render right before it writes, and grouping errors (conflicting
-    provider declarations, duplicate names) surface as a clean one-line error
-    instead of a traceback.
-    """
-    models = _expand_or_die(reg)
-    try:
-        for d in _registered_drivers():
-            if getattr(d, "supports_catalog", False):
-                d.sync_catalog(models)
-    except ValueError as e:
-        _die(e)
-
-
-def _validate_driver(driver, models: List[ModelEntry],
-                     active: Optional[ModelEntry] = None) -> None:
-    """Run a driver's optional pre-flight render (see `drivers.base`).
-
-    Drivers without a `validate` method have nothing to pre-flight.
-    """
-    validate = getattr(driver, "validate", None)
-    if validate is not None:
-        validate(models, active)
-
-
-def _clear_active_if_orphaned(reg: Registry) -> None:
-    """If state.active_main no longer names a model, drop it and clear the
-    single-slot driver's managed keys — nothing of a deleted model (notably its
-    key) may linger in any agent config."""
-    state = load_state(paths.state_file())
-    if state.active_main is None or state.active_main in reg.models:
-        return
-    state.active_main = None
-    state.last_updated = _now_iso()
-    save_state(paths.state_file(), state)
-    for d in _registered_drivers():
-        if not getattr(d, "supports_catalog", False):
-            d.clear()
-
-
-def _now_iso() -> str:
-    # Timezone-aware UTC with a "Z" suffix — `datetime.utcnow()` is
-    # deprecated on 3.12+, and `datetime.timezone` exists since 3.2, so
-    # this is safe on the repo's 3.7+ floor.
-    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
-    """Read one line from stdin (interactive only).
-
-    Only prompts when stdin is a TTY. In non-interactive contexts (piped
-    input, CI, tests), if the option is missing AND required, we exit with
-    a clear error. If optional, return `None` (or `default`).
-
-    Do NOT pass secrets here — input is echoed. For the API key, use
-    `_prompt_secret` (which does not echo).
-    """
-    suffix = ""
-    if default is not None:
-        suffix = f" [{default}]"
-    elif optional:
-        suffix = " (optional)"
+def _prompt(label: str) -> str:
+    """Read one required line from stdin (interactive only)."""
     if not sys.stdin.isatty():
-        if default is not None:
-            return default
-        if optional:
-            return None
-        _die(f"{label!r} is required (no TTY for interactive prompt). "
-             f"Pass it as a flag.")
-    prompt_text = f"{label}{suffix}: "
+        _die("{!r} is required (no TTY for interactive prompt). "
+             "Pass it as a flag.".format(label))
     while True:
         try:
-            line = input(prompt_text)
+            line = input("{}: ".format(label))
         except EOFError:
-            # Stream ran out (e.g. test piped fewer answers than prompts):
-            # fall back to the default if there's one, else fail clearly.
-            if default is not None:
-                return default
-            if optional:
-                return None
-            _die(f"{label!r} is required (input exhausted). "
-                 f"Pass it as a flag.")
+            _die("{!r} is required (input exhausted). Pass it as a "
+                 "flag.".format(label))
         if line == "":
-            if default is not None:
-                return default
-            if optional:
-                return None
             _die("value is required.")
-        try:
-            return type_(line)
-        except ValueError:
-            # Bad type (e.g. "abc" for a token count) must re-ask, not
-            # traceback mid-wizard.
-            prompt_text = f"  {type_.__name__} expected — try again: "
+        return line
 
 
 def _prompt_secret(label: str) -> str:
-    """Read a secret (the API key) from stdin, echoing what's typed.
-
-    The key is persisted in plaintext to models.toml anyway, so hiding the
-    input buys nothing and makes typos hard to catch. In non-interactive
-    contexts with no input, exit with a clear error telling the user to
-    pass `--api-key`.
-    """
+    """Read the API key. It is persisted in plaintext anyway, so echo it."""
     if not sys.stdin.isatty():
-        _die(f"{label} is required (no TTY for prompt). "
-             f"Pass it via --api-key.")
+        _die("{} is required (no TTY for prompt). Pass it via "
+             "--api-key.".format(label))
     try:
-        value = input(f"{label}: ")
+        value = input("{}: ".format(label))
     except EOFError:
-        _die(f"{label} is required (input exhausted). "
-             f"Pass it via --api-key.")
+        _die("{} is required (input exhausted). Pass it via "
+             "--api-key.".format(label))
     if value == "":
         _die("value is required.")
     return value
@@ -286,1032 +61,349 @@ def _prompt_secret(label: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="model-switch",
-        description="Switch Anthropic-compatible models for Claude Code and OpenCode.",
+        description="Switch OpenCode models through yzr-* canonical aliases.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
-    sub.add_parser("init", help="Initialize the model-switch config directory.")
+    p_model = sub.add_parser("model", help="Manage model aliases.")
+    model_sub = p_model.add_subparsers(
+        dest="model_action", required=True, metavar="ACTION")
 
-    p_model = sub.add_parser("model", help="Manage model definitions.")
-    model_sub = p_model.add_subparsers(dest="model_action", required=True, metavar="ACTION")
-
-    p_add = model_sub.add_parser("add", help="Add a new model definition.")
+    p_add = model_sub.add_parser("add", help="Add or replace a model alias.")
     p_add.add_argument(
-        "name", nargs="?", default=None,
-        help="Local nickname for this model (prompted when omitted).",
+        "ref", nargs="?", default=None,
+        help="Model reference: yzr-provider/model (e.g. yzr-zai/glm-5.3).",
     )
-    p_add.add_argument("--base-url", default=None, help="Upstream API base URL.")
-    p_add.add_argument(
-        "--api-key", default=None,
-        help="API key stored in models.toml (plaintext). Prompted securely if omitted.",
-    )
-    p_add.add_argument(
-        "--model-name", default=None,
-        help="Model identifier expected by upstream (bare id, no context suffix).",
-    )
-    p_add.add_argument("--description", default=None, help="Free-text description.")
-    p_add.add_argument(
-        "--provider", default=None,
-        help="Pin the provider group name (id becomes yzr-<name>); defaults "
-             "to a slug derived from base_url. Models sharing a name must "
-             "share base_url and api_key. When omitted and an existing model "
-             "on the same base_url + api_key already declares one, the "
-             "wizard offers to join that group; pass '-' to leave this model "
-             "undeclared instead.",
-    )
-    p_add.add_argument(
-        "--context-window", type=int, default=None,
-        help="Max input tokens (e.g. 200000 or 1000000 for 1M-context variants).",
-    )
+    p_add.add_argument("--api-key", default=None,
+                       help="API key (stored plaintext in models.toml).")
     p_add.add_argument(
         "--catalog-provider", default=None,
-        help="Pin the OpenCode-catalog provider entry used to fill fields "
-             "(disambiguates the same model under many providers).",
-    )
-    p_add.add_argument(
-        "--no-catalog", action="store_true",
-        help="Skip deriving fields from OpenCode's catalog cache.",
+        help="Pin the built-in provider a new yzr-* group inherits from.",
     )
     p_add.add_argument(
         "--yes", "-y", action="store_true",
-        help="Assume yes: skip the final confirmation and overwrite an "
-             "existing model of the same name without asking.",
+        help="Assume yes: skip the confirmation and overwrite an existing "
+             "model of the same reference.",
     )
 
-    model_sub.add_parser("list", help="List all configured models.")
+    model_sub.add_parser("list", help="List all configured model aliases.")
 
-    p_show = model_sub.add_parser("show", help="Show details of one model.")
-    p_show.add_argument("name", nargs="?", default=None)
+    p_show = model_sub.add_parser("show", help="Show one alias as JSON.")
+    p_show.add_argument("ref", nargs="?", default=None)
 
-    p_rm = model_sub.add_parser("remove", help="Remove a model definition.")
-    p_rm.add_argument("name", nargs="?", default=None)
-    p_rm.add_argument(
-        "--yes", "-y", action="store_true",
-        help="Skip the removal confirmation.",
-    )
+    p_rm = model_sub.add_parser("remove", help="Remove a model alias.")
+    p_rm.add_argument("ref", nargs="?", default=None)
+    p_rm.add_argument("--yes", "-y", action="store_true",
+                      help="Skip the removal confirmation.")
 
-    p_use = model_sub.add_parser("use", help="Activate a model.")
-    p_use.add_argument("name", nargs="?", default=None,
-                       help="Model name to activate (prompted when omitted).")
-    p_use.add_argument(
-        "--driver", default=None, dest="driver_name",
-        help="Target agent driver (e.g. 'claude-code' or 'opencode').",
-    )
-    p_use.add_argument(
-        "--all-drivers", action="store_true", dest="all_drivers",
-        help="Apply to every registered driver (skips interactive prompt).",
-    )
-
-    p_import = model_sub.add_parser(
-        "import", help="Import model definitions from an llmw workspace_models.toml.",
-    )
-    p_import.add_argument(
-        "path", help="Path to the source TOML file (e.g. workspace_models.toml).",
-    )
-    p_import.add_argument(
-        "--merge", action="store_true",
-        help="Merge into existing models.toml (default: replace).",
-    )
+    p_use = model_sub.add_parser("use", help="Activate a model alias.")
+    p_use.add_argument("ref", nargs="?", default=None)
 
     p_align = model_sub.add_parser(
         "align",
-        help="Align model fields with OpenCode's catalog cache (all models, "
-             "or one).",
+        help="Check canonical sources against OpenCode's catalog cache.",
     )
     p_align.add_argument(
-        "name", nargs="?", default=None,
-        help="Model to align; omit to align every model in models.toml.",
-    )
-    p_align.add_argument(
-        "--catalog-provider", default=None,
-        help="Pin the OpenCode-catalog provider entry (single model only).",
+        "ref", nargs="?", default=None,
+        help="Model to align; omit to align every model.",
     )
 
-    p_status = sub.add_parser("status", help="Show current state + effective agent config.")
-    p_status.add_argument("--driver", default=None, dest="driver_name")
-    p_status.add_argument("--all-drivers", action="store_true", dest="all_drivers")
+    sub.add_parser("status", help="Show the current OpenCode state.")
 
-    # _complete — hidden plumbing for the shell completion scripts
-    # (completions/). No `help=` on purpose: argparse only lists subparsers
-    # that carry help text, so this stays out of `--help` output.
     p_complete = sub.add_parser("_complete")
     p_complete.add_argument(
-        "what", choices=["models", "drivers"],
+        "what", choices=["models"],
         help="Which candidates to print, one per line.",
     )
-
     return parser
 
 
-def _do_init() -> None:
-    d = paths.config_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    if not paths.models_file().exists():
-        save_models(paths.models_file(), Registry())
-    if not paths.state_file().exists():
-        save_state(paths.state_file(), State())
-    print(f"Initialized model-switch config at {d}")
+# --- shared helpers -----------------------------------------------------------
+
+
+def _load_registry() -> Dict[str, Any]:
+    return store.load_models(paths.models_file())
+
+
+def _resolve_ref_arg(ref: Optional[str], reg: Dict[str, Any]) -> str:
+    """`ref`, or the interactive picker when omitted (never blocks non-TTY)."""
+    if ref is not None:
+        return ref
+    if not sys.stdin.isatty():
+        _die("model reference is required (no TTY for the picker) — pass "
+             "yzr-provider/model as an argument.")
+    refs = list(store.iter_refs(reg))
+    if not refs:
+        _die("no models configured — run `model-switch model add` first.")
+    return refs[ui.pick_one("Configured models:", refs)]
+
+
+def _split_or_die(ref: str):
+    try:
+        return store.split_ref(ref)
+    except store.StoreError as e:
+        _die(e)
+
+
+def _sync(data: Dict[str, Any], create: bool = False) -> None:
+    try:
+        opencode.sync(data, create=create)
+    except store.StoreError as e:
+        _die(e)
+
+
+def _save(reg: Dict[str, Any]) -> None:
+    try:
+        store.save_models(paths.models_file(), reg)
+    except store.StoreError as e:
+        _die(e)
+
+
+# --- model add ----------------------------------------------------------------
+
+
+def _print_add_summary(ref: str, canonical: str, base_url: str,
+                       api_key: str, replacing: bool) -> None:
+    provider, model_id = ref.split("/", 1)
+    print("")
+    print("About to add {}{}".format(
+        ref, " (replaces existing)" if replacing else ""))
+    print("  provider          {}".format(provider))
+    print("  canonical source  {}".format(canonical))
+    print("  base URL          {}".format(base_url))
+    print("  API key           <len {}>".format(len(api_key)))
+    print("  model             {}".format(model_id))
 
 
 def _do_model_add(args: argparse.Namespace) -> None:
-    """Add (or replace) a model definition.
+    reg = _load_registry()
+    ref = args.ref
+    if ref is None:
+        ref = _prompt("Model reference (yzr-provider/model)")
+    provider, model_id = _split_or_die(ref)
+    if not provider.startswith("yzr-"):
+        _die("provider {!r} must start with 'yzr-'".format(provider))
 
-    A wizard when stdin is a TTY: base URL and API key are pasted, then the
-    catalog picker fills every field `catalog.derive` produces and pre-fills
-    the upstream id — which the user confirms, since only they know their
-    endpoint's spelling. Any flag pre-answers its prompt, so a fully flagged
-    invocation stays script-safe. `--no-catalog` opts out, `--catalog-provider`
-    pins the provider entry when several match.
+    siblings = store.entries_for_provider(reg, provider)
+    api_key = args.api_key or (siblings[0].get("api_key") if siblings else None)
+    if not api_key:
+        api_key = _prompt_secret("API key")
 
-    The provider group is asked about only when an existing model on the
-    same base_url + api_key already declares one — see `_resolve_provider`.
-    """
-    reg = load_models(paths.models_file())
+    data, desc = catalog.load_cache()
+    if data is None:
+        _die("{}; cannot add an alias without it.".format(desc))
 
-    base_url = args.base_url or _prompt("Upstream API base URL")
-    api_key = args.api_key or _prompt_secret("API key")
-    provider = _resolve_provider(args, reg, base_url, api_key)
+    if siblings:
+        canonical = siblings[0]["canonical_provider"]
+        if args.catalog_provider is not None and args.catalog_provider != canonical:
+            _die("--catalog-provider {!r} conflicts with the existing "
+                 "canonical source {!r} of {}.".format(
+                     args.catalog_provider, canonical, provider))
+        candidate = catalog.lookup(data, canonical, model_id)
+        if candidate is None:
+            _die("canonical provider {!r} does not serve {!r} over a "
+                 "chat-completions default route".format(canonical, model_id))
+        if candidate.base_url != siblings[0]["base_url"]:
+            _die("{} uses a drifted base URL; run `model-switch model align` "
+                 "before adding models to it.".format(provider))
+        base_url = siblings[0]["base_url"]
+    else:
+        cands = catalog.model_candidates(data, model_id)
+        picked = catalog.pick(cands, args.catalog_provider)
+        if picked.candidate is None:
+            names = ", ".join(c.provider for c in picked.alternatives)
+            detail = picked.reason
+            if names:
+                detail += " (candidates: {})".format(names)
+            if picked.alternatives:
+                detail += "; pin one with --catalog-provider <id>"
+            _die("cannot resolve {}: {}".format(model_id, detail))
+        candidate = picked.candidate
+        canonical = candidate.provider
+        base_url = candidate.base_url
 
-    # Explicit flags mean the model is already determined — no picker.
-    picked = None
-    if (not args.no_catalog and args.model_name is None
-            and args.catalog_provider is None):
-        picked = _pick_catalog_model(base_url)
-    model_name, derived = _choose_upstream(args, base_url, picked)
-    name, replacing = _choose_local_name(args, reg, model_name)
-    if provider is None:
-        _note_declined_group(reg, base_url, api_key, name)
-    context_window, description = _collect_optional_fields(args, derived)
-
-    # Build the entry before asking: the summary then *is* what gets written,
-    # not a second assembly of the same fields that could drift from it.
-    entry = ModelEntry(
-        model_id=name,
-        name=model_name,
-        base_url=base_url,
-        api_key=api_key,
-        context_window=context_window,
-        description=description,
-        extra=_build_extra(derived, provider, model_name),
-    )
-
+    replacing = any(e.get("model_id") == model_id for e in siblings)
     if _interactive(args):
-        _print_add_summary(entry, replacing)
+        _print_add_summary(ref, canonical, base_url, api_key, replacing)
         if not ui.confirm("Proceed?", default=True):
             ui.abort("Aborted — nothing written.")
 
-    _save_and_report(reg, entry, replacing)
-
-
-def _prompt_upstream_id(default: Optional[str],
-                        source: Optional[str] = None) -> str:
-    """Ask which id the *upstream endpoint* expects.
-
-    The catalog can only speak to a model's parameters: its rows are keyed by
-    whichever provider published them, and every provider spells the same
-    model differently (the current cache lists 21 spellings for ``GLM-5.2``
-    across 76 provider entries). A pick therefore only pre-fills the id —
-    what is typed here is what lands in ``ANTHROPIC_MODEL`` / OpenCode's
-    model pointer, and only the user knows their endpoint's convention.
-    Whitespace is stripped: a pasted id with a trailing space is silently
-    not the id the endpoint expects.
-    """
-    if source is not None:
-        label = ("Upstream model id your endpoint expects "
-                 f"(the pick is {source}'s spelling)")
-    else:
-        label = ("Upstream model id your endpoint expects "
-                 "(bare id, no context suffix)")
-    value = _prompt(label, default=default)
-    return value.strip()
-
-
-def _choose_upstream(args: argparse.Namespace, base_url: str,
-                     picked: Optional[catalog.Row]):
-    """Resolve ``(model_name, derived_fields)`` from the pick or from flags.
-
-    The split is deliberate: `catalog.derive`'s fields are the catalog's to
-    supply, while the upstream id is the user's provider's convention and is
-    always asked — a pick only pre-fills it. See `_prompt_upstream_id`.
-    """
-    if picked is not None:
-        return (
-            _prompt_upstream_id(picked.model, source=picked.provider),
-            catalog.derive(picked.entry),
-        )
-    model_name = args.model_name or _prompt_upstream_id(args.name)
-    # `--model-name` can arrive from a flag; the id is written verbatim into
-    # agent configs, so strip it here rather than at the entry.
-    model_name = model_name.strip()
-    return model_name, _derive_or_report(model_name, base_url,
-                                         args.catalog_provider, args.no_catalog)
-
-
-def _choose_local_name(args: argparse.Namespace, reg: Registry,
-                       model_name: str):
-    """Prompt for the local name when it was not given, then gate overwrites.
-
-    The default is the *resolved* upstream id — not the catalog's spelling —
-    so editing the id above carries into the local name, and the two cannot
-    drift apart. Returns ``(name, replacing)``.
-    """
-    name = args.name
-    if name is None:
-        name = _prompt("Local name", default=model_name)
-    return _resolve_add_name(name, reg, args.yes)
-
-
-def _collect_optional_fields(args: argparse.Namespace, derived: Dict[str, Any]):
-    """Prompt for the optional context window and description.
-
-    Returns ``(context_window, description)``; both may be None.
-    """
-    if args.context_window is not None:
-        context_window = args.context_window
-    else:
-        context_window = _prompt(
-            "Context window in tokens (press Enter to skip)",
-            default=derived.get("context_window"), optional=True, type_=int,
-        )
-    description = args.description
-    if not description:
-        description = _prompt("Description", optional=True)
-    return context_window, description
-
-
-# Typed at the provider prompt (or passed to --provider) to mean "no
-# declaration". It is not a legal `_PROVIDER_NAME_RE` name, so intercepting it
-# is what makes *dropping* an inherited group reachable.
-_NO_DECLARATION = "-"
-
-
-def _matching_provider(reg: Registry, base_url: str, api_key: Optional[str],
-                       exclude: Optional[str] = None) -> Optional[str]:
-    """The declared provider of an existing model on the same upstream.
-
-    Adding an undeclared model to an upstream that already declares a group
-    would put it in a *second* block named after the host with a ``-2``
-    suffix — same upstream, same key, two provider blocks. Inheriting the
-    group's name is what keeps them together.
-
-    ``exclude`` skips one model_id: a replacing `model add` must not mistake
-    the entry it is about to overwrite for a group the new model could join.
-
-    The rule itself lives in `store.provider_group_key` so this query and the
-    drivers that render the blocks cannot drift apart. The inherited name is
-    the alphabetically first one, so a registry where several names somehow
-    share one upstream still answers the same way every run.
-    """
-    want = (base_url, api_key or "")
-    names = []
-    for m in reg.models.values():
-        if m.model_id == exclude:
-            continue
-        # Check the upstream first: `provider_group_key` validates the
-        # declaration, and an unrelated malformed entry must not fail an add
-        # that has nothing to do with it.
-        if upstream_key(m) != want:
-            continue
-        name = provider_group_key(m)[0]
-        if name is not None:
-            names.append(name)
-    return min(names) if names else None
-
-
-def _matching_provider_or_die(reg: Registry, base_url: str,
-                              api_key: Optional[str],
-                              exclude: Optional[str] = None) -> Optional[str]:
-    """`_matching_provider`, with its validation error surfaced cleanly."""
-    try:
-        return _matching_provider(reg, base_url, api_key, exclude)
-    except ValueError as e:
-        _die(e)
-
-
-def _resolve_provider(args: argparse.Namespace, reg: Registry, base_url: str,
-                      api_key: Optional[str]) -> Optional[str]:
-    """Resolve the provider group name for the model being added.
-
-    ``--provider`` pre-answers the prompt. Otherwise we only ask when an
-    existing group is joinable: with no same-upstream model to group with
-    there is nothing to decide, and staying quiet keeps the wizard's prompt
-    sequence stable for scripts and piped input. Pressing Enter takes the
-    inherited name; ``-`` declines it, which is the only way to *drop* a
-    declaration the entry already had. Declining is noted separately, once
-    the local name is known — see `_note_declined_group`.
-    """
-    if args.provider is not None and args.provider != _NO_DECLARATION:
-        return args.provider
-    group = _matching_provider_or_die(reg, base_url, api_key)
-    if args.provider is None and group is not None:
-        value = _prompt(
-            f"Provider group (joins {group!r}; "
-            f"{_NO_DECLARATION!r} = no declaration)",
-            default=group, optional=True,
-        )
-        if value != _NO_DECLARATION:
-            return value
-    return None
-
-
-def _note_declined_group(reg: Registry, base_url: str, api_key: Optional[str],
-                         name: str) -> None:
-    """Warn that an undeclared model lands in its own provider block.
-
-    Runs *after* the local name is resolved so the entry this add replaces is
-    excluded: when replacing a model that declared the group itself, that
-    declaration disappears with it and there is nothing to warn about.
-    """
-    group = _matching_provider_or_die(reg, base_url, api_key, exclude=name)
-    if group is None:
-        return
-    print(f"  note: this upstream still has a declared group {group!r} — "
-          f"left undeclared, this model renders as a separate yzr-<host> "
-          f"provider block")
-
-
-def _save_and_report(reg: Registry, entry: ModelEntry, replacing: bool) -> None:
-    """Persist the entry, mirror the catalog and report what happened."""
-    reg.models[entry.model_id] = entry
-    save_models(paths.models_file(), reg)
-    _sync_catalog(reg)
-    print(f"{'Replaced' if replacing else 'Added'} model {entry.model_id!r}.")
-    if replacing and load_state(paths.state_file()).active_main == entry.model_id:
-        print(f"  note: {entry.model_id!r} is the active model — run "
-              f"`model-switch model use {entry.model_id}` to re-apply it to "
-              f"your agents.")
-
-
-def _build_extra(derived: Dict[str, Any], provider: Optional[str],
-                 model_name: str) -> dict:
-    """Assemble the passthrough fields the drivers render from `derived`.
-
-    ``model_name`` is the resolved upstream id and is required: the
-    `display_name` comparison against it is what keeps the entry from
-    repeating the id as its own label.
-    """
-    extra = {}
-    if provider:
-        extra["provider"] = provider
-    if derived.get("variants"):
-        extra["variants"] = derived["variants"]
-    if derived.get("modalities"):
-        extra["modalities"] = derived["modalities"]
-    display_name = derived.get("display_name")
-    if display_name and display_name != model_name:
-        extra["display_name"] = display_name
-    return extra
-
-
-def _resolve_add_name(name: str, reg: Registry, assume_yes: bool):
-    """Resolve the local name against existing entries: ``(name, replacing)``.
-
-    An existing entry is never overwritten silently — a TTY gets an explicit
-    question (declining re-asks for another name; the pasted URL/key are
-    kept), a non-TTY script must pass ``--yes``.
-    """
-    while True:
-        if name not in reg.models:
-            return name, False
-        if assume_yes:
-            return name, True
-        if not sys.stdin.isatty():
-            _die(f"model {name!r} already exists (use --yes to overwrite).")
-        old = reg.models[name]
-        print(f"model {name!r} already exists "
-              f"(upstream id {old.name}, {old.base_url}).")
-        if ui.confirm("Overwrite it?", default=False):
-            return name, True
-        name = _prompt("Local name")
-
-
-# Reserved first tokens at the search prompt (matched on the first token only).
-_SEARCH_SKIP = "skip"
-_SEARCH_ALL = "all"
-
-
-def _split_search(raw: str) -> Tuple[str, str]:
-    """Split a search line into ``(first token lowercased, the rest)``.
-
-    A reserved word is matched here only, so `skip-connections` or
-    `allam-2-7b` still search normally.
-    """
-    parts = raw.split(None, 1)
-    head = parts[0].lower() if parts else ""
-    rest = parts[1].strip() if len(parts) > 1 else ""
-    return head, rest
-
-
-def _catalog_row_key(row: catalog.Row) -> Tuple[str, str]:
-    """What identifies a catalog row: ``(provider, model)``.
-
-    `host_keys` and every trust check go through this, so the notion of row
-    identity has one definition.
-    """
-    return (row.provider, row.model)
-
-
-def _print_no_catalog_rows(host: str, query: str, wide: bool) -> None:
-    """Explain an empty result and how to widen or leave the search."""
-    if wide:
-        print(f"  no catalog entry matches {query!r} on any provider — try "
-              f"again or {_SEARCH_SKIP!r}")
-    elif query == "":
-        print(f"  no catalog entry on {host} — search every provider with "
-              f"'{_SEARCH_ALL} <term>', or {_SEARCH_SKIP!r}")
-    else:
-        print(f"  no catalog entry on {host} matches {query!r} — try again, "
-              f"'{_SEARCH_ALL} <term>' or {_SEARCH_SKIP!r}")
-
-
-def _rank_host_first(rows: List[catalog.Row],
-                     host_keys: set) -> List[catalog.Row]:
-    """Host-matching rows first, then the rest — each kept in search order.
-
-    `ui.MENU_MAX` caps the menu at 20 rows, so an alphabetical catalog-wide
-    result would spend the whole menu on whichever provider sorts first and
-    hide the upstream actually being configured.
-    """
-    return sorted(rows, key=lambda r: (_catalog_row_key(r) not in host_keys,
-                                       r.provider, r.model))
-
-
-def _catalog_row_renderer(host_keys: set) -> Callable[[catalog.Row], str]:
-    """Build the `ui.pick_one` render fn, tagging foreign-provider rows.
-
-    Only foreign rows are marked: within the default host scope every row
-    matches, so leaving those untouched keeps the familiar menu byte-equal.
-    """
-    def render(row: catalog.Row) -> str:
-        line = _render_catalog_row(row)
-        if _catalog_row_key(row) not in host_keys:
-            line += "  [other host]"
-        return line
-    return render
-
-
-def _pick_catalog_model(base_url: str) -> Optional[catalog.Row]:
-    """Pick the upstream model from the catalog cache (TTY only).
-
-    Returns the picked `catalog.Row`, or None to fall back to typing the id
-    by hand: no cache, no host in the base URL, or 'skip'.
-
-    Searches are scoped to the pasted base_url's host. That scope is what
-    makes the derived fields trustworthy: they are written into an entry that
-    talks to *that* upstream, so another provider's declarations can be wrong
-    for it (a `modalities` claim the upstream rejects turns OpenCode's silent
-    fallback into a hard request error). `all <term>` widens one search to
-    the whole catalog for a deliberate look-up — those rows rank after the
-    host matches, are tagged `[other host]`, and print a note when picked.
-    """
-    if not sys.stdin.isatty():
-        return None
-    data, desc = catalog.load_cache()
-    if data is None:
-        print(f"catalog: {desc} — skipping auto-fill")
-        return None
-    host = catalog.host_of(base_url)
-    if not host:
-        # Without a host there is no scope at all: `catalog.search` would
-        # treat "" as "no filter" and offer the whole catalog as if it were
-        # the user's upstream, with nothing tagged foreign. Refuse instead —
-        # a base URL without a host is broken and must be fixed anyway.
-        print(f"catalog: {base_url!r} has no host — cannot tell which "
-              f"upstream it is; skipping auto-fill")
-        return None
-    # Empty query = list everything on this host, so this scan doubles as the
-    # header count and the host-match index.
-    host_rows = catalog.search(data, "", host=host)
-    host_keys = {_catalog_row_key(r) for r in host_rows}
-    print(f"catalog: {desc} — {len(host_rows)} model(s) on {host}")
-    while True:
-        action, row = _search_once(data, host, host_rows, host_keys)
-        if action == "skip":
-            return None
-        if action == "pick":
-            return row
-
-
-def _search_once(data: Dict[str, Any], host: str, host_rows: List[catalog.Row],
-                 host_keys: set) -> Tuple[str, Optional[catalog.Row]]:
-    """Run one search prompt + menu; returns ``(action, row)``.
-
-    ``action`` is ``"pick"`` (row is set), ``"skip"`` (fall back to typing
-    the id by hand) or ``"retry"`` (refine the query, or 'b' from the menu).
-    """
-    raw = ui.ask(f"Search models (Enter = list, '{_SEARCH_ALL} <term>' = "
-                 f"every provider, '{_SEARCH_SKIP}' = type the id by "
-                 f"hand): ").strip()
-    head, rest = _split_search(raw)
-    if head == _SEARCH_SKIP:
-        return "skip", None
-    wide = head == _SEARCH_ALL
-    query = rest if wide else raw
-    if wide and not query:
-        print(f"  '{_SEARCH_ALL}' needs a search term — the full catalog "
-              f"is too long to list (e.g. '{_SEARCH_ALL} qwen')")
-        return "retry", None
-    if raw == "":
-        rows = host_rows
-    else:
-        rows = _rank_host_first(
-            catalog.search(data, query, host=None if wide else host),
-            host_keys)
-    if not rows:
-        _print_no_catalog_rows(host, query, wide)
-        return "retry", None
-    title = f"  {len(rows)} match(es):"
-    if wide:
-        title += f"  (host {host} first, then every provider)"
-    idx = ui.pick_one(title, rows, _catalog_row_renderer(host_keys),
-                      default=0, allow_back=True)
-    if idx is None:
-        return "retry", None  # 'b' — refine the search
-    row = rows[idx]
-    if _catalog_row_key(row) not in host_keys:
-        print(f"  note: fields and id come from {row.provider}'s catalog "
-              f"entry, not {host}'s — it spells the model {row.model!r}, "
-              f"which your endpoint may not accept; verify the context "
-              f"window and modalities too")
-    return "pick", row
-
-
-def _render_catalog_row(row: catalog.Row) -> str:
-    """One compact menu line: provider/model, display name, ctx, tiers."""
-    entry = row.entry
-    bits = [f"{row.provider}/{row.model}"]
-    display = str(entry.get("name") or "")
-    if display and display != row.model:
-        bits.append(display)
-    derived = catalog.derive(entry)
-    if derived["context_window"]:
-        bits.append("ctx " + _format_context(derived["context_window"]))
-    if derived["variants"]:
-        bits.append("tiers[" + ",".join(derived["variants"]) + "]")
-    elif catalog.no_tiers_declared(entry):
-        bits.append("reasoning")
-    if derived["modalities"]:
-        bits.append("+".join(derived["modalities"]["input"]))
-    return "  ".join(bits)
-
-
-def _print_add_summary(entry: ModelEntry, replacing: bool) -> None:
-    """Show exactly what is about to be written before asking to proceed.
-
-    Reads from the ``ModelEntry`` itself — the printed fields cannot drift
-    from what gets saved.
-    """
-    print("")
-    print(f"About to add {entry.model_id!r}"
-          f"{' (replaces existing)' if replacing else ''}:")
-    print(f"  upstream id     {entry.name}")
-    print(f"  base URL        {entry.base_url}")
-    if entry.extra.get("display_name"):
-        print(f"  display name    {entry.extra['display_name']}")
-    if entry.context_window:
-        print(f"  context window  {_format_context(entry.context_window)}")
-    if entry.extra.get("variants"):
-        print("  variants        " + ", ".join(entry.extra["variants"]))
-    if entry.extra.get("modalities"):
-        print("  modalities      " + "+".join(entry.extra["modalities"]["input"]))
-    if entry.extra.get("provider"):
-        print(f"  provider group  {entry.extra['provider']}")
-
-
-def _derive_or_report(model_name: str, base_url: str,
-                      pin: Optional[str], no_catalog: bool) -> Dict[str, Any]:
-    """Catalog-derive fields for one model, reporting what happened.
-
-    Never fails the caller: an absent cache, an unknown model name or an
-    unresolved ambiguity print a short explanation (with the candidates to
-    pin) and return ``{}``, leaving manual values in charge.
-    """
-    if no_catalog:
-        return {}
-    data, desc = catalog.load_cache()
-    if data is None:
-        print(f"catalog: {desc} — skipping auto-fill")
-        return {}
-    picked = catalog.pick(catalog.candidates(data, model_name, base_url), pin)
-    if picked.candidate is None:
-        print(f"catalog: {picked.reason} — skipping auto-fill")
-        for c in (picked.alternatives or [])[:5]:
-            print(f"  {c.provider}  api={c.api or '-'}")
-        if picked.alternatives:
-            print("  pin one with --catalog-provider <id>")
-        return {}
-    fields = catalog.derive(picked.candidate.entry)
-    print("catalog: {} ({}) — filled {}".format(
-        picked.candidate.provider, desc, _describe_fields(fields)))
-    if catalog.no_tiers_declared(picked.candidate.entry):
-        print("  note: declared options yield no tiers; "
-              "write them by hand if needed")
-    return fields
-
-
-def _describe_fields(fields: Dict[str, Any]) -> str:
-    """One-line summary of the fields `catalog.derive` produced."""
-    bits = []
-    if fields.get("display_name"):
-        bits.append('name="{}"'.format(fields["display_name"]))
-    if fields.get("context_window"):
-        bits.append("context_window={}".format(fields["context_window"]))
-    if fields.get("variants"):
-        bits.append("variants[{}]".format(",".join(fields["variants"])))
-    if fields.get("modalities"):
-        bits.append("modalities[{}]".format(
-            ",".join(fields["modalities"]["input"])))
-    return ", ".join(bits) or "nothing derivable"
-
-
-def _align_one(model: ModelEntry, fields: Dict[str, Any],
-               entry: Dict[str, Any]) -> Tuple[List[str], List[str], bool]:
-    """Reconcile one model with the catalog entry its `fields` came from.
-
-    Mutates `model` in place and returns ``(changes, notes, preset_skip)``
-    for the row printer. Additive only: a field the entry no longer declares
-    is left alone, never unset. ``preset_skip`` marks the one case the caller
-    counts as skipped — variant tiers backed by a shared `variants_preset`
-    (rewriting that preset could silently change every model referencing it).
-    """
-    changes: List[str] = []
-    notes: List[str] = []
-    preset_skip = False
-
-    if fields["context_window"] and model.context_window != fields["context_window"]:
-        changes.append("context_window {}→{}".format(
-            model.context_window, fields["context_window"]))
-        model.context_window = fields["context_window"]
-    display_name = fields["display_name"]
-    if (display_name and display_name != model.name
-            and model.extra.get("display_name") != display_name):
-        changes.append("display_name→{}".format(display_name))
-        model.extra["display_name"] = display_name
-    if fields["modalities"] and model.extra.get("modalities") != fields["modalities"]:
-        changes.append("modalities→[{}]".format(
-            ",".join(fields["modalities"]["input"])))
-        model.extra["modalities"] = fields["modalities"]
-    if fields["variants"]:
-        if PRESET_REF_KEY in model.extra:
-            preset_skip = True
-            notes.append("variants from preset {!r} left alone".format(
-                model.extra[PRESET_REF_KEY]))
-        elif model.extra.get(VARIANTS_KEY) != fields["variants"]:
-            changes.append("variants[{}]".format(",".join(fields["variants"])))
-            model.extra[VARIANTS_KEY] = fields["variants"]
-    elif catalog.no_tiers_declared(entry):
-        notes.append("declared options yield no tiers")
-    return changes, notes, preset_skip
-
-
-def _do_model_align(args: argparse.Namespace) -> int:
-    """Reconcile models.toml with OpenCode's catalog cache.
-
-    Aligns one model, or every model when no name is given. The fields
-    `catalog.derive` produces are reconciled in place; variant tiers are
-    replaced only when declared inline — a model backed by a shared
-    `variants_preset` is reported as `skip` instead, because rewriting that
-    preset could silently change every model referencing it. Returns a
-    nonzero exit code when any model stayed unresolved, so scripts notice.
-    """
-    reg = load_models(paths.models_file())
-    if args.name is not None and args.name not in reg.models:
-        _die(f"model {args.name!r} not found.")
-    targets = [args.name] if args.name is not None else list(reg.models)
-    if not targets:
-        _die("models.toml declares no models.")
-    if args.catalog_provider is not None and len(targets) != 1:
-        _die("--catalog-provider needs a single model name.")
-
-    data, desc = catalog.load_cache()
-    if data is None:
-        _die(f"{desc}; cannot align without it.")
-
-    width = max(len(m) for m in targets)
-    changed = 0
-    skipped = 0
-    for model_id in targets:
-        model = reg.models[model_id]
-        picked = catalog.pick(
-            catalog.candidates(data, model.name, model.base_url),
-            args.catalog_provider,
-        )
-        if picked.candidate is None:
-            skipped += 1
-            detail = picked.reason
-            names = ", ".join(c.provider for c in (picked.alternatives or [])[:5])
-            if names:
-                detail += " (candidates: {})".format(names)
-            print("{:<{w}}  skip     -  {}".format(model_id, detail, w=width))
-            continue
-
-        entry = picked.candidate.entry
-        changes, notes, preset_skip = _align_one(
-            model, catalog.derive(entry), entry)
-        if preset_skip:
-            skipped += 1
-        if changes:
-            changed += 1
-        print("{:<{w}}  {:<7}  {}  {}".format(
-            model_id, "aligned" if changes else "ok",
-            picked.candidate.provider,
-            "; ".join(changes + notes) or "no change",
-            w=width,
-        ))
-
-    if changed:
-        save_models(paths.models_file(), reg)
-        _sync_catalog(reg)
-    print("align: {} updated, {} skipped (of {}) via {}".format(
-        changed, skipped, len(targets), desc))
-    if skipped:
-        print("align: pin the skipped model(s) with --catalog-provider and re-run")
-    return 1 if skipped else 0
-
-
-def _format_context(n) -> str:
-    """Render a context window in human units: 200000 -> '200K', None -> '-(none)-'."""
-    if n is None:
-        return "-(none)-"
-    if n >= 1_000_000 and n % 1_000_000 == 0:
-        return f"{n // 1_000_000}M"
-    if n >= 1_000 and n % 1_000 == 0:
-        return f"{n // 1_000}K"
-    return str(n)
-
-
-def _truncate(s, width) -> str:
-    """Truncate `s` to `width` chars, ending with '…' if shortened."""
-    if len(s) <= width:
-        return s
-    if width <= 1:
-        return "…"
-    return s[: width - 1] + "…"
+    reg.setdefault("models", [])
+    reg["models"] = [e for e in reg["models"]
+                     if not (e.get("provider") == provider
+                             and e.get("model_id") == model_id)]
+    reg["models"].append({
+        "model_id": model_id,
+        "provider": provider,
+        "canonical_provider": canonical,
+        "base_url": base_url,
+        "api_key": api_key,
+    })
+
+    _save(reg)
+    _sync(reg, create=True)
+    print("{} model {}.".format("Replaced" if replacing else "Added", ref))
+
+
+# --- read-only commands -------------------------------------------------------
 
 
 def _do_model_list() -> None:
-    reg = load_models(paths.models_file())
-    state = load_state(paths.state_file())
-    if not reg.models:
+    reg = _load_registry()
+    if not reg.get("models"):
         print("(no models configured — run `model-switch model add` to add one)")
         return
-
-    rows = []
-    for n, m in reg.models.items():
-        rows.append((
-            n,
-            m.name,
-            _format_context(m.context_window),
-            _truncate(m.base_url, 50),
-            n == state.active_main,
-        ))
-
-    def col_w(index, header):
-        return max(max(len(r[index]) for r in rows), len(header))
-
-    name_w = col_w(0, "NAME")
-    model_w = col_w(1, "MODEL")
-    context_w = col_w(2, "CONTEXT")
-    url_w = col_w(3, "BASE_URL")
-
-    print(
-        "  "
-        + "NAME".ljust(name_w)
-        + "  "
-        + "MODEL".ljust(model_w)
-        + "  "
-        + "CONTEXT".ljust(context_w)
-        + "  "
-        + "BASE_URL".ljust(url_w)
-    )
-    for n, model, ctx, url, is_active in rows:
-        prefix = "→ " if is_active else "  "
-        print(
-            prefix
-            + n.ljust(name_w)
-            + "  "
-            + model.ljust(model_w)
-            + "  "
-            + ctx.ljust(context_w)
-            + "  "
-            + url
-        )
-
-
-def _pick_configured_model(reg: Registry) -> str:
-    """Numbered picker over the configured models (TTY only)."""
-    if not reg.models:
-        _die("no models configured — run `model-switch model add` first.")
-    state = load_state(paths.state_file())
-
-    def render(n):
-        m = reg.models[n]
-        marker = "→" if n == state.active_main else " "
-        return "{} {}  {}  {}  {}".format(
-            marker, n, m.name, _format_context(m.context_window),
-            _truncate(m.base_url, 50))
-
-    names = list(reg.models)
-    return names[ui.pick_one("Configured models:", names, render)]
-
-
-def _resolve_model_arg(name: Optional[str], reg: Registry) -> str:
-    """`name`, or the interactive picker when omitted (never blocks non-TTY)."""
-    if name is not None:
-        return name
-    if not sys.stdin.isatty():
-        _die("model name is required (no TTY for the picker) — pass it as an "
-             "argument.")
-    return _pick_configured_model(reg)
+    active = reg.get("active_model")
+    for pid in store.provider_labels(reg):
+        entries = store.entries_for_provider(reg, pid)
+        first = entries[0]
+        print("{}  <- {}  {}".format(
+            pid, first["canonical_provider"], first["base_url"]))
+        for entry in entries:
+            ref = "{}/{}".format(pid, entry["model_id"])
+            marker = "→" if ref == active else " "
+            print("  {} {}".format(marker, ref))
 
 
 def _do_model_show(args: argparse.Namespace) -> None:
-    reg = load_models(paths.models_file())
-    name = _resolve_model_arg(args.name, reg)
-    if name not in reg.models:
-        _die(f"model {name!r} not found.")
-    m = reg.models[name]
-    # Resolve the variant declaration up front: a broken one should fail
-    # before any of the model's fields are printed.
-    ref = m.extra.get(PRESET_REF_KEY)
-    variants = _expand_or_die(reg, only=m)[0].extra.get(VARIANTS_KEY)
+    reg = _load_registry()
+    ref = _resolve_ref_arg(args.ref, reg)
+    entry = store.get_model(reg, ref)
+    if entry is None:
+        _die("model {!r} not found.".format(ref))
+    payload = {
+        "provider": {
+            "canonical_provider": entry["canonical_provider"],
+            "base_url": entry["base_url"],
+            "api_key": "<set>" if entry.get("api_key") else "<missing>",
+        },
+        "model": {"model_id": entry["model_id"]},
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
 
-    print(f"local name:     {name}")
-    print(f"base_url:       {m.base_url}")
-    print(f"api_key:        {'<set>' if m.api_key else '<missing>'}")
-    print(f"upstream id:    {m.name}")
-    if isinstance(m.extra.get("provider"), str):
-        print(f"provider:       {m.extra['provider']}")
-    if m.context_window is not None:
-        print(f"context_window: {m.context_window}")
-    if m.description:
-        print(f"description:    {m.description}")
-    # What OpenCode offers as `provider/model#variant`: the declared preset
-    # (if any) and the tiers it expands to.
-    if isinstance(variants, dict) and variants:
-        source = "preset {!r}".format(ref) if ref is not None else "(inline)"
-        print("variants:       {} -> {}".format(source, ", ".join(variants)))
-    else:
-        print("variants:       <none declared>")
+
+def _do_status() -> None:
+    reg = _load_registry()
+    active = reg.get("active_model")
+    print("model-switch status")
+    print("----------------------")
+    print("active model:  {}".format(active or "(none)"))
+    print("registry:      {} ({} provider(s), {} model(s))".format(
+        paths.models_file(), len(store.provider_labels(reg)),
+        len(reg.get("models") or [])))
+    print("opencode:      {}".format(paths.opencode_config_file()))
+    labels = store.provider_labels(reg)
+    if labels:
+        print("providers:     {}".format(", ".join(labels)))
+
+
+# --- mutating commands --------------------------------------------------------
 
 
 def _do_model_remove(args: argparse.Namespace) -> None:
-    reg = load_models(paths.models_file())
-    name = _resolve_model_arg(args.name, reg)
-    if name not in reg.models:
-        _die(f"model {name!r} not found.")
+    reg = _load_registry()
+    ref = _resolve_ref_arg(args.ref, reg)
+    entry = store.get_model(reg, ref)
+    if entry is None:
+        _die("model {!r} not found.".format(ref))
     if _interactive(args):
-        m = reg.models[name]
-        if not ui.confirm(f"Remove model {name!r} (upstream id {m.name})?",
-                          default=False):
+        if not ui.confirm("Remove model {!r}?".format(ref), default=False):
             ui.abort("Aborted — nothing removed.")
-    del reg.models[name]
-    save_models(paths.models_file(), reg)
-    _sync_catalog(reg)
-    _clear_active_if_orphaned(reg)
-    print(f"Removed model {name!r}.")
+    reg["models"].remove(entry)
+    if reg.get("active_model") == ref:
+        del reg["active_model"]
+    _save(reg)
+    _sync(reg, create=False)
+    print("Removed model {}.".format(ref))
 
 
 def _do_model_use(args: argparse.Namespace) -> None:
-    reg = load_models(paths.models_file())
-    name = _resolve_model_arg(args.name, reg)
-    if name not in reg.models:
-        _die(f"model {name!r} not found.")
-
-    expanded = {m.model_id: m for m in _expand_or_die(reg)}
-    main_model = expanded[name]
-
-    # Validate the active model has a key before touching any driver config.
-    _resolve_api_key(main_model)
-
-    drivers = _resolve_drivers(args)
-    applied = []
-    try:
-        # Fail fast: every driver validates its whole render before any of
-        # them writes, so one malformed entry cannot leave one agent switched
-        # and another untouched.
-        for driver in drivers:
-            _validate_driver(driver, list(expanded.values()), main_model)
-        for driver in drivers:
-            driver.apply(models=list(expanded.values()), active=main_model)
-            applied.append(driver)
-    except ValueError as e:
-        _die(e)
-
-    state = load_state(paths.state_file())
-    state.active_main = name
-    state.last_updated = _now_iso()
-    save_state(paths.state_file(), state)
-
-    print(f"Switched to {name!r}.")
-    for d in applied:
-        print(f"  Wrote {d.settings_path} ({d.name})")
-    print("  Restart your agent (Claude Code: Ctrl+D, then `claude`; OpenCode: restart the CLI) to take effect.")
+    reg = _load_registry()
+    ref = _resolve_ref_arg(args.ref, reg)
+    if store.get_model(reg, ref) is None:
+        _die("model {!r} not found.".format(ref))
+    reg["active_model"] = ref
+    _save(reg)
+    _sync(reg, create=True)
+    print("Switched to {}.".format(ref))
+    print("  OpenCode default: {}".format(ref))
+    print("  Configuration reloads automatically; sessions in flight keep "
+          "their settings.")
 
 
-def _do_model_import(args: argparse.Namespace) -> None:
-    """Import model definitions from an llmw-format TOML file.
+# --- align --------------------------------------------------------------------
 
-    Conversion rules live in `model_switch.importer`; `--merge` layers the
-    incoming entries onto the existing registry, the default replaces it.
-    """
-    from model_switch.importer import ImportError_ as _ImportError, import_from_path
 
-    src_path = Path(args.path)
-    if not src_path.exists():
-        _die(f"{src_path} does not exist.")
+def _do_model_align(args: argparse.Namespace) -> int:
+    reg = _load_registry()
+    if args.ref is not None and store.get_model(reg, args.ref) is None:
+        _die("model {!r} not found.".format(args.ref))
+    targets = [args.ref] if args.ref is not None else list(store.iter_refs(reg))
+    if not targets:
+        _die("models.toml declares no models.")
 
-    try:
-        incoming = import_from_path(src_path)
-    except _ImportError as e:
-        _die(f"importing {src_path}: {e}")
+    data, desc = catalog.load_cache()
+    if data is None:
+        _die("{}; cannot align without it.".format(desc))
 
-    if args.merge:
-        existing = load_models(paths.models_file())
-        for k, v in incoming.models.items():
-            existing.models[k] = v
-        # Top-level extras: incoming wins, keeps backward-compat keys.
-        for k, v in incoming.extra_top.items():
-            existing.extra_top[k] = v
-        save_models(paths.models_file(), existing)
-        result_reg = existing
-    else:
-        save_models(paths.models_file(), incoming)
-        result_reg = incoming
+    width = max(len(r) for r in targets)
+    changed = 0
+    skipped = 0
+    for ref in targets:
+        entry = store.get_model(reg, ref)
+        candidate = catalog.lookup(
+            data, entry["canonical_provider"], entry["model_id"])
+        if candidate is None:
+            skipped += 1
+            print("{:<{w}}  skip  {} no longer serves {!r} over a "
+                  "chat-completions default route".format(
+                      ref, entry["canonical_provider"], entry["model_id"],
+                      w=width))
+            continue
+        changes = []
+        if candidate.base_url != entry["base_url"]:
+            entry["base_url"] = candidate.base_url
+            changes = ["base_url"]
+        if changes:
+            changed += 1
+        print("{:<{w}}  {:<7}  {}  {}".format(
+            ref, "aligned" if changes else "ok",
+            entry["canonical_provider"],
+            ", ".join(changes) or "no change", w=width))
 
-    _sync_catalog(result_reg)
-    _clear_active_if_orphaned(result_reg)
+    if changed:
+        _save(reg)
+        _sync(reg, create=False)
+    print("align: {} updated, {} skipped (of {}) via {}".format(
+        changed, skipped, len(targets), desc))
+    return 1 if skipped else 0
 
-    print(f"Imported {len(incoming.models)} model(s) from {src_path}.")
+
+# --- completion plumbing ------------------------------------------------------
 
 
 def _do_complete_models() -> None:
-    """Print configured model names, one per line (completion plumbing)."""
-    reg = load_models(paths.models_file())
-    for name in reg.models:
-        print(name)
+    reg = _load_registry()
+    for ref in store.iter_refs(reg):
+        print(ref)
 
 
-def _do_complete_drivers() -> None:
-    """Print registered driver names, one per line (completion plumbing)."""
-    _ensure_default_registered()
-    for name in registry.list():
-        print(name)
-
-
-def _do_status(args: argparse.Namespace) -> None:
-    state = load_state(paths.state_file())
-    reg = load_models(paths.models_file())
-
-    print("model-switch status")
-    print("----------------------")
-    if not state.active_main:
-        print("active main:  (none)")
-    else:
-        entry = reg.models.get(state.active_main)
-        if entry is None:
-            # state.toml can outlive an entry deleted by hand; status is a
-            # read-only command and must still answer.
-            print(f"active main:  {state.active_main} (missing from models.toml)")
-        else:
-            print(f"active main:  {state.active_main} (model_name: {entry.name})")
-
-    if args.all_drivers:
-        drivers = _registered_drivers()
-    else:
-        drivers = [_resolve_driver(args.driver_name)]
-    for driver in drivers:
-        print("")
-        print(f"Agent ({driver.name}) effective config in {driver.settings_path}:")
-        current = driver.current()
-        if not current:
-            print("  (empty)")
-        else:
-            for k in sorted(current.keys()):
-                print(f"  {k} = {current[k]}")
+# --- dispatch -----------------------------------------------------------------
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(argv) if argv is not None else sys.argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)
-
     try:
-        return _dispatch(args, parser)
+        return _dispatch(args)
     except KeyboardInterrupt:
-        # A wizard interrupted mid-question must not print a traceback and,
-        # more importantly, must not have written anything yet.
         ui.abort("Aborted.", code=130)
-    except StoreError as e:
-        # A malformed models.toml / state.toml is a user error like any other,
-        # not a traceback.
+    except store.StoreError as e:
         _die(e)
 
 
-def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    if args.cmd == "init":
-        _do_init()
-        return 0
+def _dispatch(args: argparse.Namespace) -> int:
     if args.cmd == "model":
         if args.model_action == "add":
             _do_model_add(args)
@@ -1323,24 +415,15 @@ def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             _do_model_remove(args)
         elif args.model_action == "use":
             _do_model_use(args)
-        elif args.model_action == "import":
-            _do_model_import(args)
         elif args.model_action == "align":
             return _do_model_align(args)
         return 0
     if args.cmd == "status":
-        _do_status(args)
+        _do_status()
         return 0
     if args.cmd == "_complete":
-        if args.what == "models":
-            _do_complete_models()
-        else:
-            _do_complete_drivers()
-        return 0
-
-    # argparse with required=True subparsers should never let us reach here.
-    parser.print_help()
-    return 1
+        _do_complete_models()
+    return 0
 
 
 if __name__ == "__main__":

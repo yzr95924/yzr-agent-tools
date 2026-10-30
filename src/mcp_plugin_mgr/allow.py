@@ -4,10 +4,9 @@ When an MCP server (outline especially) is wired up, Claude Code's auto-mode
 classifier can false-positive BLOCK large writes (≥3000 chars) to its tools.
 Pre-approving the tool names in ``permissions.allow`` makes the classifier skip
 that second guess. This module writes ONLY the ``permissions.allow`` list in
-Claude Code's settings file, preserving every other key (``env``/``model`` are
-owned by model-switch) — the same read-all / modify-one-key / atomic-write +
-preserve-unknown discipline the MCP drivers and model-switch's driver use, and
-the same key-ownership-sharing pattern both tools already use on opencode.json.
+Claude Code's settings file, preserving every other key — the same
+read-all / modify-one-key / atomic-write + preserve-unknown discipline the MCP
+drivers use.
 """
 import json
 from pathlib import Path

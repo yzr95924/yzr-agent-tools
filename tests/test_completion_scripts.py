@@ -30,16 +30,27 @@ BIN = ROOT / "bin"
 ZSH_CAPTURE = ROOT / "tests" / "zsh_capture.zsh"
 
 MODELS_TOML = """\
+schema_version = 2
+
 [[models]]
 model_id = "glm-z1"
-name = "glm-4"
-base_url = "https://api.example.com"
+provider = "yzr-zai"
+canonical_provider = "zai-coding-plan"
+base_url = "https://api.example.com/v1"
+api_key = "GLM_API_KEY"
+
+[[models]]
+model_id = "glm-z2"
+provider = "yzr-zai"
+canonical_provider = "zai-coding-plan"
+base_url = "https://api.example.com/v1"
 api_key = "GLM_API_KEY"
 
 [[models]]
 model_id = "kimi-k2"
-name = "kimi-k2-0905"
-base_url = "https://api.moonshot.cn/anthropic"
+provider = "yzr-kimi"
+canonical_provider = "kimi-code-plan-cn"
+base_url = "https://api.kimi.example.com/v1"
 api_key = "MOONSHOT_API_KEY"
 """
 
@@ -191,7 +202,7 @@ def shell_params(*names):
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
 def test_top_level_commands(comp_env, shell):
     got = shell(comp_env, ["model-switch", ""])
-    assert set(got) == {"init", "model", "status"}
+    assert set(got) == {"model", "status"}
 
 
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
@@ -202,7 +213,7 @@ def test_top_level_prefix_filter(comp_env, shell):
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
 def test_model_actions(comp_env, shell):
     got = shell(comp_env, ["model-switch", "model", ""])
-    assert set(got) == {"add", "list", "show", "remove", "use", "import", "align"}
+    assert set(got) == {"add", "list", "show", "remove", "use", "align"}
 
 
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
@@ -211,42 +222,35 @@ def test_model_action_prefix_filter(comp_env, shell):
 
 
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
-def test_use_completes_model_names(comp_env, shell):
+def test_use_completes_model_refs(comp_env, shell):
     got = shell(comp_env, ["model-switch", "model", "use", ""])
-    assert set(got) == {"glm-z1", "kimi-k2"}
+    assert set(got) == {"yzr-zai/glm-z1", "yzr-zai/glm-z2",
+                        "yzr-kimi/kimi-k2"}
 
 
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
-def test_remove_completes_model_names_with_prefix(comp_env, shell):
-    got = shell(comp_env, ["model-switch", "model", "remove", "gl"])
-    assert got == ["glm-z1"]
+def test_remove_completes_model_refs_with_prefix(comp_env, shell):
+    got = shell(comp_env, ["model-switch", "model", "remove", "yzr-zai/glm-z"])
+    assert set(got) == {"yzr-zai/glm-z1", "yzr-zai/glm-z2"}
 
 
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
 def test_use_completes_flags(comp_env, shell):
     got = shell(comp_env, ["model-switch", "model", "use", "--"])
-    assert set(got) == {"--driver", "--all-drivers", "--help"}
-
-
-@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
-def test_driver_value_completes_driver_names(comp_env, shell):
-    got = shell(comp_env, ["model-switch", "model", "use", "--driver", ""])
-    assert set(got) == {"claude-code", "opencode"}
+    assert set(got) == {"--help"}
 
 
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
 def test_status_completes_flags(comp_env, shell):
     got = shell(comp_env, ["model-switch", "status", "--"])
-    assert set(got) == {"--driver", "--all-drivers", "--help"}
+    assert set(got) == {"--help"}
 
 
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
 def test_add_completes_flags(comp_env, shell):
     got = shell(comp_env, ["model-switch", "model", "add", "--"])
     assert set(got) == {
-        "--base-url", "--api-key", "--model-name", "--description",
-        "--context-window", "--provider", "--catalog-provider",
-        "--no-catalog", "--yes", "--help",
+        "--api-key", "--catalog-provider", "--yes", "--help",
     }
 
 
@@ -258,34 +262,23 @@ def test_remove_completes_flags(comp_env, shell):
 
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
 def test_add_flag_value_offers_nothing(comp_env, shell):
-    got = shell(comp_env, ["model-switch", "model", "add", "--base-url", ""])
+    got = shell(comp_env, ["model-switch", "model", "add", "--catalog-provider", ""])
     assert got == []
-
-
-@pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
-def test_init_offers_nothing(comp_env, shell):
-    assert shell(comp_env, ["model-switch", "init", ""]) == []
-
-
-@pytest.mark.parametrize("shell", shell_params("bash", "zsh", "fish"))
-def test_import_completes_files(comp_env, tmp_path, shell):
-    (tmp_path / "sample.toml").write_text("")
-    (tmp_path / "notes.txt").write_text("")
-    got = shell(comp_env, ["model-switch", "model", "import", ""], cwd=tmp_path)
-    assert "sample.toml" in got
 
 
 def test_bash_align_completes_flags_and_models(comp_env):
     flags = _bash_tokens(comp_env, ["model-switch", "model", "align", "--"])
-    assert set(flags) == {"--catalog-provider", "--help"}
+    assert set(flags) == {"--help"}
     models = _bash_tokens(comp_env, ["model-switch", "model", "align", ""])
-    assert set(models) == {"glm-z1", "kimi-k2"}
+    assert set(models) == {"yzr-zai/glm-z1", "yzr-zai/glm-z2",
+                           "yzr-kimi/kimi-k2"}
 
 
 def test_fish_no_file_fallback_after_positional(comp_env, tmp_path):
-    """Once the model name is given, an empty token must not offer files."""
+    """Once the model reference is given, an empty token must not offer files."""
     (tmp_path / "stray.toml").write_text("")
-    got = _fish_tokens(comp_env, ["model-switch", "model", "use", "glm-z1", ""],
+    got = _fish_tokens(comp_env, ["model-switch", "model", "use",
+                                  "yzr-zai/glm-z1", ""],
                        cwd=tmp_path)
     assert got == []
 

@@ -1,8 +1,8 @@
 # bash completion for model-switch(1)
 #
-# Dynamic candidates (model names, driver names) come from the hidden
-# `model-switch _complete <what>` plumbing command, so completion always
-# reflects the real models.toml / driver registry.
+# Dynamic model references come from the hidden `model-switch _complete
+# models` plumbing command, so completion always reflects the real
+# models.toml registry.
 #
 # Loaded two ways by scripts/model-switch.sh install (both harmless if repeated):
 #   - symlinked into ~/.local/share/bash-completion/completions/model-switch
@@ -17,11 +17,7 @@ _model_switch() {
 
     # Completing a flag's value?
     case "$prev" in
-        --driver)
-            COMPREPLY=( $(compgen -W "$(model-switch _complete drivers 2>/dev/null)" -- "$cur") )
-            return 0
-            ;;
-        --base-url|--api-key|--model-name|--description|--context-window)
+        --api-key|--catalog-provider)
             # Free-form values: nothing sensible to offer.
             COMPREPLY=()
             return 0
@@ -29,66 +25,59 @@ _model_switch() {
     esac
 
     # Walk the completed words to establish context:
-    #   cmd    = init | model | status   (COMP_WORDS[1])
-    #   action = add | list | show | remove | use | import | align   (COMP_WORDS[2], under `model`)
+    #   cmd    = model | status   (COMP_WORDS[1])
+    #   action = add | list | show | remove | use | align   (COMP_WORDS[2], under `model`)
     local i w
     for (( i = 1; i < COMP_CWORD; i++ )); do
         w="${COMP_WORDS[i]}"
         case "$w" in
-            init|model|status)
+            model|status)
                 [ -z "$cmd" ] && cmd="$w"
                 ;;
-            add|list|show|remove|use|import|align)
+            add|list|show|remove|use|align)
                 [ "$cmd" = "model" ] && [ -z "$action" ] && action="$w"
                 ;;
         esac
     done
 
     if [ -z "$cmd" ]; then
-        COMPREPLY=( $(compgen -W "init model status" -- "$cur") )
+        COMPREPLY=( $(compgen -W "model status" -- "$cur") )
         return 0
     fi
 
     case "$cmd" in
-        init)
-            COMPREPLY=()
-            ;;
         status)
-            COMPREPLY=( $(compgen -W "--driver --all-drivers --help" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--help" -- "$cur") )
             ;;
         model)
             if [ -z "$action" ]; then
-                COMPREPLY=( $(compgen -W "add list show remove use import align" -- "$cur") )
+                COMPREPLY=( $(compgen -W "add list show remove use align" -- "$cur") )
                 return 0
             fi
             case "$action" in
                 add)
-                    COMPREPLY=( $(compgen -W "--base-url --api-key --model-name --description --context-window --provider --catalog-provider --no-catalog --yes --help" -- "$cur") )
+                    COMPREPLY=( $(compgen -W "--api-key --catalog-provider --yes --help" -- "$cur") )
                     ;;
                 list)
                     COMPREPLY=( $(compgen -W "--help" -- "$cur") )
                     ;;
-                show|remove|use)
+                show|use)
                     if [[ "$cur" == -* ]]; then
-                        local flags="--help"
-                        [ "$action" = "use" ] && flags="--driver --all-drivers --help"
-                        [ "$action" = "remove" ] && flags="--yes --help"
-                        COMPREPLY=( $(compgen -W "$flags" -- "$cur") )
+                        COMPREPLY=( $(compgen -W "--help" -- "$cur") )
                     else
                         COMPREPLY=( $(compgen -W "$(model-switch _complete models 2>/dev/null)" -- "$cur") )
                     fi
                     ;;
-                import)
+                remove)
                     if [[ "$cur" == -* ]]; then
-                        COMPREPLY=( $(compgen -W "--merge --help" -- "$cur") )
+                        COMPREPLY=( $(compgen -W "--yes --help" -- "$cur") )
                     else
-                        # Source TOML path: plain filename completion.
-                        COMPREPLY=( $(compgen -f -- "$cur") )
+                        COMPREPLY=( $(compgen -W "$(model-switch _complete models 2>/dev/null)" -- "$cur") )
                     fi
                     ;;
                 align)
                     if [[ "$cur" == -* ]]; then
-                        COMPREPLY=( $(compgen -W "--catalog-provider --help" -- "$cur") )
+                        COMPREPLY=( $(compgen -W "--help" -- "$cur") )
                     else
                         COMPREPLY=( $(compgen -W "$(model-switch _complete models 2>/dev/null)" -- "$cur") )
                     fi

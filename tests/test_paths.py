@@ -10,7 +10,6 @@ from model_switch.paths import (
     config_dir,
     models_file,
     opencode_config_file,
-    state_file,
 )
 
 pytestmark = pytest.mark.no_isolation
@@ -30,11 +29,6 @@ def test_config_dir_defaults_to_home_config(monkeypatch, tmp_path):
 def test_models_file_lives_under_config_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert models_file() == tmp_path / "model-switch" / "models.toml"
-
-
-def test_state_file_lives_under_config_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert state_file() == tmp_path / "model-switch" / "state.toml"
 
 
 # OpenCode reads its global config from $XDG_CONFIG_HOME/opencode/opencode.json

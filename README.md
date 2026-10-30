@@ -1,14 +1,14 @@
 # yzr-agent-tools
 
-`yzr-agent-tools` 是一个围绕 AI coding agent(Claude Code、OpenCode、Qoder CLI、……)的本地运维 /
-配置工具集合。每个工具独立成 CLI 或常驻服务，共享同一套仓库规约（测试隔离、原子写、
+本仓库收纳围绕 AI coding agent 的本地运维与配置工具，当前覆盖 Claude Code、OpenCode、
+Qoder CLI。每个工具独立成 CLI 或常驻服务，共享同一套仓库规约（测试隔离、原子写、
 未知字段透传）。
 
 ## 本仓库目前包含的工具
 
 | 工具 | 简介 |
 | --- | --- |
-| [`model-switch`](src/model_switch/README.md) | CLI；切换 AI coding agent 使用的 Anthropic 兼容模型 |
+| [`model-switch`](src/model_switch/README.md) | CLI；为 OpenCode 维护继承内置 provider 配置的 `yzr-*` 模型别名 |
 | [`mcp-plugin-mgr`](src/mcp_plugin_mgr/README.md) | CLI；管理 Claude Code / OpenCode / Qoder CLI 的自定义 MCP 服务（起点：Outline wiki），一份注册表翻译到各 agent |
 | [`yzr-agent-style`](src/yzr_agent_style/README.md) | 脚本；把一份全局指令模板以 marker 块形式安装/卸载到 Claude Code / OpenCode / Qoder CLI 的全局规则文件，不覆盖用户手写内容 |
 | [`llmw-connect-mgr`](src/llmw_connect_mgr/README.md) | CLI;llmw-connect daemon(cc-connect llmw fork) 的首装/配置/升级/卸载（npm 制品 + systemd 看门狗，secrets 走 env 文件） |
@@ -20,16 +20,16 @@
 
 ## 仓库共用规约
 
-- **测试隔离** — `tests/conftest.py` 的 autouse fixture 快照真实用户级配置
-  (`~/.claude/settings.json`、`~/.claude.json`)的 mtime + sha256，把工具相关路径
-  重定向到 tmp，替换 driver / handler 指向 tmp,teardown 时断言真实配置字节级一致。
-  任何 driver / storage / handler bug 都不会污染你的真实配置。
-- **原子写** — TOML(JSON)写流程都是先 `.tmp` + `os.replace()`；绝不出现半写状态。
+- **测试隔离** — `tests/conftest.py` 的 autouse fixture 把各工具写盘路径重定向到 tmp，
+  teardown 用 mtime + sha256 断言真实用户配置字节未变；任何 driver / storage / handler
+  bug 都不会污染真实配置。
+- **原子写** — TOML / JSON 写流程都是先 `.tmp` + `os.replace()`；绝不出现半写状态。
 - **未知字段透传** — 读配置时把未知键收进 `extra` 桶，落盘时原样回写；用户的
   theme、plugins、自定义 env、第三方字段都不会丢。
-- **stdlib-only（运行时）** — 无第三方依赖；Python 3.7+;< 3.11 时自备 `tomli>=1.1`。
-- **lazy 注册 driver / handler** — import 时不创建指向 `Path.home() / ...` 的实例；
-  首次需要时再 `registry.register(...)`，避免测试隔离漏洞。
+- **stdlib-only（运行时）** — 无第三方依赖；Python 3.7+。mcp-plugin-mgr 在 Python
+  <3.11 时需要 `tomli>=1.1`。
+- **lazy 注册 driver / handler** — mcp-plugin-mgr import 时不创建指向
+  `Path.home() / ...` 的实例；首次需要时再注册，避免测试隔离漏洞。
 
 ## 常用命令
 
@@ -58,7 +58,7 @@ pytest --cov=mcp_plugin_mgr
 
 # 各 CLI
 model-switch model list
-model-switch model use glm-z1-plus
+model-switch model use yzr-dashscope/glm-5.3
 mcp-plugin-mgr add outline --url https://your-outline/mcp --token ol_api_xxx --all-drivers
 mcp-plugin-mgr list
 mcp-plugin-mgr disable outline --all-drivers   # 停用但保留凭据;enable 一键恢复,无需重配

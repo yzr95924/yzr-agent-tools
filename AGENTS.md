@@ -7,8 +7,9 @@ README 的总览表 + 各 `src/<tool>/README.md` 是工具级权威文档；本�
 ## 结构
 
 ```
-src/<tool>/        每工具一个自包含 Python 包（cli.py 入口、paths.py 路径解析、
-                   drivers/ agent 适配、各工具各自的 _compat.py / drivers/_atomic.py）
+src/<tool>/        每工具一个自包含 Python 包（cli.py 入口、paths.py 路径解析；
+                   其余模块按工具需要，如 mcp-plugin-mgr 的 drivers/、
+                   model-switch 的 opencode.py）
 scripts/<tool>.sh  自包含 install/uninstall 脚本（写 wrapper + shell 补全 + rc PATH 块；
                    无 venv、无 pip）
 bin/<tool>         install 生成的 4 行 bash wrapper，gitignored——fresh clone 后不存在
@@ -17,8 +18,10 @@ docs/              设计文档（mcp-plugin-mgr、opencode-plugins）
 tests/             pytest；conftest.py 是全仓测试隔离的枢纽
 ```
 
-- **工具间刻意重复代码**：`_compat.py`（TOML 读写）、`drivers/_atomic.py` 每个工具各留
-  一份拷贝保持独立，**不要跨工具抽公共包 / DRY 化**，除非用户明确要求。
+- **工具间刻意重复代码**：mcp-plugin-mgr 与 model-switch 各保留自己的 `_compat.py`
+  （TOML 读写；model-switch 的副本把嵌套 dict 渲染为内联表，适配 `[[models]]` 条目），
+  mcp-plugin-mgr 另有 `drivers/_atomic.py` 拷贝。**不要跨工具抽公共包 / DRY 化**，
+  除非用户明确要求。
 - `src/yzr_agent_style/templates/AGENTS.md` 是安装到三个 agent 全局规则文件的指令
   模板真源，改它等于改所有用户会话的行为。
 
@@ -35,9 +38,10 @@ bash scripts/<tool>.sh install|uninstall  # 每工具的安装/卸载
   `bash scripts/mcp-plugin-mgr.sh install`**：`bin/<tool>` 是 gitignored 产物，而
   `tests/test_install.py`、补全内容测试会直接读 `bin/model-switch`。CI（.github/
   workflows/tests.yml）在 pytest 前就是这么做的。
-- Python 下限 3.7、运行时仅标准库：<3.11 需 `tomli>=1.1`（测试依赖 `pytest
-  pytest-cov`）。CI 矩阵 3.7/3.8/3.11/3.12——**不要用 3.8+ 语法**；`typing.Protocol`
-  必须放在 try/except 兜底 shim 里，`tests/test_py37_compat.py` 用 AST 守卫 shim 结构。
+- Python 下限 3.7、运行时仅标准库：mcp-plugin-mgr 与 model-switch 的 TOML 读取在
+  <3.11 需 `tomli>=1.1`（测试依赖 `pytest pytest-cov`）。CI 矩阵 3.7/3.8/3.11/3.12，
+  **不要用 3.8+ 语法**；`typing.Protocol` 必须放在 try/except 兜底 shim 里，
+  `tests/test_py37_compat.py` 用 AST 守卫 shim 结构。
 
 ## 测试隔离（最高优先级规约）
 
@@ -54,22 +58,25 @@ tmp、用 tmp 路径替换 registry 里的 driver 单例、teardown 时用 mtime
 - llmw_connect_mgr 不进 conftest：走自己的 env 测试缝 `LLMW_CONNECT_MGR_HOME /
   _SYSTEMD_DIR / _UNIT / _LOG`（src/llmw_connect_mgr/paths.py）。
 
-## Driver 与写盘约定
+## 写盘约定
 
-- **driver 一律 lazy 注册**：import 时不得实例化指向 `Path.home()/...` 的 driver，
-  首次使用时由 `cli._ensure_default_registered` 之类调 `registry.register(...)`。
-  import 即注册会绕过 conftest 重定向、漏隔离。
+- **mcp-plugin-mgr 的 driver 一律 lazy 注册**：import 时不得实例化指向
+  `Path.home()/...` 的 driver，首次使用时由 `cli._ensure_default_registered` 之类调
+  `registry.register(...)`。import 即注册会绕过 conftest 重定向、漏隔离。
 - 原子写：`.tmp` + `os.replace()`；读配置把未知键收进 `extra` 桶、落盘原样回写
-  （theme/plugins/自定义 env 不许丢）。
+  （theme/plugins/自定义 env 不许丢）。model-switch 的 TOML 注册表（models.toml，
+  自带 `_compat.py` 读写副本）同样原样保留未知键。
 - TOML dumper 是手写的（stdlib 无写 API，tomllib 只读），改存储格式要保证 round-trip
-  无损，并跑 `pytest --cov=model_switch` / `--cov=mcp_plugin_mgr` 对应工具。
+  无损，并跑 `pytest --cov=mcp_plugin_mgr` / `--cov=model_switch` 对应工具。
+  model-switch 的 `opencode.json` 渲染是 JSON 写盘，不涉及 TOML。
 - OpenCode 侧按 **V2 原生形状**：MCP 写 `mcp.servers`、stdio 的环境变量键是
   `environment` 不是 `env`；V1 兼容路径已删除，不要加回去。
-- model-switch 的 opencode driver 从 OpenCode 的 sqlite catalog
-  （`$XDG_DATA_HOME/opencode/opencode.db`，表 `kv`、键 `models-dev:v2:catalog`，OpenCode
-  2.2 起的 V2 结构：model 层 `api` 路由、`capabilities.reasoning`、MIME `modalities`）
-  派生模型字段：**只读、不发网络请求**；host 按 netloc 精确相等匹配，只取
-  `type == "chat"` 的条目。
+- model-switch 从 OpenCode 的 sqlite catalog（`$XDG_DATA_HOME/opencode/opencode.db`，
+  表 `kv`、键 `models-dev:v2:catalog`，OpenCode 2.2 起的 V2 结构：model 层有序
+  `api` 路由）解析内置来源：**只读、不发网络请求**；只接受第一个带 SDK 的默认路由
+  为 `chat-completions` 且带 `base_url` 的 `type == "chat"` 条目。渲染产物是
+  `canonical` 别名：`yzr-*` provider 只带连接信息，模型条目为空，字段与 runtime
+  包全部由 OpenCode 继承；不要在 models.toml / opencode.json 里复制模型字段。
 
 ## 跨会话记忆（索引）
 

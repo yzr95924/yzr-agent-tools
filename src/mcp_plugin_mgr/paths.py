@@ -28,8 +28,8 @@ def claude_json_file() -> Path:
     """Claude Code's user-scope config file (~/.claude.json).
 
     Claude Code reads MCP servers from the top-level ``mcpServers`` key here —
-    NOT from ~/.claude/settings.json (that file holds env/model/theme and is
-    owned by model-switch). Getting this wrong means our writes are silently
+    NOT from ~/.claude/settings.json (that file holds env/model/theme, which
+    this tool preserves). Getting this wrong means our writes are silently
     ignored and the server never loads.
     """
     return Path.home() / ".claude.json"
@@ -38,10 +38,10 @@ def claude_json_file() -> Path:
 def claude_settings_file() -> Path:
     """Claude Code's user settings file (~/.claude/settings.json).
 
-    Holds ``env``/``model``/``theme`` (owned by model-switch) AND
-    ``permissions.allow`` (which we own, for ``--auto-allow``). Same
-    key-ownership-sharing pattern as opencode.json: each tool touches only its
-    own keys and preserves the rest via atomic read-modify-write.
+    Holds ``env``/``model``/``theme`` alongside ``permissions.allow`` (which we
+    own, for ``--auto-allow``). Same key-ownership-sharing pattern as
+    opencode.json: each tool touches only its own keys and preserves the rest
+    via atomic read-modify-write.
     """
     return Path.home() / ".claude" / "settings.json"
 

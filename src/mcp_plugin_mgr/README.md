@@ -3,8 +3,8 @@
 管理 Claude Code / OpenCode / Qoder CLI 的自定义 MCP 服务（以 **Outline wiki** 为起点）。把你在本地注册的
 MCP 服务翻译成各 agent 自己的协议写进各自配置，重启 agent 即生效。
 
-和 [`model-switch`](../model_switch/README.md) 同构：**一个工具，多个 agent**，每个 agent 一个
-driver 负责把统一的「服务定义」渲染成该 agent 的字段与位置。
+和 [`model-switch`](../model_switch/README.md) 同属「本地注册表 + 按目标配置渲染」的工具；model-switch
+只面向 OpenCode，本工具仍面向 Claude Code / OpenCode / Qoder CLI 三个 agent。
 
 ## 它解决什么
 
@@ -61,9 +61,9 @@ mcp-plugin-mgr add outline --url ... --token ... --all-drivers --auto-allow
 - OpenCode：重启 CLI
 - Qoder CLI：重启 `qodercli`
 
-> 同一个 `opencode.json` 里的 `provider`/`model` 归 `model-switch` 管；本工具只动 `mcp` 那一段，
-> 两者**字段不重叠**，可并存。`~/.claude.json` 与 `~/.claude/settings.json` 是两个不同的文件
-> （后者归 model-switch），互不干扰。
+> 同一个 `opencode.json` 里的 `providers`/`model` 归 `model-switch` 管；本工具只动 `mcp` 那一段，
+> 两者**字段不重叠**，可并存。`~/.claude.json` 与 `~/.claude/settings.json` 是两个不同的文件，
+> 本工具只按各自键位写入，互不干扰。
 
 ## 命令一览
 
@@ -79,7 +79,7 @@ mcp-plugin-mgr presets                   # 列出内置 preset
 mcp-plugin-mgr status                    # 路径 / 计数概览
 ```
 
-`add` / `remove` 选 agent 的方式与 model-switch 的 `model use` 一致：
+`add` / `remove` 选 agent 的方式：
 
 - `--driver <name>` 只写一个 agent
 - `--all-drivers` 写全部（跳过交互）
@@ -231,7 +231,7 @@ command = "uvx"
 args = ["--from", "git+https://example/some-mcp", "run"]
 ```
 
-未知顶层键与未知每服务键都**原样透传**（和 model-switch 的 `models.toml` 同纪律）。
+未知顶层键与未知每服务键都**原样透传**（和 model-switch 的 JSON 注册表同纪律）。
 
 ## 设计要点 / 局限
 
