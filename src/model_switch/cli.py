@@ -44,8 +44,6 @@ from model_switch.variants import (
 )
 
 
-# ---- shared helpers ---------------------------------------------------------
-
 def _ensure_default_registered() -> None:
     """Register the built-in drivers lazily on first use.
 
@@ -59,7 +57,7 @@ def _ensure_default_registered() -> None:
 
     if ClaudeCodeDriver.name not in registry.list():
         registry.register(ClaudeCodeDriver())
-    if "opencode" not in registry.list():
+    if OpenCodeDriver.name not in registry.list():
         registry.register(OpenCodeDriver())
 
 
@@ -231,7 +229,6 @@ def _prompt(label: str, default=None, *, type_=str, optional: bool = False):
     elif optional:
         suffix = " (optional)"
     if not sys.stdin.isatty():
-        # Non-interactive: honor `default` if set, otherwise fail.
         if default is not None:
             return default
         if optional:
@@ -286,8 +283,6 @@ def _prompt_secret(label: str) -> str:
     return value
 
 
-# ---- parser construction ----------------------------------------------------
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="model-switch",
@@ -295,10 +290,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
-    # init
     sub.add_parser("init", help="Initialize the model-switch config directory.")
 
-    # model
     p_model = sub.add_parser("model", help="Manage model definitions.")
     model_sub = p_model.add_subparsers(dest="model_action", required=True, metavar="ACTION")
 
@@ -394,7 +387,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pin the OpenCode-catalog provider entry (single model only).",
     )
 
-    # status
     p_status = sub.add_parser("status", help="Show current state + effective agent config.")
     p_status.add_argument("--driver", default=None, dest="driver_name")
     p_status.add_argument("--all-drivers", action="store_true", dest="all_drivers")
@@ -410,8 +402,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-
-# ---- dispatch ---------------------------------------------------------------
 
 def _do_init() -> None:
     d = paths.config_dir()
@@ -667,8 +657,6 @@ def _build_extra(derived: Dict[str, Any], provider: Optional[str],
         extra["variants"] = derived["variants"]
     if derived.get("modalities"):
         extra["modalities"] = derived["modalities"]
-    # The upstream id doubles as OpenCode's fallback display label, so a
-    # display name that just repeats it is noise in models.toml.
     display_name = derived.get("display_name")
     if display_name and display_name != model_name:
         extra["display_name"] = display_name
@@ -1158,10 +1146,8 @@ def _do_model_show(args: argparse.Namespace) -> None:
         print(f"context_window: {m.context_window}")
     if m.description:
         print(f"description:    {m.description}")
-    # What OpenCode will offer as `provider/model#variant`: the declared
-    # preset (if any) and the tier names it expands to, in cycle order. V2
-    # computes no built-in tiers for custom providers, so an undeclared model
-    # simply has no variant selection.
+    # What OpenCode offers as `provider/model#variant`: the declared preset
+    # (if any) and the tiers it expands to.
     if isinstance(variants, dict) and variants:
         source = "preset {!r}".format(ref) if ref is not None else "(inline)"
         print("variants:       {} -> {}".format(source, ", ".join(variants)))
@@ -1181,8 +1167,6 @@ def _do_model_remove(args: argparse.Namespace) -> None:
             ui.abort("Aborted — nothing removed.")
     del reg.models[name]
     save_models(paths.models_file(), reg)
-    # Reconcile the catalog (removed model's provider + key vanish from
-    # OpenCode) and clear the single-slot agent if the removed model was active.
     _sync_catalog(reg)
     _clear_active_if_orphaned(reg)
     print(f"Removed model {name!r}.")
@@ -1194,8 +1178,6 @@ def _do_model_use(args: argparse.Namespace) -> None:
     if name not in reg.models:
         _die(f"model {name!r} not found.")
 
-    # Variant presets are materialized here (in memory) so every driver sees
-    # plain `variants` dicts; models.toml keeps the preset + reference form.
     expanded = {m.model_id: m for m in _expand_or_die(reg)}
     main_model = expanded[name]
 
@@ -1257,9 +1239,6 @@ def _do_model_import(args: argparse.Namespace) -> None:
         save_models(paths.models_file(), incoming)
         result_reg = incoming
 
-    # Mirror the catalog (a replace can wipe models, so reconcile also reclaims
-    # providers for models that vanished) and clear single-slot agents if the
-    # active model was dropped.
     _sync_catalog(result_reg)
     _clear_active_if_orphaned(result_reg)
 
@@ -1298,8 +1277,7 @@ def _do_status(args: argparse.Namespace) -> None:
             print(f"active main:  {state.active_main} (model_name: {entry.name})")
 
     if args.all_drivers:
-        _ensure_default_registered()
-        drivers = [_resolve_driver(n) for n in registry.list()]
+        drivers = _registered_drivers()
     else:
         drivers = [_resolve_driver(args.driver_name)]
     for driver in drivers:

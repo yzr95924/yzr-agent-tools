@@ -77,7 +77,6 @@ class ClaudeCodeDriver:
             env[k] = model_id
         config["env"] = env
 
-        # Top-level `model` mirrors the suffixed active id.
         config["model"] = model_id
 
         atomic_write_json(self.settings_path, config)

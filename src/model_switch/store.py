@@ -56,7 +56,6 @@ class ModelEntry:
     api_key: Optional[str] = None
     context_window: Optional[int] = None
     description: Optional[str] = None
-    # Keys not in _MODEL_ENTRY_FIELDS are stored here and round-tripped.
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_toml_dict(self) -> Dict[str, Any]:
@@ -97,23 +96,15 @@ class State:
     last_updated: Optional[str] = None
 
 
-# ---- provider grouping -------------------------------------------------------
+# Provider grouping — kept here so the CLI (`_resolve_provider`) and the
+# agent drivers that render the blocks read the same definition. One
+# agent-side provider block carries one baseURL and one apiKey, so a block is
+# shareable exactly when those two match; a declared `provider` name is the
+# group's identity and outlives base_url changes.
 #
-# One agent-side provider block carries one baseURL and one apiKey, so a block
-# is shareable exactly when those two match. The declared `provider` name (when
-# present) is the group's identity: it names the block and outlives base_url
-# changes. This rule is shared by the CLI — which inherits a group name when a
-# model is added to an upstream that already declares one, see
-# `model_switch.cli._resolve_provider` — and by the agent drivers that render
-# the blocks. Keep it here so both read the same definition.
-#
-# Error type: these functions raise `ValueError`, not the `StoreError` family
-# above. That family covers *load-time structure* (a malformed models.toml,
-# raised by `load_models` before any command runs). These predicates are
-# evaluated while a command is already running, at the same boundaries as the
-# drivers' own render-time validation, and both are surfaced by the CLI's
-# `except ValueError` handlers — so they fail one line cleanly instead of
-# escaping as a traceback.
+# These functions raise ValueError, not StoreError: they run mid-command, at
+# the same boundary as the drivers' render-time validation, and the CLI's
+# `except ValueError` handlers turn that into a clean one-line failure.
 
 def upstream_key(model: ModelEntry) -> Tuple[str, str]:
     """``(base_url, api_key)`` — what a shareable provider block must agree on."""
@@ -139,8 +130,6 @@ def provider_group_key(model: ModelEntry) -> Tuple[Optional[str], str, str]:
     return (name,) + upstream_key(model)
 
 
-# ---- atomic io ---------------------------------------------------------------
-
 def atomic_write_text(path: Path, text: str) -> None:
     """Write `text` via `<path>.tmp` + `os.replace` — never a half-written file.
 
@@ -153,8 +142,6 @@ def atomic_write_text(path: Path, text: str) -> None:
         f.write(text)
     os.replace(tmp, path)
 
-
-# ---- models.toml -------------------------------------------------------------
 
 def entry_from_dict(entry: Dict[str, Any]) -> ModelEntry:
     """Validate and convert one ``[[models]]`` table.
@@ -191,6 +178,30 @@ def entry_from_dict(entry: Dict[str, Any]) -> ModelEntry:
     )
 
 
+def registry_from_raw(raw: Dict[str, Any]) -> Registry:
+    """Build a `Registry` from parsed models.toml-shaped content.
+
+    The single owner of the file format's structure: top-level extras
+    collection, per-entry validation (`entry_from_dict`) and the
+    duplicate-id check. `load_models` and the llmw importer both go
+    through it, so an imported file cannot produce an entry that
+    `load_models` would then refuse.
+    """
+    reg = Registry()
+    for k, v in raw.items():
+        if k == "models":
+            continue
+        reg.extra_top[k] = v
+
+    for entry in raw.get("models", []) or []:
+        model = entry_from_dict(entry)
+        if model.model_id in reg.models:
+            raise DuplicateModelId(
+                "duplicate model_id {!r}".format(model.model_id))
+        reg.models[model.model_id] = model
+    return reg
+
+
 def load_models(path: Path) -> Registry:
     """Load `models.toml`. Missing file -> empty Registry.
 
@@ -202,28 +213,13 @@ def load_models(path: Path) -> Registry:
     raw = toml_loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise StoreError("models.toml root must be a table, got: {!r}".format(type(raw)))
-
-    reg = Registry()
-    for k, v in raw.items():
-        if k == "models":
-            continue
-        reg.extra_top[k] = v
-
-    for entry in raw.get("models", []) or []:
-        model = entry_from_dict(entry)
-        if model.model_id in reg.models:
-            raise DuplicateModelId(
-                "models.toml: duplicate model_id {!r}".format(model.model_id))
-        reg.models[model.model_id] = model
-    return reg
+    return registry_from_raw(raw)
 
 
 def save_models(path: Path, reg: Registry) -> None:
     """Atomic write of `models.toml`. Preserves unknown top-level + per-model keys."""
     atomic_write_text(path, toml_dumps(reg.to_toml_dict()))
 
-
-# ---- state.toml --------------------------------------------------------------
 
 def load_state(path: Path) -> State:
     """Load `state.toml`. Missing file -> empty State."""

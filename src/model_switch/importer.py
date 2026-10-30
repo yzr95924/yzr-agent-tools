@@ -23,28 +23,14 @@ from typing import Any, Dict, Union
 
 from model_switch._compat import toml_loads
 from model_switch.store import (
-    ModelEntry,
     Registry,
     StoreError,
-    entry_from_dict,
+    registry_from_raw,
 )
 
 
 class ImportError_(Exception):
     """Conversion error (bad source TOML, duplicate model_id, etc.)."""
-
-
-def _convert_entry(src: Dict[str, Any]) -> ModelEntry:
-    """Convert one llmw `[[models]]` entry via the store's own schema.
-
-    The conversion rules and the required-field list live in
-    `store.entry_from_dict`; this only re-labels its errors as import
-    failures.
-    """
-    try:
-        return entry_from_dict(src)
-    except StoreError as e:
-        raise ImportError_(str(e))
 
 
 def import_from_path(path: Union[str, Path]) -> Registry:
@@ -53,24 +39,17 @@ def import_from_path(path: Union[str, Path]) -> Registry:
 
 
 def import_from_text(raw_text: str) -> Registry:
-    """Parse llmw-format TOML text and convert it to a Registry."""
+    """Parse llmw-format TOML text and convert it to a Registry.
+
+    The source format is models.toml's, so the structure rules live in
+    `store.registry_from_raw`; this only re-labels its errors as import
+    failures.
+    """
     parsed = toml_loads(raw_text)
     if not isinstance(parsed, dict):
         raise ImportError_(f"root must be a TOML table, got {type(parsed).__name__}")
 
-    reg = Registry()
-    # Preserve unknown top-level keys (schema_version, created_at, updated_at).
-    for k, v in parsed.items():
-        if k == "models":
-            continue
-        reg.extra_top[k] = v
-
-    for entry in parsed.get("models", []) or []:
-        converted = _convert_entry(entry)
-        if converted.model_id in reg.models:
-            raise ImportError_(
-                f"duplicate model_id {converted.model_id!r} in source"
-            )
-        reg.models[converted.model_id] = converted
-
-    return reg
+    try:
+        return registry_from_raw(parsed)
+    except StoreError as e:
+        raise ImportError_(str(e))
