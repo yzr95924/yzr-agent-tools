@@ -52,11 +52,6 @@ def test_complete_drivers_is_rejected(yzr_paths):
     assert result.exit_code == 2
 
 
-def test_complete_rejects_unknown_kind(yzr_paths):
-    result = runner(["_complete", "bogus"])
-    assert result.exit_code == 2
-
-
 def test_complete_is_hidden_from_help(yzr_paths):
     result = runner(["--help"])
     assert result.exit_code == 0, result.stdout

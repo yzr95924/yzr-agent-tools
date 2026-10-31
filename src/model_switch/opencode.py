@@ -84,15 +84,13 @@ def _resolve_default(current: Optional[str],
     return current
 
 
-def sync(data: Dict[str, Any], create: bool = False,
-         config_path: Optional[Path] = None) -> None:
+def sync(data: Dict[str, Any], create: bool = False) -> None:
     """Mirror the registry into ``opencode.json``.
 
     ``create=False`` (the remove/align path) leaves a missing config file
     alone — no file is conjured out of thin air.
     """
-    path = (Path(config_path) if config_path is not None
-            else paths.opencode_config_file())
+    path = paths.opencode_config_file()
     if not create and not path.exists():
         return
 

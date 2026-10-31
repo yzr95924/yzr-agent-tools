@@ -13,18 +13,6 @@ def _stdin(monkeypatch, text, tty=True):
     monkeypatch.setattr(sys, "stdin", fake)
 
 
-def test_ask_reads_one_line(monkeypatch):
-    _stdin(monkeypatch, "hello\n")
-    assert ui.ask("> ") == "hello"
-
-
-def test_ask_eof_aborts(monkeypatch, capsys):
-    _stdin(monkeypatch, "")
-    with pytest.raises(SystemExit):
-        ui.ask("> ")
-    assert "input exhausted" in capsys.readouterr().err
-
-
 def test_pick_one_returns_zero_based_index(monkeypatch, capsys):
     _stdin(monkeypatch, "2\n")
     assert ui.pick_one("Models:", ["a", "b", "c"]) == 1

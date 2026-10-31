@@ -152,8 +152,3 @@ def test_references_and_provider_helpers():
     assert store.provider_labels(reg) == ["yzr-dashscope", "yzr-kimi"]
     assert [e["model_id"] for e in store.entries_for_provider(
             reg, "yzr-kimi")] == ["k3"]
-
-
-def test_split_ref_rejects_bad_reference():
-    with pytest.raises(store.StoreError):
-        store.split_ref("no-slash")

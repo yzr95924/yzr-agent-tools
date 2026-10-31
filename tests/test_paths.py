@@ -15,20 +15,16 @@ from model_switch.paths import (
 pytestmark = pytest.mark.no_isolation
 
 
-def test_config_dir_uses_xdg_config_home_when_set(monkeypatch, tmp_path):
+def test_config_paths_honor_xdg_and_default(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert config_dir() == tmp_path / "model-switch"
+    assert models_file() == tmp_path / "model-switch" / "models.toml"
 
-
-def test_config_dir_defaults_to_home_config(monkeypatch, tmp_path):
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert config_dir() == tmp_path / ".config" / "model-switch"
-
-
-def test_models_file_lives_under_config_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert models_file() == tmp_path / "model-switch" / "models.toml"
+    assert models_file() == tmp_path / ".config" / "model-switch" / (
+        "models.toml")
 
 
 # OpenCode reads its global config from $XDG_CONFIG_HOME/opencode/opencode.json
@@ -36,27 +32,25 @@ def test_models_file_lives_under_config_dir(monkeypatch, tmp_path):
 # this path wrong means our written config is silently never loaded.
 
 
-def test_opencode_config_file_uses_xdg_config_home(monkeypatch, tmp_path):
+def test_opencode_config_file_honors_xdg_and_default(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert opencode_config_file() == tmp_path / "opencode" / "opencode.json"
 
-
-def test_opencode_config_file_defaults_to_home_config(monkeypatch, tmp_path):
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert opencode_config_file() == tmp_path / ".config" / "opencode" / "opencode.json"
+    assert opencode_config_file() == (
+        tmp_path / ".config" / "opencode" / "opencode.json")
 
 
 # OpenCode 2.0's models.dev snapshot is a kv row in its SQLite database,
 # $XDG_DATA_HOME/opencode/opencode.db (default ~/.local/share/opencode/...).
 
 
-def test_catalog_db_file_uses_xdg_data_home(monkeypatch, tmp_path):
+def test_catalog_db_file_honors_xdg_and_default(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     assert catalog_db_file() == tmp_path / "opencode" / "opencode.db"
 
-
-def test_catalog_db_file_defaults_to_home_local_share(monkeypatch, tmp_path):
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert catalog_db_file() == tmp_path / ".local" / "share" / "opencode" / "opencode.db"
+    assert catalog_db_file() == (
+        tmp_path / ".local" / "share" / "opencode" / "opencode.db")
