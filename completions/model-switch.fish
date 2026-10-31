@@ -41,6 +41,11 @@ end
 function __fish_model_switch_needs_model_name
     set -l cmd (commandline -opc)
     __fish_model_switch_using_action show remove use align; or return 1
+    # A `--` token is a flag prefix on fish 3.3, not an empty model reference.
+    set -l current (commandline -ct)
+    if test -n "$current"; and string match -q -- '--*' $current
+        return 1
+    end
     # Completing a valued flag's argument right now is not a model reference.
     test "$cmd[-1]" = --catalog-provider; and return 1
     # Scan words after the action for an already-given positional
