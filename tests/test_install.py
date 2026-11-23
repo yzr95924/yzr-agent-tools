@@ -15,6 +15,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+from _homebrew_stub import bash_completion_link, drop_brew_from_path, fake_homebrew
+
 
 def _strip_comments_and_heredocs(text: str) -> str:
     """Reduce bash source to just its executable lines.
@@ -237,6 +239,7 @@ def _prepare_fake_env(tmp_path):
     # real user dirs.
     env["XDG_DATA_HOME"] = str(fake_home / ".local" / "share")
     env["XDG_CONFIG_HOME"] = str(fake_home / ".config")
+    fake_homebrew(tmp_path, env)
     return fake_home, fake_repo, env
 
 
@@ -373,7 +376,7 @@ def test_install_links_bash_and_fish_completions(tmp_path):
     r = _run(fake_repo / "scripts" / "model-switch.sh", env, "install")
     assert r.returncode == 0, r.stderr
 
-    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "model-switch"
+    bash_link = bash_completion_link(tmp_path, "model-switch")
     fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "model-switch.fish"
     assert bash_link.is_symlink(), f"bash completion symlink missing: {bash_link}"
     assert bash_link.resolve() == (fake_repo / "completions" / "model-switch.bash").resolve()
@@ -386,6 +389,21 @@ def test_install_links_bash_and_fish_completions(tmp_path):
     assert "/completions/" in bashrc and ".bash" in bashrc, (
         f"bashrc should source a bash completion inside the marker block; got: {bashrc!r}"
     )
+
+
+def test_install_without_homebrew_links_bash_completion_under_xdg(tmp_path):
+    """No `brew` on PATH (Linux, or a Mac without Homebrew): the bash
+    completion goes to $XDG_DATA_HOME instead of a Homebrew prefix."""
+    fake_home, fake_repo, env = _prepare_fake_env(tmp_path)
+    drop_brew_from_path(env)
+
+    r = _run(fake_repo / "scripts" / "model-switch.sh", env, "install")
+    assert r.returncode == 0, r.stderr
+
+    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "model-switch"
+    assert bash_link.is_symlink(), f"bash completion symlink missing: {bash_link}"
+    assert bash_link.resolve() == (fake_repo / "completions" / "model-switch.bash").resolve()
+    assert not bash_completion_link(tmp_path, "model-switch").exists()
 
 
 def test_install_leaves_user_owned_completion_files_alone(tmp_path):
@@ -411,7 +429,7 @@ def test_uninstall_removes_completion_links(tmp_path):
     sh = fake_repo / "scripts" / "model-switch.sh"
 
     assert _run(sh, env, "install").returncode == 0
-    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "model-switch"
+    bash_link = bash_completion_link(tmp_path, "model-switch")
     fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "model-switch.fish"
     assert bash_link.is_symlink() and fish_link.is_symlink()
 

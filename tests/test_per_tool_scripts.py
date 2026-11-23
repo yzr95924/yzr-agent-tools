@@ -10,6 +10,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+from _homebrew_stub import bash_completion_link, fake_homebrew
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,6 +36,7 @@ def _prepare_fake_env(tmp_path):
     # real user dirs.
     env["XDG_DATA_HOME"] = str(fake_home / ".local" / "share")
     env["XDG_CONFIG_HOME"] = str(fake_home / ".config")
+    fake_homebrew(tmp_path, env)
     return fake_home, fake_repo, env
 
 
@@ -63,7 +66,7 @@ def test_model_switch_install_creates_wrapper_and_completions(tmp_path):
     assert "exec python3" in text
     assert " -m model_switch" in text
 
-    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "model-switch"
+    bash_link = bash_completion_link(tmp_path, "model-switch")
     fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "model-switch.fish"
     assert bash_link.is_symlink()
     assert bash_link.resolve() == (fake_repo / "completions" / "model-switch.bash").resolve()
@@ -106,7 +109,7 @@ def test_model_switch_uninstall_removes_wrapper_and_completions(tmp_path):
     assert r.returncode == 0, f"uninstall failed:\n{r.stderr}"
 
     assert not (fake_repo / "bin" / "model-switch").exists()
-    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "model-switch"
+    bash_link = bash_completion_link(tmp_path, "model-switch")
     fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "model-switch.fish"
     assert not bash_link.exists() and not bash_link.is_symlink()
     assert not fish_link.exists() and not fish_link.is_symlink()
@@ -130,7 +133,7 @@ def test_mcp_plugin_mgr_install_creates_wrapper_and_completions(tmp_path):
     text = wrapper.read_text()
     assert " -m mcp_plugin_mgr" in text
 
-    bash_link = Path(env["XDG_DATA_HOME"]) / "bash-completion" / "completions" / "mcp-plugin-mgr"
+    bash_link = bash_completion_link(tmp_path, "mcp-plugin-mgr")
     fish_link = Path(env["XDG_CONFIG_HOME"]) / "fish" / "completions" / "mcp-plugin-mgr.fish"
     assert bash_link.is_symlink()
     assert fish_link.is_symlink()
