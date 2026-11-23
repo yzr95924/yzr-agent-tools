@@ -39,6 +39,6 @@ def catalog_db_file() -> Path:
 
     OpenCode >= 2.0 stores the fetched catalog in its SQLite database
     ``$XDG_DATA_HOME/opencode/opencode.db``, table ``kv``, key
-    ``models-dev:v2:catalog``. Read-only for model-switch.
+    ``models-dev:v3:catalog``. Read-only for model-switch.
     """
     return _data_base() / "opencode" / "opencode.db"

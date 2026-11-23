@@ -72,10 +72,10 @@ tmp、用 tmp 路径替换 registry 里的 driver 单例、teardown 时用 mtime
 - OpenCode 侧按 **V2 原生形状**：MCP 写 `mcp.servers`、stdio 的环境变量键是
   `environment` 不是 `env`；V1 兼容路径已删除，不要加回去。
 - model-switch 从 OpenCode 的 sqlite catalog（`$XDG_DATA_HOME/opencode/opencode.db`，
-  表 `kv`、键 `models-dev:v2:catalog`，OpenCode 2.2 起的 V2 结构：model 层有序
-  `api` 路由）解析内置来源：**只读、不发网络请求**；只接受第一个带 SDK 的默认路由
-  为 `chat-completions` 且带 `base_url` 的 `type == "chat"` 条目。渲染产物是
-  `canonical` 别名：`yzr-*` provider 只带连接信息，模型条目为空，字段与 runtime
+  表 `kv`、键 `models-dev:v3:catalog`（OpenCode 2.4 起写入），OpenCode 2.2 起的 V2
+  结构：model 层有序 `api` 路由）解析内置来源：**只读、不发网络请求**；只接受第一个
+  带 SDK 的默认路由为 `chat-completions` 且带 `base_url` 的 `type == "chat"` 条目。
+  渲染产物是 `canonical` 别名：`yzr-*` provider 只带连接信息，模型条目为空，字段与
   包全部由 OpenCode 继承；不要在 models.toml / opencode.json 里复制模型字段。
 
 ## 跨会话记忆（索引）

@@ -118,7 +118,7 @@ api_key = "..."
 ## catalog 解析
 
 model-switch 只读 OpenCode 的本地 models.dev 快照
-（`~/.local/share/opencode/opencode.db`，键 `models-dev:v2:catalog`），不联网。
+（`~/.local/share/opencode/opencode.db`，键 `models-dev:v3:catalog`），不联网。
 
 - OpenCode 对 chat 模型使用第一个带 SDK 的 `api` 路由；model-switch 只接受
   默认路由就是 `chat-completions` 且带 `base_url` 的内置条目。
@@ -144,7 +144,8 @@ pytest tests/test_cli.py tests/test_cli_align.py tests/test_complete_cmd.py
 
 ## 局限
 
-- 只支持 OpenCode 2.2+ 的 `canonical` provider 继承。
+- 只支持 OpenCode 2.4+ 的 `canonical` provider 继承：catalog 键从 2.4 起改为
+  `models-dev:v3:catalog`，更低版本上读不到 catalog。
 - 只接受默认路由为 Chat Completions 的内置模型；默认走 Messages / Responses
   的模型会被拒绝，不会静默换协议。
 - 不支持本地模型覆盖；需要覆盖时应修改上游或内置 catalog，而不是在注册表里

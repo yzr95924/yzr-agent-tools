@@ -1,6 +1,6 @@
 """Resolve canonical model sources from OpenCode's catalog cache.
 
-The catalog snapshot (kv key ``models-dev:v2:catalog``, OpenCode 2.2+) gives
+The catalog snapshot (kv key ``models-dev:v3:catalog``, OpenCode 2.4+) gives
 every model its own ordered ``api`` routes. OpenCode runs a chat model through
 the first route that carries an SDK, so that route is the one an alias
 inherits. model-switch only accepts sources whose default route is
@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from model_switch import paths
 
 
-_CATALOG_KV_KEY = "models-dev:v2:catalog"
+_CATALOG_KV_KEY = "models-dev:v3:catalog"
 
 
 @dataclass
