@@ -250,7 +250,8 @@ def test_status_completes_flags(comp_env, shell):
 def test_add_completes_flags(comp_env, shell):
     got = shell(comp_env, ["model-switch", "model", "add", "--"])
     assert set(got) == {
-        "--api-key", "--catalog-provider", "--yes", "--help",
+        "--api-key", "--catalog-provider", "--inherits", "--display-name",
+        "--yes", "--help",
     }
 
 
@@ -260,9 +261,10 @@ def test_remove_completes_flags(comp_env, shell):
     assert set(got) == {"--yes", "--help"}
 
 
+@pytest.mark.parametrize("flag", ["--catalog-provider", "--inherits", "--display-name"])
 @pytest.mark.parametrize("shell", shell_params("bash", "zsh"))
-def test_add_flag_value_offers_nothing(comp_env, shell):
-    got = shell(comp_env, ["model-switch", "model", "add", "--catalog-provider", ""])
+def test_add_flag_value_offers_nothing(comp_env, shell, flag):
+    got = shell(comp_env, ["model-switch", "model", "add", flag, ""])
     assert got == []
 
 

@@ -92,6 +92,8 @@ complete -c model-switch -n __fish_model_switch_needs_model_name -f -a '(__fish_
 # --- flags: model add ---------------------------------------------------------
 complete -c model-switch -n '__fish_model_switch_using_action add' -l api-key -r -f -d 'API key (stored plaintext in models.toml)'
 complete -c model-switch -n '__fish_model_switch_using_action add' -l catalog-provider -r -f -d 'Pin the built-in provider a new yzr-* group inherits from'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l inherits -r -f -d 'Catalog model whose definition OpenCode reuses for this model ID'
+complete -c model-switch -n '__fish_model_switch_using_action add' -l display-name -r -f -d 'Name OpenCode shows for an --inherits entry (default: the model ID)'
 complete -c model-switch -n '__fish_model_switch_using_action add' -s y -l yes -f -d 'Assume yes: skip confirmation and overwrite'
 complete -c model-switch -n '__fish_model_switch_using_action add' -s h -l help -f -d 'Show help'
 

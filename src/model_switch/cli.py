@@ -81,6 +81,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pin the built-in provider a new yzr-* group inherits from.",
     )
     p_add.add_argument(
+        "--inherits", default=None, metavar="MODEL",
+        help="Catalog model of the group whose definition OpenCode reuses for "
+             "this model ID (for a model the catalog does not serve yet).",
+    )
+    p_add.add_argument(
+        "--display-name", default=None, metavar="NAME",
+        help="Name OpenCode shows for an --inherits entry (default: the model "
+             "ID).",
+    )
+    p_add.add_argument(
         "--yes", "-y", action="store_true",
         help="Assume yes: skip the confirmation and overwrite an existing "
              "model of the same reference.",
@@ -175,6 +185,16 @@ def _print_add_summary(ref: str, canonical: str, base_url: str,
     print("  model             {}".format(model_id))
 
 
+def _check_inherits(data, canonical, model_id, inherits) -> None:
+    """Die unless ``inherits`` is a catalog model fit to back ``model_id``."""
+    if catalog.lookup(data, canonical, model_id) is not None:
+        _die("{} is already in the upstream catalog under {!r}; "
+             "drop --inherits.".format(model_id, canonical))
+    if catalog.lookup(data, canonical, inherits) is None:
+        _die("canonical provider {!r} does not serve --inherits {!r} "
+             "over a chat-completions default route".format(canonical, inherits))
+
+
 def _do_model_add(args: argparse.Namespace) -> None:
     reg = _load_registry()
     ref = args.ref
@@ -193,21 +213,32 @@ def _do_model_add(args: argparse.Namespace) -> None:
     if data is None:
         _die("{}; cannot add an alias without it.".format(desc))
 
+    if args.display_name and not args.inherits:
+        _die("--display-name only applies together with --inherits.")
+
     if siblings:
         canonical = siblings[0]["canonical_provider"]
         if args.catalog_provider is not None and args.catalog_provider != canonical:
             _die("--catalog-provider {!r} conflicts with the existing "
                  "canonical source {!r} of {}.".format(
                      args.catalog_provider, canonical, provider))
-        candidate = catalog.lookup(data, canonical, model_id)
-        if candidate is None:
-            _die("canonical provider {!r} does not serve {!r} over a "
-                 "chat-completions default route".format(canonical, model_id))
-        if candidate.base_url != siblings[0]["base_url"]:
-            _die("{} uses a drifted base URL; run `model-switch model align` "
-                 "before adding models to it.".format(provider))
+        if args.inherits:
+            _check_inherits(data, canonical, model_id, args.inherits)
+        else:
+            candidate = catalog.lookup(data, canonical, model_id)
+            if candidate is None:
+                _die("canonical provider {!r} does not serve {!r} over a "
+                     "chat-completions default route; pass --inherits "
+                     "<catalog model> to add it with that model's "
+                     "definition".format(canonical, model_id))
+            if candidate.base_url != siblings[0]["base_url"]:
+                _die("{} uses a drifted base URL; run `model-switch model align` "
+                     "before adding models to it.".format(provider))
         base_url = siblings[0]["base_url"]
     else:
+        if args.inherits:
+            _die("--inherits needs an existing yzr-* group, whose endpoint "
+                 "the model shares.")
         cands = catalog.model_candidates(data, model_id)
         picked = catalog.pick(cands, args.catalog_provider)
         if picked.candidate is None:
@@ -232,17 +263,24 @@ def _do_model_add(args: argparse.Namespace) -> None:
     reg["models"] = [e for e in reg["models"]
                      if not (e.get("provider") == provider
                              and e.get("model_id") == model_id)]
-    reg["models"].append({
+    entry = {
         "model_id": model_id,
         "provider": provider,
         "canonical_provider": canonical,
         "base_url": base_url,
         "api_key": api_key,
-    })
+    }
+    if args.inherits:
+        entry["inherits"] = args.inherits
+        if args.display_name:
+            entry["display_name"] = args.display_name
+    reg["models"].append(entry)
 
     _save(reg)
     _sync(reg, create=True)
-    print("{} model {}.".format("Replaced" if replacing else "Added", ref))
+    print("{} model {}{}.".format(
+        "Replaced" if replacing else "Added", ref,
+        " (inherits {})".format(args.inherits) if args.inherits else ""))
 
 
 # --- read-only commands -------------------------------------------------------
@@ -262,7 +300,9 @@ def _do_model_list() -> None:
         for entry in entries:
             ref = "{}/{}".format(pid, entry["model_id"])
             marker = "→" if ref == active else " "
-            print("  {} {}".format(marker, ref))
+            note = ("  (inherits {})".format(entry["inherits"])
+                    if entry.get("inherits") else "")
+            print("  {} {}{}".format(marker, ref, note))
 
 
 def _do_model_show(args: argparse.Namespace) -> None:
@@ -271,13 +311,17 @@ def _do_model_show(args: argparse.Namespace) -> None:
     entry = store.get_model(reg, ref)
     if entry is None:
         _die("model {!r} not found.".format(ref))
+    model = {"model_id": entry["model_id"]}
+    for key in ("inherits", "display_name"):
+        if entry.get(key):
+            model[key] = entry[key]
     payload = {
         "provider": {
             "canonical_provider": entry["canonical_provider"],
             "base_url": entry["base_url"],
             "api_key": "<set>" if entry.get("api_key") else "<missing>",
         },
-        "model": {"model_id": entry["model_id"]},
+        "model": model,
     }
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -334,6 +378,20 @@ def _do_model_use(args: argparse.Namespace) -> None:
 # --- align --------------------------------------------------------------------
 
 
+def _backing_candidate(data, entry):
+    """``(candidate, inherited)``: the catalog entry backing ``entry``.
+
+    An ``inherits`` entry is backed by its template until the catalog serves
+    the model itself.
+    """
+    canonical = entry["canonical_provider"]
+    candidate = catalog.lookup(data, canonical, entry["model_id"])
+    template = entry.get("inherits")
+    if candidate is None and template:
+        return catalog.lookup(data, canonical, template), True
+    return candidate, False
+
+
 def _do_model_align(args: argparse.Namespace) -> int:
     reg = _load_registry()
     if args.ref is not None and store.get_model(reg, args.ref) is None:
@@ -351,24 +409,32 @@ def _do_model_align(args: argparse.Namespace) -> int:
     skipped = 0
     for ref in targets:
         entry = store.get_model(reg, ref)
-        candidate = catalog.lookup(
-            data, entry["canonical_provider"], entry["model_id"])
+        canonical = entry["canonical_provider"]
+        candidate, inherited = _backing_candidate(data, entry)
         if candidate is None:
             skipped += 1
-            print("{:<{w}}  skip  {} no longer serves {!r} over a "
+            print("{:<{w}}  skip  {} no longer serves {}{!r} over a "
                   "chat-completions default route".format(
-                      ref, entry["canonical_provider"], entry["model_id"],
+                      ref, canonical, "template " if inherited else "",
+                      entry["inherits"] if inherited else entry["model_id"],
                       w=width))
             continue
+        if inherited:
+            print("{:<{w}}  {:<7}  {}  inherits {}".format(
+                ref, "ok", canonical, entry["inherits"], w=width))
+            continue
         changes = []
+        if entry.get("inherits"):
+            del entry["inherits"]
+            entry.pop("display_name", None)
+            changes.append("dropped inherits")
         if candidate.base_url != entry["base_url"]:
             entry["base_url"] = candidate.base_url
-            changes = ["base_url"]
+            changes.append("base_url")
         if changes:
             changed += 1
         print("{:<{w}}  {:<7}  {}  {}".format(
-            ref, "aligned" if changes else "ok",
-            entry["canonical_provider"],
+            ref, "aligned" if changes else "ok", canonical,
             ", ".join(changes) or "no change", w=width))
 
     if changed:

@@ -5,6 +5,14 @@ an alias of a built-in one: ``canonical`` names the source, ``settings`` only
 carries the connection, and every model entry is empty so OpenCode inherits
 the built-in model definition — including its runtime package. Anything
 outside the ``yzr-*`` namespace is preserved untouched.
+
+A group holding ``inherits`` entries renders as two aliases. OpenCode copies
+a definition only onto the model key it is filed under, so a hidden
+``<provider>-base`` alias first re-keys the template under the inherited
+model's ID, with every model disabled to keep the alias out of /models; the
+visible alias then takes ``canonical`` from it and re-enables its models.
+Verified against OpenCode 2.4.1 — the lookup order is undocumented, so
+re-check after an OpenCode upgrade.
 """
 import json
 import os
@@ -25,14 +33,42 @@ def render_providers(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     for pid in sorted(groups):
         entries = sorted(groups[pid], key=lambda e: e["model_id"])
         first = entries[0]
-        rendered[pid] = {
+        settings = {
+            "baseURL": first["base_url"],
+            "apiKey": first["api_key"],
+        }
+        if not any(e.get("inherits") for e in entries):
+            rendered[pid] = {
+                "canonical": first["canonical_provider"],
+                "name": pid,
+                "settings": settings,
+                "models": {e["model_id"]: {} for e in entries},
+            }
+            continue
+        helper_models: Dict[str, Dict[str, Any]] = {}
+        visible_models: Dict[str, Dict[str, Any]] = {}
+        for entry in entries:
+            mid, template = entry["model_id"], entry.get("inherits")
+            if template:
+                helper_models[mid] = {"modelID": template, "disabled": True}
+                visible_models[mid] = {"modelID": mid,
+                                       "name": entry.get("display_name") or mid,
+                                       "disabled": False}
+            else:
+                helper_models[mid] = {"disabled": True}
+                visible_models[mid] = {"disabled": False}
+        helper = pid + store.HELPER_SUFFIX
+        rendered[helper] = {
             "canonical": first["canonical_provider"],
+            "name": helper,
+            "settings": dict(settings),
+            "models": helper_models,
+        }
+        rendered[pid] = {
+            "canonical": helper,
             "name": pid,
-            "settings": {
-                "baseURL": first["base_url"],
-                "apiKey": first["api_key"],
-            },
-            "models": {e["model_id"]: {} for e in entries},
+            "settings": settings,
+            "models": visible_models,
         }
     return rendered
 

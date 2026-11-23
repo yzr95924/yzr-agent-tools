@@ -59,6 +59,8 @@ case $state in
                 _arguments \
                   '--api-key[API key (stored plaintext in models.toml)]:key:_message -r "key"' \
                   '--catalog-provider[Pin the built-in provider a new yzr-* group inherits from]:provider:_message -r "provider"' \
+                  '--inherits[Catalog model whose definition OpenCode reuses for this model ID]:model:_message -r "catalog model"' \
+                  '--display-name[Name OpenCode shows for an --inherits entry (default: the model ID)]:name:_message -r "name"' \
                   '(-y --yes)'{-y,--yes}'[Assume yes: skip confirmation and overwrite]' \
                   '(-h --help)'{-h,--help}'[Show help]' \
                   ':model reference (yzr-provider/model):_message -r "yzr-provider/model"'

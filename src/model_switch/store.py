@@ -7,6 +7,12 @@ Every other model field is inherited by OpenCode through ``canonical`` and is
 deliberately absent here — a copied field would override the built-in value
 and reintroduce drift.
 
+An entry for a model the catalog does not serve yet carries ``inherits``: the
+ID of a catalog model of the same ``canonical_provider`` whose definition
+OpenCode reuses for it. That is a pointer, not a copy. Such an entry may also
+carry ``display_name``, rendered as the model's ``name`` instead of the
+template's.
+
 Unknown keys — top-level and per-entry — round-trip untouched.
 ::
 
@@ -30,6 +36,11 @@ from model_switch._compat import toml_dumps, toml_loads
 
 SCHEMA_VERSION = 2
 
+# A group holding ``inherits`` entries renders through a hidden
+# ``<provider>-base`` alias (opencode.render_providers), so no group may take
+# that ID.
+HELPER_SUFFIX = "-base"
+
 _YZR_PROVIDER_RE = re.compile(r"^yzr-[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 _PROVIDER_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 _MODEL_ID_RE = re.compile(r"^[^\s/#]+$")
@@ -37,7 +48,7 @@ _MODEL_ID_RE = re.compile(r"^[^\s/#]+$")
 # Local model overrides would survive in the registry but never render, which
 # would look like configuration while doing nothing. They are rejected instead.
 _LOCAL_OVERRIDE_KEYS = (
-    "display_name", "modalities", "context_window", "output_limit",
+    "modalities", "context_window", "output_limit",
     "variants", "compatibility", "body", "package",
 )
 
@@ -71,6 +82,7 @@ def validate_registry(data: Any) -> Dict[str, Any]:
 
     seen = set()
     groups: Dict[str, Dict[str, Any]] = {}
+    inheriting = set()
     for entry in models:
         if not isinstance(entry, dict):
             raise StoreError("models[] entries must be tables, got {}".format(
@@ -97,6 +109,20 @@ def validate_registry(data: Any) -> Dict[str, Any]:
         seen.add((pid, mid))
         _require_str(entry.get("base_url"), where, "base_url")
         _require_str(entry.get("api_key"), where, "api_key")
+        inherits = entry.get("inherits")
+        if inherits is not None:
+            inherits = _require_str(inherits, where, "inherits")
+            if not _MODEL_ID_RE.match(inherits) or inherits == mid:
+                raise StoreError(
+                    "{}: inherits {!r} must be a catalog model ID other than "
+                    "model_id".format(where, inherits))
+            inheriting.add(pid)
+        if entry.get("display_name") is not None:
+            if inherits is None:
+                raise StoreError(
+                    "{}: 'display_name' is only stored together with "
+                    "'inherits'".format(where))
+            _require_str(entry["display_name"], where, "display_name")
         for key in _LOCAL_OVERRIDE_KEYS:
             if key in entry:
                 raise StoreError(
@@ -117,6 +143,12 @@ def validate_registry(data: Any) -> Dict[str, Any]:
                 "{}: provider {!r} already uses the canonical_provider/"
                 "base_url/api_key of {}; all models under one provider share "
                 "them".format(where, pid, group["from"]))
+
+    for pid in inheriting:
+        if pid + HELPER_SUFFIX in groups:
+            raise StoreError(
+                "provider {!r} is reserved for the hidden alias of {}".format(
+                    pid + HELPER_SUFFIX, pid))
 
     active = data.get("active_model")
     if active is not None:

@@ -101,3 +101,44 @@ def test_align_rejects_a_non_chat_default_route(yzr_paths):
     result = runner(["model", "align"])
     assert result.exit_code == 1
     assert "chat-completions" in result.stdout
+
+
+def test_align_checks_the_template_of_inherited_models(yzr_paths):
+    _seed(yzr_paths)
+    path = Path(yzr_paths["models"])
+    path.write_text(path.read_text() + """
+[[models]]
+model_id = "qwen4-max"
+provider = "yzr-dashscope"
+canonical_provider = "alibaba-cn"
+base_url = "{}"
+api_key = "SECRET"
+inherits = "glm-5.3"
+display_name = "Qwen4 Max"
+""".format(BASE))
+
+    result = runner(["model", "align"])
+    assert result.exit_code == 0, result.stdout
+    line = [l for l in result.stdout.splitlines()
+            if l.startswith("yzr-dashscope/qwen4-max")][0]
+    assert "ok" in line and "inherits glm-5.3" in line
+
+    catalog_db = Path(yzr_paths["catalog"])
+    catalog_db.unlink()
+    write_catalog_db(catalog_db, {"alibaba-cn": {"models": {}}})
+    result = runner(["model", "align"])
+    assert result.exit_code == 1
+    assert "yzr-dashscope/qwen4-max  skip  alibaba-cn no longer serves template" in result.stdout
+
+    served = _catalog()
+    served["alibaba-cn"]["models"]["qwen4-max"] = dict(
+        served["alibaba-cn"]["models"]["glm-5.3"])
+    catalog_db.unlink()
+    write_catalog_db(catalog_db, served)
+    result = runner(["model", "align"])
+    assert result.exit_code == 0, result.stdout
+    assert "dropped inherits" in result.stdout
+    entry = toml_loads(path.read_text())["models"][1]
+    assert "inherits" not in entry and "display_name" not in entry
+    providers = json.loads(Path(yzr_paths["opencode"]).read_text())["providers"]
+    assert list(providers) == ["yzr-dashscope"]

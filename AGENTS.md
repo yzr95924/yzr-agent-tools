@@ -77,6 +77,9 @@ tmp、用 tmp 路径替换 registry 里的 driver 单例、teardown 时用 mtime
   带 SDK 的默认路由为 `chat-completions` 且带 `base_url` 的 `type == "chat"` 条目。
   渲染产物是 `canonical` 别名：`yzr-*` provider 只带连接信息，模型条目为空，字段与
   包全部由 OpenCode 继承；不要在 models.toml / opencode.json 里复制模型字段。
+  带 `inherits` 的条目（上游没有的模型 ID 沿用同组目录模型的定义）例外：分组
+  渲染成两跳，隐藏的 `<id>-base` 别名加可见别名，条目带 `modelID` / `name` /
+  `disabled`；这是 OpenCode 2.4.1 实测的未文档化行为，升级后要复验。
 
 ## 跨会话记忆（索引）
 

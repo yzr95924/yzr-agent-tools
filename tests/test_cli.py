@@ -110,6 +110,52 @@ def test_model_add_ambiguous_canonical_requires_pin(yzr_paths):
     assert reg["models"][0]["base_url"] == ZAI_BASE
 
 
+def test_model_add_inherits_a_catalog_model_on_an_existing_group(yzr_paths):
+    _add_model(yzr_paths)
+    result = runner(["model", "add", "yzr-dashscope/qwen4-max",
+                     "--inherits", "glm-5.3", "--display-name", "Qwen4 Max",
+                     "--yes"])
+    assert result.exit_code == 0, result.stdout
+    reg = toml_loads(Path(yzr_paths["models"]).read_text())
+    assert reg["models"][-1] == {
+        "model_id": "qwen4-max",
+        "provider": "yzr-dashscope",
+        "canonical_provider": "alibaba-cn",
+        "base_url": BASE,
+        "api_key": "SECRET",
+        "inherits": "glm-5.3",
+        "display_name": "Qwen4 Max",
+    }
+    providers = json.loads(Path(yzr_paths["opencode"]).read_text())["providers"]
+    assert providers["yzr-dashscope"]["canonical"] == "yzr-dashscope-base"
+    assert providers["yzr-dashscope"]["models"]["qwen4-max"] == {
+        "modelID": "qwen4-max", "name": "Qwen4 Max", "disabled": False}
+
+    result = runner(["model", "list"])
+    assert "yzr-dashscope/qwen4-max  (inherits glm-5.3)" in result.stdout
+    result = runner(["model", "show", "yzr-dashscope/qwen4-max"])
+    assert json.loads(result.stdout)["model"] == {
+        "model_id": "qwen4-max", "inherits": "glm-5.3",
+        "display_name": "Qwen4 Max"}
+
+
+@pytest.mark.parametrize("ref, extra, hint", [
+    ("yzr-dashscope/qwen4-max", ["--yes"], "--inherits"),
+    ("yzr-dashscope/qwen4-max", ["--display-name", "Qwen4 Max", "--yes"],
+     "--display-name only applies"),
+    ("yzr-dashscope/qwen3.8-flash", ["--inherits", "glm-5.3", "--yes"], "already"),
+    ("yzr-dashscope/qwen4-max", ["--inherits", "missing-model", "--yes"],
+     "does not serve"),
+    ("yzr-zai/glm-5.3", ["--api-key", "K", "--catalog-provider", "zai-coding-plan",
+                         "--inherits", "glm-5.3", "--yes"], "existing"),
+])
+def test_model_add_rejects_bad_inherits(yzr_paths, ref, extra, hint):
+    _add_model(yzr_paths)
+    result = runner(["model", "add", ref] + extra)
+    assert result.exit_code == 1, result.stdout
+    assert hint in result.stdout
+
+
 @pytest.mark.parametrize("ref", ["no-slash", "dashscope/glm-5.3"])
 def test_model_add_rejects_bad_references(yzr_paths, ref):
     result = runner(["model", "add", ref, "--api-key", "K", "--yes"])

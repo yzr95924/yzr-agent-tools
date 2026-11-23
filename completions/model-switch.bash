@@ -17,7 +17,7 @@ _model_switch() {
 
     # Completing a flag's value?
     case "$prev" in
-        --api-key|--catalog-provider)
+        --api-key|--catalog-provider|--inherits|--display-name)
             # Free-form values: nothing sensible to offer.
             COMPREPLY=()
             return 0
@@ -56,7 +56,7 @@ _model_switch() {
             fi
             case "$action" in
                 add)
-                    COMPREPLY=( $(compgen -W "--api-key --catalog-provider --yes --help" -- "$cur") )
+                    COMPREPLY=( $(compgen -W "--api-key --catalog-provider --inherits --display-name --yes --help" -- "$cur") )
                     ;;
                 list)
                     COMPREPLY=( $(compgen -W "--help" -- "$cur") )

@@ -110,3 +110,33 @@ def test_validate_rejects_bad_registry_before_write(tmp_path, monkeypatch):
     with pytest.raises(StoreError):
         opencode.sync(reg, create=True)
     assert not path.exists()
+
+
+def test_sync_renders_inherited_models_through_a_hidden_helper(config_path):
+    reg = _registry()
+    reg["models"].append(dict(reg["models"][0], model_id="qwen4-max",
+                              inherits="glm-5.3"))
+    opencode.sync(reg, create=True)
+    opencode.sync(reg, create=False)
+    providers = json.loads(config_path.read_text())["providers"]
+    settings = {"baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "apiKey": "SECRET"}
+    assert list(providers) == ["yzr-dashscope-base", "yzr-dashscope"]
+    assert providers["yzr-dashscope-base"] == {
+        "canonical": "alibaba-cn", "name": "yzr-dashscope-base",
+        "settings": settings,
+        "models": {"glm-5.3": {"disabled": True},
+                   "qwen4-max": {"modelID": "glm-5.3", "disabled": True}},
+    }
+    assert providers["yzr-dashscope"] == {
+        "canonical": "yzr-dashscope-base", "name": "yzr-dashscope",
+        "settings": settings,
+        "models": {"glm-5.3": {"disabled": False},
+                   "qwen4-max": {"modelID": "qwen4-max", "name": "qwen4-max",
+                                 "disabled": False}},
+    }
+    reg["models"][-1]["display_name"] = "Qwen4 Max"
+    opencode.sync(reg, create=False)
+    models = json.loads(config_path.read_text())["providers"]["yzr-dashscope"]["models"]
+    assert models["qwen4-max"] == {
+        "modelID": "qwen4-max", "name": "Qwen4 Max", "disabled": False}

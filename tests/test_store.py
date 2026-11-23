@@ -112,6 +112,37 @@ def test_validate_rejects_local_model_overrides(field):
         store.validate_registry(reg)
 
 
+def test_validate_accepts_inherits_but_rejects_bad_values():
+    reg = _registry()
+    reg["models"][0].update(model_id="qwen4-max", inherits="glm-5.3")
+    store.validate_registry(reg)
+    for bad in ("qwen4-max", "has/slash", ""):
+        reg["models"][0]["inherits"] = bad
+        with pytest.raises(store.StoreError):
+            store.validate_registry(reg)
+
+
+def test_validate_rejects_provider_named_like_a_render_helper():
+    reg = _registry()
+    inherited = dict(reg["models"][0], model_id="qwen4-max", inherits="glm-5.3")
+    helper_named = dict(reg["models"][0], provider="yzr-dashscope-base")
+    reg["models"] += [inherited, helper_named]
+    with pytest.raises(store.StoreError):
+        store.validate_registry(reg)
+    del inherited["inherits"]
+    store.validate_registry(reg)
+
+
+def test_validate_keeps_display_name_tied_to_inherits():
+    reg = _registry()
+    reg["models"][0]["display_name"] = "Qwen3.8 Max"
+    with pytest.raises(store.StoreError):
+        store.validate_registry(reg)
+    reg["models"][0].update(model_id="qwen4-max", inherits="glm-5.3",
+                            display_name="Qwen4 Max")
+    store.validate_registry(reg)
+
+
 # --- active_model and references ------------------------------------------------
 
 

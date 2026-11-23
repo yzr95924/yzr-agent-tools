@@ -31,6 +31,9 @@ model-switch model add yzr-zai/glm-5.3 \
 # 已有 yzr-* 组上加模型：canonical 来源和 key 自动继承
 model-switch model add yzr-zai/glm-5.3-flash --yes
 
+# 上游目录还没有的模型：沿用同组另一个目录模型的定义，只换发给上游的模型 ID
+model-switch model add yzr-dashscope/qwen4-max --inherits qwen3.8-max --display-name "Qwen4 Max" --yes
+
 # 激活并镜像进 opencode.json
 model-switch model use yzr-dashscope/qwen3.8-flash
 ```
@@ -59,7 +62,7 @@ providers:     yzr-dashscope, yzr-kimi, yzr-zai
 | `model align [yzr-provider/model]` | 校验内置来源与端点是否漂移 |
 | `status` | 显示 OpenCode 当前状态 |
 
-通用 flag：`model add` 支持 `--api-key`、`--catalog-provider`、`--yes`；
+通用 flag：`model add` 支持 `--api-key`、`--catalog-provider`、`--inherits`、`--display-name`、`--yes`；
 `model remove` 支持 `--yes`。非 TTY 下缺必填项直接报错，不会阻塞等待输入。
 
 ## models.toml
@@ -94,12 +97,15 @@ api_key = "..."
 | `provider` | 最终的 OpenCode provider ID；必须以 `yzr-` 开头 |
 | `canonical_provider` | 继承的内置 provider ID |
 | `model_id` | 继承的内置模型 ID |
+| `inherits` | 可选。上游目录里同组的另一个模型 ID：OpenCode 沿用它的定义，只把发给上游的模型名换成 `model_id` |
+| `display_name` | 可选，只和 `inherits` 一起出现。OpenCode 里显示的模型名；不写就是 `model_id` |
 | `base_url` / `api_key` | 上游连接信息；同一 `provider` 下所有条目必须一致 |
 | `active_model` | 激活别名（`yzr-provider/model_id`）；原样渲染成 OpenCode 默认指针 |
 
 未知键（顶层与条目内）原样透传，load/save 不丢。模型级覆盖键
-（`display_name`、`modalities`、窗口、`variants`、`compatibility`、`body`、
-`package`）会被拒绝：它们存了也不会渲染，只会制造“看起来配置了”的假象。
+（`modalities`、窗口、`variants`、`compatibility`、`body`、`package`）会被拒绝：
+它们存了也不会渲染，只会制造“看起来配置了”的假象。`display_name` 只允许和
+`inherits` 一起出现。
 
 ## OpenCode 渲染规则
 
@@ -109,6 +115,10 @@ api_key = "..."
   provider，`settings` 只写 `baseURL` / `apiKey`，每个模型条目为空对象。
 - 不渲染 `package` 或任何模型字段；OpenCode 通过 `canonical` 继承内置 runtime
   包和全部模型定义。写入本地字段反而会覆盖继承值。
+- 带 `inherits` 条目的分组渲染成两个别名：隐藏的 `<provider>-base` 先把模板模型
+  的定义挂到 `model_id` 键下（模型全部 `disabled`，不进 `/models`），可见别名的
+  `canonical` 指向它并重新启用模型。这依赖 OpenCode 2.4.1 的未文档化行为，
+  OpenCode 升级后要复验。
 - 默认模型指针是 `active_model` 的原样输出；没有 `active_model` 时移除指向
   `yzr-*` 的旧指针，外来指针不动。
 - 每次 `add` / `remove` / `use` / `align` 都全量 reconcile：注册表里消失的
@@ -148,6 +158,9 @@ pytest tests/test_cli.py tests/test_cli_align.py tests/test_complete_cmd.py
   `models-dev:v3:catalog`，更低版本上读不到 catalog。
 - 只接受默认路由为 Chat Completions 的内置模型；默认走 Messages / Responses
   的模型会被拒绝，不会静默换协议。
+- `--inherits` 只适用于已有分组；显示名默认是 `model_id`，可用 `--display-name`
+  指定；价格和发布日期沿用模板模型的。上游收录该模型后，`model align` 会自动
+  去掉 `inherits` 和 `display_name`。
 - 不支持本地模型覆盖；需要覆盖时应修改上游或内置 catalog，而不是在注册表里
   复制一份会漂移的字段。
 - API key 必填，不支持无鉴权本地服务。
